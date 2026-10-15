@@ -219,6 +219,7 @@ Format entri:
 | 2026-10-15 | riset | (seluruh repo) | Pemetaan awal: struktur `auth/ core/ lib/ handlers/ feat/ src/`, feature shape di `feat/loader.js`, API `ctx` di `core/context.js`, routing di `handlers/messageHandler.js`, rich message di `lib/richMessage.js`, konfigurasi di `config.js`, entry `sky.js` | ok |
 | 2026-10-15 | docs | (seluruh repo, 166 file) | Rebrand total nama proyek & kredit: FionyVerse/Fiony Bot → skyline-JXRA, credit © JamvanHax0r → © skyline-JXRA, JH-Base/BotZapo → skyline-JXRA (package.json, README, config.botName, footer pesan, EXIF stiker, header komentar). API/endpoint eksternal `*.jhx.my.id`, aset UNO GitHub, User-Agent & tautan repo TIDAK diubah (dilindungi, lihat §4.16); nama orang (Fiony Alveria/JKT48/XN/Arip) tetap | ok |
 | 2026-10-15 | docs | README.md, feat/tools/ctest.js, feat/ai/fio.js, AGENTS.md | Ganti tautan repo ke repo milik owner `github.com/raaxml01/skyline-jxra-bot-` (clone README, tombol demo ctest, teks bantuan fio) | ok |
+| 2026-10-15 | infra | (root repo) | Init git (branch `main`), identitas lokal `raaxml01`, remote SSH `git@github.com:raaxml01/skyline-jxra-bot-.git`, commit pertama & push 179 file (session/node_modules/sqlite ter-cleanup .gitignore) | ok |
 
 > Tambahkan baris baru di **bawah** tabel ini setiap kali ada aktivitas
 > (edit fitur, perbaikan bug, perubahan config, dsb).
