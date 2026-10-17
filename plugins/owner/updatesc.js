@@ -5,7 +5,8 @@
  * update.js — Tarik update script dari GitHub (owner).
  *
  * Pakai:
- *   .updatesc         → git fetch + pull --ff-only dari origin
+ *   .updatesc         → git fetch + pull --ff-only dari origin, lalu rekap
+ *                      "apa yang baru": 🆕 fitur / 🔧 fix / 📝 lainnya + file berubah
  *                      (commit baru + daftar file berubah)
  *   auto             → kalau package.json / package-lock.json ikut berubah,
  *                      jalanin `npm install --omit=dev` sendiri setelah pull.
@@ -160,10 +161,21 @@ async function handler(ctx) {
   }
 
   const newHead = (await git(['rev-parse', 'HEAD'])).out
-  let commits = []
+  let commits = [] // { hash, subject, body }
   let files = []
   try {
-    commits = (await git(['log', '--oneline', `${oldHead}..${newHead}`])).out.split('\n').filter(Boolean)
+    // %x1f = unit sep, %x1e = record sep — subject & body aman dari newline
+    const log = (
+      await git(['log', '--format=%h%x1f%s%x1f%b%x1e', `${oldHead}..${newHead}`])
+    ).out
+    commits = log
+      .split('\x1e')
+      .map((rec) => rec.replace(/^\n+|\n+$/g, ''))
+      .filter(Boolean)
+      .map((rec) => {
+        const [hash = '', subject = '', body = ''] = rec.split('\x1f')
+        return { hash: hash.trim(), subject: subject.trim(), body: body.trim() }
+      })
     files = (await git(['diff', '--name-only', `${oldHead}..${newHead}`])).out.split('\n').filter(Boolean)
   } catch {}
 
@@ -184,14 +196,32 @@ async function handler(ctx) {
     }
   }
 
-  // 6. Rekap — butuh restart gak?
+  // 6. Kategorin commit: fitur baru / fix / lainnya (dari subject + body)
+  const categorize = (c) => {
+    const t = `${c.subject} ${c.body}`.toLowerCase()
+    if (/\b(fix|bug|perbaiki|perbaikan|patch|hotfix|repair|bugfix)\b/.test(t)) return 'fix'
+    if (/\b(fitur|feature|feat|tambah|baru|new|port|redesign|enhance|update)\b/.test(t)) return 'feat'
+    return 'other'
+  }
+  const groups = { feat: [], fix: [], other: [] }
+  for (const c of commits) groups[categorize(c)].push(c)
+
+  // 7. Rekap — butuh restart gak?
   const needRestart = files.some(
     (f) => NEED_RESTART_RE.test(f) || f === 'sky.js' || f === 'config.js'
   )
   const onlyPlugins = files.length > 0 && files.every((f) => f.startsWith('plugins/'))
 
-  const commitLines = commits.slice(0, 5).map((c) => `◦ ${c}`)
-  if (commits.length > 5) commitLines.push(`… +${commits.length - 5} commit lain`)
+  const SECTION_MAX = 6
+  const section = (label, list) => {
+    if (!list.length) return []
+    const rows = list.slice(0, SECTION_MAX).map((c) => {
+      const subj = c.subject.length > 52 ? `${c.subject.slice(0, 51)}…` : c.subject
+      return [`◦ ${subj}`, c.body ? `  _${c.body.split('\n')[0].slice(0, 60)}_` : null]
+    })
+    if (list.length > SECTION_MAX) rows.push([`… +${list.length - SECTION_MAX} lainnya`])
+    return [label, ...rows.flat().filter(Boolean), '']
+  }
 
   const fileLines = files.slice(0, 8).map((f) => `◦ ${f}`)
   if (files.length > 8) fileLines.push(`… +${files.length - 8} file lain`)
@@ -199,18 +229,17 @@ async function handler(ctx) {
   const status = [
     `*${commits.length} commit* · *${files.length} file* diperbarui`,
     '',
-    ...commitLines,
-    files.length ? ['', ...fileLines] : [],
-    installed ? ['', '📦 npm install *sukses*'] : [],
-    installErr ? ['', '⚠️ npm install GAGAL:', ...installErr.map((l) => `• ${l}`)] : [],
-    '',
+    ...section('🆕 *FITUR BARU:*', groups.feat),
+    ...section('🔧 *FIX:*', groups.fix),
+    ...section('📝 *LAINNYA:*', groups.other),
+    files.length ? ['📁 *FILE BERUBAH:*', ...fileLines, ''] : [],
+    installed ? ['📦 npm install *sukses*', ''] : [],
+    installErr ? ['⚠️ npm install GAGAL:', ...installErr.map((l) => `• ${l}`), ''] : [],
     needRestart
       ? '🔁 Ada perubahan *core/lib/handlers* → *RESTART* bot di panel biar kebaca'
       : onlyPlugins
         ? '⚡ Cuma plugins/ → ke-*hot reload* sendiri, gak perlu restart'
-        : commits.length
-          ? '✅ Selesai'
-          : ''
+        : '✅ Selesai'
   ].flat().filter((l) => l !== undefined)
 
   await ctx.react(installErr ? '⚠️' : '✅')
