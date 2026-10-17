@@ -14,6 +14,10 @@
  *   auto             → kalau package.json / package-lock.json ikut berubah,
  *                      jalanin `npm install --omit=dev` sendiri setelah pull.
  *
+ * Hasil akhir dirender kartu HTML native (richResponseMessage/unifiedResponse,
+ * pola ping2/snake — §9 AGENTS.md) tema chrome biru-silver-putih-hitam;
+ * progress & fallback tetap kartu teks.
+ *
  * node_modules TIDAK diambil dari git (gitignore) — install cuma jalan
  * kalau dependency berubah. session/ & data/ gak tersentuh (gitignore).
  * File core/ lib/ handlers/ sky.js config/ berubah → butuh Restart manual
@@ -30,6 +34,7 @@ import { promises as fs } from 'node:fs'
 import { gunzip } from 'node:zlib'
 import path from 'node:path'
 import os from 'node:os'
+import crypto from 'node:crypto'
 
 const pexec = promisify(execFile)
 const pgunzip = promisify(gunzip)
@@ -111,6 +116,203 @@ function nowWIB() {
 }
 
 const NEED_RESTART_RE = /^(core|lib|handlers|auth|src)\//
+
+// ── Kartu HTML native (FOAHtmlPrimitive — pola ping2/snake, §9 AGENTS.md) ──
+// Tema chrome: biru · silver · putih · hitam. Aman: gak pakai blur/mask/
+// backdrop-filter/position:fixed/aspect-ratio (larangan webview WA).
+const hesc = (s) =>
+  String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+const CSS = `
+*{margin:0;padding:0;box-sizing:border-box}
+html{background-color:#070b16}
+body{font-family:-apple-system,'Segoe UI',Roboto,sans-serif;color:#eef3ff;padding:14px;position:relative;
+  background-color:#070b16;
+  background-image:
+    radial-gradient(560px 300px at 18% -40px,rgba(59,130,246,.38),rgba(59,130,246,0) 70%),
+    radial-gradient(520px 300px at 90% 105%,rgba(200,211,232,.22),rgba(200,211,232,0) 70%),
+    radial-gradient(380px 260px at 105% 40%,rgba(96,165,250,.16),rgba(96,165,250,0) 70%),
+    linear-gradient(180deg,#0a1122 0%,#0b1428 45%,#070b16 100%)}
+.bgfx{position:absolute;left:0;right:0;top:0;bottom:0;pointer-events:none;z-index:0;
+  background-image:
+    linear-gradient(rgba(59,130,246,.07) 1px,rgba(59,130,246,0) 1px),
+    linear-gradient(90deg,rgba(59,130,246,.07) 1px,rgba(59,130,246,0) 1px),
+    radial-gradient(rgba(148,163,184,.16) 1.2px,rgba(148,163,184,0) 1.6px);
+  background-size:52px 52px,52px 52px,20px 20px}
+.sheen{position:absolute;top:0;left:0;right:0;height:170px;
+  background:
+    linear-gradient(115deg,rgba(255,255,255,0) 30%,rgba(200,211,232,.16) 48%,rgba(255,255,255,.22) 52%,rgba(59,130,246,.14) 60%,rgba(59,130,246,0) 75%),
+    radial-gradient(420px 150px at 50% 0,rgba(59,130,246,.30),rgba(59,130,246,0) 75%)}
+.vig{position:absolute;left:0;right:0;top:0;bottom:0;
+  background:radial-gradient(ellipse 110% 95% at 50% 40%,rgba(0,0,0,0) 55%,rgba(0,0,0,.6) 100%)}
+.wrap{position:relative;z-index:1}
+.chrome{height:3px;border-radius:99px;margin-bottom:12px;
+  background:linear-gradient(90deg,#3b82f6,#c8d3e8 45%,#ffffff 55%,#93a4c7 70%,#3b82f6);
+  box-shadow:0 0 12px rgba(59,130,246,.55)}
+.hd{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.ic{width:40px;height:40px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:20px;
+  background:linear-gradient(135deg,rgba(59,130,246,.35),rgba(200,211,232,.16));
+  border:1.5px solid rgba(200,211,232,.45);box-shadow:0 0 16px rgba(59,130,246,.35)}
+.t1{font-size:16px;font-weight:800;letter-spacing:1.4px;
+  background:linear-gradient(90deg,#ffffff,#b9c6e8 60%,#7fb0ff);-webkit-background-clip:text;background-clip:text;color:transparent}
+.t2{font-size:10px;color:#8fa3cc;margin-top:1px}
+.pill{margin-left:auto;font-size:10px;font-weight:800;padding:4px 11px;border-radius:99px;letter-spacing:1px}
+.pill.ok{color:#9df0c4;border:1px solid rgba(52,211,153,.5);background:rgba(52,211,153,.12);
+  box-shadow:0 0 14px rgba(52,211,153,.3)}
+.pill.info{color:#9fd0ff;border:1px solid rgba(59,130,246,.5);background:rgba(59,130,246,.12);
+  box-shadow:0 0 14px rgba(59,130,246,.35)}
+.pill.warn{color:#ffd28a;border:1px solid rgba(255,184,77,.5);background:rgba(255,184,77,.12)}
+.pill.bad{color:#ffb3c1;border:1px solid rgba(255,92,122,.5);background:rgba(255,92,122,.12);
+  box-shadow:0 0 14px rgba(255,92,122,.3)}
+.card{background:linear-gradient(160deg,rgba(24,34,60,.97),rgba(11,17,34,.98));
+  border:1px solid rgba(148,163,184,.26);border-radius:13px;padding:11px 13px;margin-bottom:9px;
+  box-shadow:0 1px 0 rgba(255,255,255,.10) inset,0 6px 18px rgba(0,0,0,.35)}
+.lbl{font-size:9px;letter-spacing:1.6px;color:#8fa3cc;text-transform:uppercase;margin-bottom:6px;
+  display:flex;align-items:center;gap:5px}
+.hash{font-family:ui-monospace,SFMono-Regular,monospace;font-size:11px;font-weight:700;color:#0a1122;
+  background:linear-gradient(135deg,#e7edf9,#a8b6d8);padding:2px 9px;border-radius:7px;display:inline-block;
+  box-shadow:0 1px 0 #fff inset}
+.arrow{color:#7fb0ff;font-weight:800;font-size:13px;padding:0 3px}
+.meta{display:flex;flex-wrap:wrap;gap:7px;align-items:center;font-size:11px;color:#a9b8d8}
+.chips{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-bottom:9px}
+.chip{background:linear-gradient(160deg,rgba(24,34,60,.97),rgba(11,17,34,.98));
+  border:1px solid rgba(148,163,184,.24);border-radius:11px;padding:8px 5px;text-align:center;
+  box-shadow:0 1px 0 rgba(255,255,255,.10) inset}
+.chip .n{font-size:20px;font-weight:800;line-height:1.15;
+  background:linear-gradient(90deg,#ffffff,#9fd0ff);-webkit-background-clip:text;background-clip:text;color:transparent}
+.chip .e{font-size:13px}
+.chip .k{font-size:8px;letter-spacing:1.1px;color:#8fa3cc;text-transform:uppercase;margin-top:1px}
+.sec{margin-bottom:8px}
+.sech{font-size:10px;font-weight:800;letter-spacing:1.2px;color:#9fd0ff;text-transform:uppercase;
+  display:flex;align-items:center;gap:6px;margin-bottom:5px}
+.sech .cnt{color:#61739c;font-weight:700}
+.secb{background:rgba(11,17,34,.72);border:1px solid rgba(148,163,184,.18);border-radius:10px;padding:7px 10px}
+.row{font-size:12px;color:#dfe8fb;padding:3px 0;line-height:1.45}
+.row .dot{color:#7fb0ff}
+.row .cnt{color:#9fd0ff;font-weight:700}
+.row.dim{color:#8fa3cc;font-size:11px}
+.note{font-size:11px;color:#a9b8d8;background:rgba(59,130,246,.10);border:1px solid rgba(59,130,246,.30);
+  border-radius:10px;padding:8px 11px;margin-bottom:9px;line-height:1.55}
+.note b{color:#9fd0ff}
+.note.warn{background:rgba(255,184,77,.09);border-color:rgba(255,184,77,.35)}
+.note.warn b{color:#ffd28a}
+.note.bad{background:rgba(255,92,122,.09);border-color:rgba(255,92,122,.35)}
+.note.bad b{color:#ffb3c1}
+.stat{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;
+  background:rgba(11,17,34,.72);border:1px solid rgba(148,163,184,.18);border-radius:10px;
+  padding:7px 11px;margin-bottom:6px}
+.stat .v{font-weight:700;color:#9fd0ff;text-align:right}
+.stat .v.ok{color:#9df0c4}
+.stat .v.bad{color:#ffb3c1}
+.stat .v.dim{color:#8fa3cc;font-weight:600}
+.ft{margin-top:4px;font-size:9.5px;color:#61739c;text-align:center;line-height:1.6}
+.ft b{color:#9fd0ff}
+.btnline{display:flex;gap:7px;justify-content:center;margin-top:8px;flex-wrap:wrap}
+.btn{font-size:10px;font-weight:700;color:#0a1122;background:linear-gradient(135deg,#e7edf9,#a8b6d8);
+  padding:6px 14px;border-radius:99px;box-shadow:0 1px 0 #fff inset,0 4px 12px rgba(0,0,0,.35)}
+.btn.blue{color:#fff;background:linear-gradient(135deg,#3b82f6,#1d4ed8);
+  box-shadow:0 1px 0 rgba(255,255,255,.25) inset,0 4px 14px rgba(59,130,246,.45)}
+`
+
+function wrapHtml(inner, title) {
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>${hesc(title)}</title>
+<style>${CSS}</style></head><body>
+<div class="bgfx"><div class="sheen"></div><div class="vig"></div></div>
+<div class="wrap"><div class="chrome"></div>${inner}
+<div class="ft">⚡ <b>skyline-JXRA</b> · updater · jangan edit file langsung di panel<br>edit di lokal → push → <b>.updatesc</b></div>
+</div></body></html>`
+}
+
+function hd(icon, title, sub, pillText, pillCls) {
+  return `<div class="hd"><div class="ic">${icon}</div>
+<div><div class="t1">${hesc(title)}</div><div class="t2">${hesc(sub)}</div></div>
+<div class="pill ${pillCls}">${hesc(pillText)}</div></div>`
+}
+
+const row = (text) => `<div class="row"><span class="dot">▸</span> ${text}</div>`
+
+function sectionBlock(icon, label, items) {
+  if (!items.length) return ''
+  const rows = items.slice(0, 6).map((it) => row(hesc(trunc(it, 58))))
+  if (items.length > 6) rows.push(`<div class="row dim">… +${items.length - 6} lainnya</div>`)
+  return `<div class="sec"><div class="sech">${icon} ${hesc(label)} <span class="cnt">(${items.length})</span></div>
+<div class="secb">${rows.join('')}</div></div>`
+}
+
+function buildResultHtml(d) {
+  // d: { icon, title, sub, pill:{t,cls}, head, meta:[], chips:[{e,n,k}],
+  //      notes:[{t,cls}], stats:[{k,v,cls}], sections:[{icon,label,items}],
+  //      buttons:[{t,cls}] }
+  const chips = d.chips?.length
+    ? `<div class="chips">${d.chips.map((c) => `<div class="chip"><div class="e">${c.e}</div><div class="n">${hesc(String(c.n))}</div><div class="k">${hesc(c.k)}</div></div>`).join('')}</div>`
+    : ''
+  const meta = d.meta?.length
+    ? `<div class="card"><div class="lbl">📌 <span>commit</span></div><div class="meta">${d.meta.map((m) => `<span>${m}</span>`).join('<span class="arrow">·</span>')}</div></div>`
+    : ''
+  const notes = (d.notes || [])
+    .map((n) => `<div class="note ${n.cls || ''}">${n.t}</div>`)
+    .join('')
+  const stats = (d.stats || [])
+    .map((s) => `<div class="stat"><span>${s.k}</span><span class="v ${s.cls || ''}">${s.v}</span></div>`)
+    .join('')
+  const sections = (d.sections || []).map((s) => sectionBlock(s.icon, s.label, s.items)).join('')
+  const buttons = d.buttons?.length
+    ? `<div class="btnline">${d.buttons.map((b) => `<span class="btn ${b.cls || ''}">${hesc(b.t)}</span>`).join('')}</div>`
+    : ''
+  return wrapHtml(
+    hd(d.icon, d.title, d.sub, d.pill.t, d.pill.cls) +
+      `<div class="card">${d.head}</div>` + meta + chips + notes + stats + sections + buttons,
+    d.title
+  )
+}
+
+// Kirim kartu HTML native (FOAHtmlPrimitiveDemoDONOTUSE — pola ping2/snake).
+// GAGAL → throw (biar pemanggil fallback ke kartu teks, jangan ditelan).
+async function sendNativeHtml(client, chat, html) {
+  await client.message.send(chat, {
+    botForwardedMessage: {
+      message: {
+        richResponseMessage: {
+          messageType: 1,
+          unifiedResponse: {
+            data: Buffer.from(JSON.stringify({
+              __typename: 'GenAIUnifiedResponse',
+              response_id: crypto.randomUUID(),
+              sections: [{
+                __typename: 'GenAIUnifiedResponseSection',
+                view_model: {
+                  __typename: 'GenAISingleLayoutViewModel',
+                  primitive: {
+                    __typename: 'FOAHtmlPrimitiveDemoDONOTUSE',
+                    trusted_sources: [],
+                    payload: html
+                  }
+                }
+              }]
+            })).toString('base64')
+          },
+          contextInfo: { isForwarded: true, forwardOrigin: 4 }
+        }
+      }
+    }
+  }, { additionalAttributes: { type: 'text' } })
+}
+
+// HTML dulu; gagal → fallback kartu teks lama (biar update tetap keliatan)
+async function replyRich(ctx, htmlData, fallbackLines) {
+  try {
+    await sendNativeHtml(ctx.client, ctx.chat, buildResultHtml(htmlData))
+    return true
+  } catch {
+    try {
+      await ctx.reply(card(htmlData.icon, htmlData.title, fallbackLines))
+      return true
+    } catch {
+      return false
+    }
+  }
+}
 
 async function gitAvailable() {
   try {
@@ -344,37 +546,57 @@ async function handler(ctx) {
     try {
       const { short, msg, pkgChanged } = await apiSync()
       const { installed, installErr } = await npmInstallMaybe(ctx, pkgChanged)
-      const npmLine = installed
-        ? '📦 npm install *sukses*'
-        : installErr
-          ? '⚠️ npm install *gagal* (cek log)'
-          : '📦 npm install *lewati*'
       await ctx.react(installErr ? '⚠️' : '✅')
-      await ctx.reply(card(installErr ? '⚠️' : '🌐', 'UPDATE', [
-        '✅ *UPDATE SELESAI (API)*',
+      await replyRich(ctx, {
+        icon: '🌐',
+        title: 'UPDATE SELESAI',
+        sub: 'mode GitHub API (tanpa git)',
+        pill: { t: installErr ? 'ADA ERROR' : 'SUKSES', cls: installErr ? 'warn' : 'ok' },
+        head: `<div class="lbl">📦 <span>sync via API</span></div>
+<div class="meta"><span class="hash">${hesc(short)}</span><span>${hesc(trunc(msg, 34))}</span></div>`,
+        meta: [`⏱️ <b>${hesc(fmtDur(Date.now() - t0))}</b>`, `🕒 ${hesc(nowWIB())}`],
+        notes: [
+          { t: '🌐 Server gak punya git — file disamain<br>langsung dari GitHub (tarball mode).' },
+          { t: 'ℹ️ Daftar file berubah gak bisa<br>dideteksi tanpa git.', cls: 'warn' }
+        ],
+        stats: [
+          { k: '📦 npm install', v: installed ? 'sukses' : installErr ? 'GAGAL' : 'lewati', cls: installed ? 'ok' : installErr ? 'bad' : 'dim' }
+        ],
+        buttons: [{ t: '🔁 RESTART di panel', cls: 'blue' }]
+      }, [
+        '*UPDATE SELESAI* ✅ (API)',
         '',
         `📌 \`${short}\` ${trunc(msg, 30)}`,
         `⏱️ *${fmtDur(Date.now() - t0)}*`,
         '',
         '🌐 Server tanpa git — sync via GitHub API',
         'ℹ️ Daftar file gak bisa dideteksi (tanpa git)',
-        npmLine,
+        installed ? '📦 npm install *sukses*' : installErr ? '⚠️ npm install *gagal* (cek log)' : '📦 npm install *lewati*',
         '',
         '🔁 *RESTART* bot di panel biar kode baru kebaca',
         '',
         `🕒 ${nowWIB()}`
-      ]))
+      ])
     } catch (err) {
       await ctx.react('⚠️')
-      await ctx.reply(card('⚠️', 'UPDATE', [
-        '❌ *UPDATE GAGAL*',
+      await replyRich(ctx, {
+        icon: '⚠️',
+        title: 'UPDATE GAGAL',
+        sub: 'fallback GitHub API',
+        pill: { t: 'GAGAL', cls: 'bad' },
+        head: `<div class="lbl">❌ <span>API error</span></div>
+${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
+        meta: [`⏱️ <b>${hesc(fmtDur(Date.now() - t0))}</b>`, `🕒 ${hesc(nowWIB())}`],
+        notes: [{ t: 'Cek koneksi / rate limit GitHub,<br>lalu coba lagi <b>.updatesc</b>.', cls: 'bad' }]
+      }, [
+        '*UPDATE GAGAL*',
         '',
         '🔍 Detail error:',
-        ...gitErrDetail(err).map((l) => l),
+        ...gitErrDetail(err),
         '',
         `⏱️ *${fmtDur(Date.now() - t0)}*`,
         `🕒 ${nowWIB()}`
-      ]))
+      ])
     }
     return
   }
@@ -393,37 +615,58 @@ async function handler(ctx) {
       bootstrapped = await bootstrapRepo()
     } catch (err) {
       await ctx.react('⚠️')
-      await ctx.reply(card('⚠️', 'SETUP', [
-        '❌ *SETUP GAGAL*',
+      await replyRich(ctx, {
+        icon: '⚠️',
+        title: 'SETUP GAGAL',
+        sub: 'git init / fetch error',
+        pill: { t: 'GAGAL', cls: 'bad' },
+        head: `<div class="lbl">❌ <span>init repo error</span></div>
+${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
+        meta: [`🕒 ${hesc(nowWIB())}`],
+        notes: [{ t: 'Cek koneksi / akses GitHub<br>lalu coba lagi <b>.updatesc</b>.', cls: 'bad' }]
+      }, [
+        '*SETUP GAGAL*',
         '',
         ...gitErrDetail(err),
         '',
         `🕒 ${nowWIB()}`
-      ]))
+      ])
       return
     }
     const { installed, installErr } = await npmInstallMaybe(ctx, bootstrapped.pkgChanged)
-    const npmLine = installed
-      ? '📦 npm install *sukses*'
-      : installErr
-        ? '⚠️ npm install *gagal* (cek log)'
-        : '📦 npm install *lewati*'
     await ctx.react(installErr ? '⚠️' : '✅')
-    await ctx.reply(card(installErr ? '⚠️' : '⚙️', 'SETUP', [
-      '✅ *SETUP REPO SELESAI*',
+    await replyRich(ctx, {
+      icon: '⚙️',
+      title: 'SETUP REPO SELESAI',
+      sub: 'git init otomatis dari GitHub',
+      pill: { t: installErr ? 'ADA ERROR' : 'SETUP OK', cls: installErr ? 'warn' : 'ok' },
+      head: `<div class="lbl">📥 <span>repo dibuat + sync penuh</span></div>
+<div class="meta"><span class="hash">${hesc(bootstrapped.head.split(' ')[0])}</span><span>${hesc(trunc(bootstrapped.head.split(' ').slice(1).join(' '), 40))}</span></div>`,
+      meta: [`⏱️ <b>${hesc(fmtDur(Date.now() - t0))}</b>`, `🕒 ${hesc(nowWIB())}`],
+      notes: [
+        { t: '💾 Config lama disimpan di<br><b>config.js.pre-git.bak</b>' },
+        { t: '⚠️ Abis <b>RESTART</b>, jalur .updatesc<br>berikutnya normal (git pull).', cls: 'warn' }
+      ],
+      stats: [
+        { k: '📦 npm install', v: installed ? 'sukses' : installErr ? 'GAGAL' : 'lewati', cls: installed ? 'ok' : installErr ? 'bad' : 'dim' },
+        { k: '📁 session/ & data/', v: 'aman utuh', cls: 'ok' }
+      ],
+      buttons: [{ t: '🔁 RESTART bot di panel', cls: 'blue' }]
+    }, [
+      '*SETUP REPO SELESAI* ✅',
       '',
       `📌 HEAD: \`${bootstrapped.head.split(' ')[0]}\``,
       `⏱️ *${fmtDur(Date.now() - t0)}*`,
       '',
       '📥 Repo di-init otomatis + sync penuh',
       '💾 config.js lama → `config.js.pre-git.bak`',
-      npmLine,
+      installed ? '📦 npm install *sukses*' : installErr ? '⚠️ npm install *gagal* (cek log)' : '📦 npm install *lewati*',
       '',
       '🔁 *RESTART* bot di panel',
       '⚠️ Abis restart, .updatesc jalan normal (pull)',
       '',
       `🕒 ${nowWIB()}`
-    ]))
+    ])
     return
   }
 
@@ -443,14 +686,22 @@ async function handler(ctx) {
     oldHead = (await git(['rev-parse', 'HEAD'])).out
   } catch (err) {
     await ctx.react('⚠️')
-    await ctx.reply(card('⚠️', 'UPDATE', [
-      '❌ *UPDATE GAGAL*',
+    await replyRich(ctx, {
+      icon: '⚠️',
+      title: 'UPDATE GAGAL',
+      sub: 'gak bisa baca HEAD repo',
+      pill: { t: 'GAGAL', cls: 'bad' },
+      head: `<div class="lbl">❌ <span>rev-parse HEAD</span></div>
+${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
+      meta: [`🕒 ${hesc(nowWIB())}`]
+    }, [
+      '*UPDATE GAGAL*',
       '',
       '🔍 Gak bisa baca HEAD:',
       ...gitErrDetail(err),
       '',
       `🕒 ${nowWIB()}`
-    ]))
+    ])
     return
   }
 
@@ -459,15 +710,24 @@ async function handler(ctx) {
     await git(['fetch', 'origin', '--quiet'], 120_000)
   } catch (err) {
     await ctx.react('⚠️')
-    await ctx.reply(card('⚠️', 'UPDATE', [
-      '❌ *UPDATE GAGAL*',
+    await replyRich(ctx, {
+      icon: '⚠️',
+      title: 'UPDATE GAGAL',
+      sub: 'fetch origin error',
+      pill: { t: 'GAGAL', cls: 'bad' },
+      head: `<div class="lbl">❌ <span>git fetch origin</span></div>
+${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
+      meta: [`⏱️ <b>${hesc(fmtDur(Date.now() - t0))}</b>`, `🕒 ${hesc(nowWIB())}`],
+      notes: [{ t: 'Cek koneksi server / akses remote<br>(token SSH/HTTPS expired?).', cls: 'bad' }]
+    }, [
+      '*UPDATE GAGAL*',
       '',
       '🔍 Fetch origin error:',
       ...gitErrDetail(err),
       '',
       `⏱️ *${fmtDur(Date.now() - t0)}*`,
       `🕒 ${nowWIB()}`
-    ]))
+    ])
     return
   }
 
@@ -487,7 +747,19 @@ async function handler(ctx) {
     const cur = (await git(['log', '-1', '--oneline'])).out
     const [curHash = '', ...curMsg] = cur.split(' ')
     await ctx.react('✅')
-    await ctx.reply(card('✅', 'UPDATE', [
+    await replyRich(ctx, {
+      icon: '✅',
+      title: 'UDAH TERBARU',
+      sub: 'gak ada commit baru di GitHub',
+      pill: { t: 'UP TO DATE', cls: 'ok' },
+      head: `<div class="lbl">📌 <span>HEAD sekarang</span></div>
+<div class="meta"><span class="hash">${hesc(curHash)}</span>${curMsg.length ? `<span>${hesc(trunc(curMsg.join(' '), 40))}</span>` : ''}</div>`,
+      meta: [`⏱️ <b>${hesc(fmtDur(Date.now() - t0))}</b>`, `🌿 ${hesc(BRANCH)}`, `🕒 ${hesc(nowWIB())}`],
+      stats: [
+        { k: '📡 origin', v: 'tersambung', cls: 'ok' },
+        { k: '🔄 update terakhir', v: 'cek ulang nanti', cls: 'dim' }
+      ]
+    }, [
       '✅ *UDAH TERBARU*',
       '',
       `📌 HEAD: \`${curHash}\``,
@@ -496,7 +768,7 @@ async function handler(ctx) {
       'ℹ️ Gak ada commit baru dari GitHub',
       `⏱️ *${fmtDur(Date.now() - t0)}*`,
       `🕒 ${nowWIB()}`
-    ].filter(Boolean)))
+    ].filter(Boolean))
     return
   }
 
@@ -511,8 +783,20 @@ async function handler(ctx) {
 
   if (pullErr) {
     await ctx.react('⚠️')
-    await ctx.reply(card('⚠️', 'UPDATE', [
-      '❌ *UPDATE GAGAL*',
+    await replyRich(ctx, {
+      icon: '⚠️',
+      title: 'UPDATE GAGAL',
+      sub: 'git pull ditolak',
+      pill: { t: 'GAGAL', cls: 'bad' },
+      head: `<div class="lbl">❌ <span>pull --ff-only error</span></div>
+${gitErrDetail(pullErr).map((l) => row(hesc(l))).join('')}`,
+      meta: [`⏱️ <b>${hesc(fmtDur(Date.now() - t0))}</b>`, `🕒 ${hesc(nowWIB())}`],
+      notes: [
+        { t: '💡 Kemungkinan ada file diedit<br>langsung di panel.', cls: 'warn' },
+        { t: 'Paling aman: edit di <b>lokal</b> →<br><b>push</b> → <b>.updatesc</b><br>(atau reset repo di panel).', cls: 'warn' }
+      ]
+    }, [
+      '*UPDATE GAGAL*',
       '',
       ...gitErrDetail(pullErr),
       '',
@@ -522,7 +806,7 @@ async function handler(ctx) {
       '',
       `⏱️ *${fmtDur(Date.now() - t0)}*`,
       `🕒 ${nowWIB()}`
-    ]))
+    ])
     return
   }
 
@@ -570,20 +854,55 @@ async function handler(ctx) {
   const oldShort = oldHead.slice(0, 7)
   const newShort = newHead.slice(0, 7)
 
-  const npmLine = installed
-    ? '📦 npm install *sukses*'
-    : installErr
-      ? '⚠️ npm install *gagal* (cek log)'
-      : '📦 npm install *lewati*'
-  const restartLine = needRestart
-    ? '🔁 *RESTART* diperlukan (core/lib/handlers)'
-    : onlyPlugins
-      ? '⚡ Hot reload aktif · gak perlu restart'
-      : '✅ Selesai'
-
   await ctx.react(installErr ? '⚠️' : '✅')
-  await ctx.reply(card(installErr ? '⚠️' : '✅', 'UPDATE', [
-    '✅ *UPDATE SELESAI*',
+  await replyRich(ctx, {
+    icon: installErr ? '⚠️' : '🚀',
+    title: 'UPDATE SELESAI',
+    sub: `${commits.length} commit · ${files.length} file diperbarui`,
+    pill: { t: installErr ? 'ADA ERROR' : 'SUKSES', cls: installErr ? 'warn' : 'ok' },
+    head: `<div class="lbl">📌 <span>revisi</span></div>
+<div class="meta"><span class="hash">${hesc(oldShort)}</span><span class="arrow">➜</span><span class="hash">${hesc(newShort)}</span><span>⏱️ <b>${hesc(fmtDur(Date.now() - t0))}</b></span><span>🌿 ${hesc(BRANCH)}</span></div>`,
+    chips: [
+      { e: '🆕', n: groups.feat.length, k: 'fitur' },
+      { e: '🔧', n: groups.fix.length, k: 'fix' },
+      { e: '📝', n: groups.other.length, k: 'lain' },
+      { e: '📁', n: files.length, k: 'file' }
+    ],
+    sections: [
+      groups.feat.length ? { icon: '🆕', label: 'FITUR BARU', items: groups.feat.map((c) => c.subject) } : null,
+      groups.fix.length ? { icon: '🔧', label: 'FIX', items: groups.fix.map((c) => c.subject) } : null,
+      groups.other.length ? { icon: '📝', label: 'LAINNYA', items: groups.other.map((c) => c.subject) } : null,
+      files.length
+        ? {
+            icon: '📁',
+            label: 'FILE BERUBAH',
+            items: (() => {
+              const byDir = {}
+              for (const f of files) {
+                const key = f.includes('/') ? `${f.split('/')[0]}/` : f
+                byDir[key] = (byDir[key] || 0) + 1
+              }
+              return Object.keys(byDir).slice(0, 6).map((d) => `${d} · ${byDir[d]} file`)
+            })()
+          }
+        : null
+    ].filter(Boolean),
+    stats: [
+      { k: '📦 npm install', v: installed ? 'sukses' : installErr ? 'GAGAL' : 'lewati', cls: installed ? 'ok' : installErr ? 'bad' : 'dim' },
+      needRestart
+        ? { k: '🔁 aksi', v: 'RESTART di panel', cls: 'bad' }
+        : onlyPlugins
+          ? { k: '⚡ aksi', v: 'hot reload · gak perlu restart', cls: 'ok' }
+          : { k: '✅ aksi', v: 'selesai', cls: 'ok' }
+    ],
+    notes: needRestart
+      ? [{ t: '🔁 Ada file <b>core/lib/handlers</b> berubah —<br><b>RESTART bot di panel</b> biar kebaca.', cls: 'warn' }]
+      : onlyPlugins
+        ? [{ t: '⚡ Cuma <b>plugins/</b> — ke-hot-reload<br>sendiri, gak perlu restart.' }]
+        : [{ t: '✅ Update bersih, gak ada<br>perubahan berisiko.' }],
+    buttons: [{ t: '🕒 ' + nowWIB(), cls: '' }]
+  }, [
+    '*UPDATE SELESAI* ✅',
     '',
     `📌 \`${oldShort}\` ➜ \`${newShort}\``,
     `⏱️ *${fmtDur(Date.now() - t0)}* · 🌿 *${BRANCH}*`,
@@ -594,11 +913,15 @@ async function handler(ctx) {
     ...section('🔧 *FIX*', groups.fix),
     ...section('📝 *LAINNYA*', groups.other),
     ...fileSection(files),
-    npmLine,
-    restartLine,
+    installed ? '📦 npm install *sukses*' : installErr ? '⚠️ npm install *gagal* (cek log)' : '📦 npm install *lewati*',
+    needRestart
+      ? '🔁 *RESTART* diperlukan (core/lib/handlers)'
+      : onlyPlugins
+        ? '⚡ Hot reload aktif · gak perlu restart'
+        : '✅ Selesai',
     '',
     `🕒 ${nowWIB()}`
-  ]))
+  ])
 }
 
 export { pluginConfig as config, handler }
