@@ -41,3 +41,14 @@ export function isOn(groupJid, key) {
 export function setOn(groupJid, key, on) {
   setSetting(groupJid, key, on ? '1' : '0')
 }
+
+// ══════ Setting GLOBAL bot (bukan per-grup) — mis. mode onlyPc / onlyGc ══════
+const GLOBAL_JID = '__global__'
+
+export function getGlobal(key) {
+  return getSetting(GLOBAL_JID, key)
+}
+
+export function setGlobal(key, value) {
+  setSetting(GLOBAL_JID, key, value)
+}

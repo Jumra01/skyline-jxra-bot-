@@ -15,6 +15,7 @@ import { getGroupMetaCached } from '../core/lid.js'
 import { touchUser, incrementCommand, getUser, topUsers, isPremiumActive, getEmerald, spendEmerald, logEmeraldUse, isEmeraldNotifyOn } from '../core/database.js'
 import { sendUsageCard, getNotifyGlobal } from '../lib/emeraldCard.js'
 import { sendTyping, markRead } from '../core/presence.js'
+import { getGlobal } from '../core/groupSettings.js'
 import { reactTo } from '../core/react.js'
 
 const richHandlers = new Map()
@@ -146,6 +147,13 @@ export async function route(client, event) {
   const where = ctx.isGroup ? 'GRUP' : 'PRIV'
 
   if (config.autoRead) void markRead(client, event)
+
+  // Mode global onlyPc / onlyGc (.onlypc / .onlygc) — owner selalu bisa akses
+  // biar mode bisa dimatikan dari chat mana pun. Non-owner: diem aja (silent).
+  if (!ctx.isOwner) {
+    if (getGlobal('onlyPc') === '1' && ctx.isGroup) return
+    if (getGlobal('onlyGc') === '1' && !ctx.isGroup) return
+  }
 
   const richReply = readRichReply(event.message)
   if (richReply) {
