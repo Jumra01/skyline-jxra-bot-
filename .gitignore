@@ -29,3 +29,9 @@ jhspot.js
 *.log
 *.backup
 AGENTS.md
+*.bak
+plugins/tools/atest.js
+plugins/tools/ctest.js
+plugins/tools/testrich.js
+plugins/interactive/richdiag.js
+lib/jhai.js
