@@ -144,7 +144,7 @@ risiko merusak bagian lain.
 ## Instalasi
 
 ```bash
-git clone https://github.com/raaxml01/skyline-jxra-bot-.git
+git clone https://github.com/jumra01/skyline-jxra-bot-.git
 cd skyline-jxra-bot-
 npm install
 ```

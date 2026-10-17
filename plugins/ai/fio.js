@@ -270,7 +270,7 @@ async function handler(ctx) {
         '• `.fio siapa kamu?`\n' +
         '• `.fio ambil file math.js`\n' +
         '• `.fio rangkum https://...`\n' +
-        '• `.fio buka github.com/raaxml01/skyline-jxra-bot-`\n' +
+        '• `.fio buka github.com/jumra01/skyline-jxra-bot-`\n' +
         '• `.fio cari berita Persija terbaru`\n' +
         '• `.fio buatkan kode HTML game raid`\n' +
         '• Reply foto + `.fio ini foto apa?`\n' +

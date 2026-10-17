@@ -34,7 +34,7 @@ async function handler(ctx) {
             body: '*Kartu 1 — Fiony*\nFiony Alveria, kesayangan skyline-JXRA.',
             footer: '⚡ Powered by skyline-JXRA',
             buttons: [
-              { type: 'url', displayText: '🌐 Buka GitHub', url: 'https://github.com/raaxml01/skyline-jxra-bot-.git' },
+              { type: 'url', displayText: '🌐 Buka GitHub', url: 'https://github.com/jumra01/skyline-jxra-bot-.git' },
               { type: 'reply', displayText: '👋 Sapa Fiony', id: 'rich:carousel-sapa-1' }
             ]
           },
@@ -43,7 +43,7 @@ async function handler(ctx) {
             body: '*Kartu 2 — Carmen*\nCarmen, karakter kedua.',
             footer: '⚡ Powered by skyline-JXRA',
             buttons: [
-              { type: 'url', displayText: '🌐 Buka GitHub', url: 'https://github.com/raaxml01/skyline-jxra-bot-.git' },
+              { type: 'url', displayText: '🌐 Buka GitHub', url: 'https://github.com/jumra01/skyline-jxra-bot-.git' },
               { type: 'reply', displayText: '👋 Sapa Carmen', id: 'rich:carousel-sapa-2' }
             ]
           },
@@ -52,7 +52,7 @@ async function handler(ctx) {
             body: '*Kartu 3 — Nayeon*\nNayeon, karakter ketiga.',
             footer: '⚡ Powered by skyline-JXRA',
             buttons: [
-              { type: 'url', displayText: '🌐 Buka GitHub', url: 'https://github.com/raaxml01/skyline-jxra-bot-.git' },
+              { type: 'url', displayText: '🌐 Buka GitHub', url: 'https://github.com/jumra01/skyline-jxra-bot-.git' },
               { type: 'reply', displayText: '👋 Sapa Nayeon', id: 'rich:carousel-sapa-3' }
             ]
           }
