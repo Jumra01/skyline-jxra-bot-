@@ -7,11 +7,10 @@
  * Pakai:
  *   .updatesc         → git fetch + pull --ff-only dari origin, lalu rekap
  *                      "apa yang baru": 🆕 fitur / 🔧 fix / 📝 lainnya + file berubah
- *                      (commit baru + daftar file berubah)
  *   auto-healing      → folder BELUM git repo (deploy panel via upload file)
  *                      → git init + tarik dari GitHub OTOMATIS
  *                      → server GAK punya git → fallback unduh via GitHub API
- *                         (Node fetch + tar system), file disamain sama GitHub
+ *                         (Node fetch + untgz murni Node), file disamain GitHub
  *   auto             → kalau package.json / package-lock.json ikut berubah,
  *                      jalanin `npm install --omit=dev` sendiri setelah pull.
  *
@@ -74,19 +73,41 @@ function gitErrDetail(err) {
   return msg.split('\n').filter(Boolean).slice(0, 5)
 }
 
-function box(lines) {
-  const w = Math.min(
-    Math.max(
-      ...lines.map((l) => [...l].reduce((n, c) => n + (c.charCodeAt(0) > 0x2000 ? 2 : 1), 0)),
-      24
-    ),
-    44
-  )
-  return [
-    '╭─〔 *UPDATE* 〕─⬣',
-    ...lines.map((l) => `│ ${l}`),
-    `╰${'─'.repeat(w + 2)}╯`
-  ].join('\n')
+// ── UI helpers (gaya menu: ╭─〔 emoji `judul` 〕─⬣ + │ baris + ╰─⬣) ──
+const SC_MAP = {
+  a: 'ᴀ', b: 'ʙ', c: 'ᴄ', d: 'ᴅ', e: 'ᴇ', f: 'ꜰ', g: 'ɢ', h: 'ʜ', i: 'ɪ',
+  j: 'ᴊ', k: 'ᴋ', l: 'ʟ', m: 'ᴍ', n: 'ɴ', o: 'ᴏ', p: 'ᴘ', q: 'Q', r: 'ʀ',
+  s: 'ꜱ', t: 'ᴛ', u: 'ᴜ', v: 'ᴠ', w: 'ᴡ', x: 'x', y: 'ʏ', z: 'ᴢ'
+}
+const toSmallCaps = (t) => [...String(t).toLowerCase()].map((c) => SC_MAP[c] || c).join('')
+const trunc = (s, n) => (String(s).length > n ? `${String(s).slice(0, n - 1)}…` : String(s))
+
+function card(emoji, title, lines) {
+  const out = [`╭─〔 ${emoji} \`${toSmallCaps(title)}\` 〕─⬣`]
+  for (const line of lines) out.push(line === '' ? '│' : `│ ${line}`)
+  out.push('╰─⬣')
+  return out.join('\n')
+}
+
+function fmtDur(ms) {
+  if (ms < 1000) return `${ms}ms`
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)} detik`
+  const m = Math.floor(ms / 60000)
+  const s = Math.round((ms % 60000) / 1000)
+  return `${m}m ${s}s`
+}
+
+function nowWIB() {
+  try {
+    const s = new Date().toLocaleString('id-ID', {
+      timeZone: 'Asia/Jakarta',
+      day: 'numeric', month: 'long', year: 'numeric',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+    })
+    return `${s} WIB`
+  } catch {
+    return new Date().toISOString()
+  }
 }
 
 const NEED_RESTART_RE = /^(core|lib|handlers|auth|src)\//
@@ -251,7 +272,11 @@ async function apiSync() {
 async function npmInstallMaybe(ctx, changed) {
   if (!changed) return { installed: false, installErr: null }
   try {
-    await ctx.reply('📦 *DEPENDENCY BERUBAH*\n\n_Jalanin npm install... (bisa 1-2 menit)_')
+    await ctx.reply(card('📦', 'DEPENDENCY', [
+      '⏳ *Dependency berubah*',
+      '',
+      '⚙️ npm install... (bisa 1-2 menit)'
+    ]))
     await pexec('npm', ['install', '--omit=dev'], {
       cwd: process.cwd(),
       timeout: 10 * 60 * 1000,
@@ -261,6 +286,28 @@ async function npmInstallMaybe(ctx, changed) {
   } catch (err) {
     return { installed: false, installErr: String(err?.message || err).split('\n').slice(0, 4) }
   }
+}
+
+// Rekap section: label + daftar commit (maks 6), spasi bawah biar rapi
+function section(label, list) {
+  if (!list.length) return []
+  const rows = list.slice(0, 6).map((c) => `◦ ${trunc(c.subject, 50)}`)
+  if (list.length > 6) rows.push(`… +${list.length - 6} lainnya`)
+  return [`${label} (${list.length})`, ...rows, '']
+}
+
+// Daftar file berubah → dikelompokin per folder root (rapi buat banyak file)
+function fileSection(files) {
+  if (!files.length) return []
+  const byDir = {}
+  for (const f of files) {
+    const key = f.includes('/') ? `${f.split('/')[0]}/` : f
+    byDir[key] = (byDir[key] || 0) + 1
+  }
+  const keys = Object.keys(byDir)
+  const rows = keys.slice(0, 8).map((d) => `◦ ${d} · ${byDir[d]}`)
+  if (keys.length > 8) rows.push(`… +${keys.length - 8} lain`)
+  return [`📁 *FILE BERUBAH* (${files.length})`, ...rows, '']
 }
 
 const pluginConfig = {
@@ -282,42 +329,52 @@ const pluginConfig = {
 }
 
 async function handler(ctx) {
+  const t0 = Date.now()
   const hasGit = await gitAvailable()
 
   // ── Jalur 1: server gak punya git → fallback GitHub API ──
   if (!hasGit) {
     await ctx.react('🔄')
-    await ctx.reply('🔄 *UPDATE*\n\n_Git gak ada di server — fallback unduh via GitHub API..._')
+    await ctx.reply(card('🌐', 'UPDATE', [
+      '⏳ *Git gak ada di server*',
+      '',
+      '🌐 Fallback: unduh via GitHub API',
+      `🕒 ${nowWIB()}`
+    ]))
     try {
       const { short, msg, pkgChanged } = await apiSync()
       const { installed, installErr } = await npmInstallMaybe(ctx, pkgChanged)
+      const npmLine = installed
+        ? '📦 npm install *sukses*'
+        : installErr
+          ? '⚠️ npm install *gagal* (cek log)'
+          : '📦 npm install *lewati*'
       await ctx.react(installErr ? '⚠️' : '✅')
-      await ctx.reply(
-        box([
-          '*UPDATE SELESAI* ✅ (API)',
-          '',
-          'Server gak punya git — file',
-          'disamain langsung dari GitHub.',
-          '',
-          `HEAD: ${short} ${msg.slice(0, 40)}`,
-          installed ? ['', '📦 npm install *sukses*'] : [],
-          installErr ? ['', '⚠️ npm install GAGAL:', ...installErr.map((l) => `• ${l}`)] : [],
-          '',
-          '🔁 Tanpa git, daftar file berubah',
-          'gak bisa dideteksi — *RESTART*',
-          'bot di panel biar aman'
-        ].flat().filter(Boolean))
-      )
+      await ctx.reply(card(installErr ? '⚠️' : '🌐', 'UPDATE', [
+        '✅ *UPDATE SELESAI (API)*',
+        '',
+        `📌 \`${short}\` ${trunc(msg, 30)}`,
+        `⏱️ *${fmtDur(Date.now() - t0)}*`,
+        '',
+        '🌐 Server tanpa git — sync via GitHub API',
+        'ℹ️ Daftar file gak bisa dideteksi (tanpa git)',
+        npmLine,
+        '',
+        '🔁 *RESTART* bot di panel biar kode baru kebaca',
+        '',
+        `🕒 ${nowWIB()}`
+      ]))
     } catch (err) {
       await ctx.react('⚠️')
-      await ctx.reply(
-        box([
-          '*UPDATE GAGAL*',
-          '',
-          'Fallback API error:',
-          `• ${String(err?.message || err).split('\n')[0].slice(0, 120)}`
-        ])
-      )
+      await ctx.reply(card('⚠️', 'UPDATE', [
+        '❌ *UPDATE GAGAL*',
+        '',
+        '🔍 Detail error:',
+        ...gitErrDetail(err).map((l) => l),
+        '',
+        `⏱️ *${fmtDur(Date.now() - t0)}*`,
+        `🕒 ${nowWIB()}`
+      ]))
     }
     return
   }
@@ -326,35 +383,47 @@ async function handler(ctx) {
   let bootstrapped = null
   if (!(await isGitRepo())) {
     await ctx.react('🔄')
-    await ctx.reply('⚠️ _Folder ini belum git repo — init otomatis + tarik dari GitHub..._')
+    await ctx.reply(card('⚙️', 'SETUP', [
+      '⏳ *Folder belum git repo*',
+      '',
+      '🔄 Init + tarik penuh dari GitHub...',
+      '⏱️ Bisa 1-2 menit'
+    ]))
     try {
       bootstrapped = await bootstrapRepo()
     } catch (err) {
-      await ctx.reply(box(['*SETUP GAGAL*', '', ...gitErrDetail(err).map((l) => `• ${l}`)]))
+      await ctx.react('⚠️')
+      await ctx.reply(card('⚠️', 'SETUP', [
+        '❌ *SETUP GAGAL*',
+        '',
+        ...gitErrDetail(err),
+        '',
+        `🕒 ${nowWIB()}`
+      ]))
       return
     }
     const { installed, installErr } = await npmInstallMaybe(ctx, bootstrapped.pkgChanged)
+    const npmLine = installed
+      ? '📦 npm install *sukses*'
+      : installErr
+        ? '⚠️ npm install *gagal* (cek log)'
+        : '📦 npm install *lewati*'
     await ctx.react(installErr ? '⚠️' : '✅')
-    await ctx.reply(
-      box([
-        '*SETUP REPO* ✅',
-        '',
-        'Git repo dibuat otomatis +',
-        'file disamain sama GitHub.',
-        '',
-        `HEAD: ${bootstrapped.head}`,
-        installed ? ['', '📦 npm install *sukses*'] : [],
-        installErr ? ['', '⚠️ npm install GAGAL:', ...installErr.map((l) => `• ${l}`)] : [
-          '',
-          '⚠️ config.js lokal disimpan',
-          'di config.js.pre-git.bak'
-        ],
-        '',
-        '🔁 *RESTART* bot di panel biar',
-        'kode baru kebaca. Abis ini',
-        '.updatesc jalan normal (pull).'
-      ].flat().filter(Boolean))
-    )
+    await ctx.reply(card(installErr ? '⚠️' : '⚙️', 'SETUP', [
+      '✅ *SETUP REPO SELESAI*',
+      '',
+      `📌 HEAD: \`${bootstrapped.head.split(' ')[0]}\``,
+      `⏱️ *${fmtDur(Date.now() - t0)}*`,
+      '',
+      '📥 Repo di-init otomatis + sync penuh',
+      '💾 config.js lama → `config.js.pre-git.bak`',
+      npmLine,
+      '',
+      '🔁 *RESTART* bot di panel',
+      '⚠️ Abis restart, .updatesc jalan normal (pull)',
+      '',
+      `🕒 ${nowWIB()}`
+    ]))
     return
   }
 
@@ -362,15 +431,26 @@ async function handler(ctx) {
   await ensureOriginUrl()
 
   await ctx.react('🔄')
-  await ctx.reply('🔄 *UPDATE*\n\n_Mengambil commit terbaru dari GitHub..._')
+  await ctx.reply(card('🔄', 'UPDATE', [
+    '⏳ *Mengambil commit terbaru...*',
+    '',
+    `🌐 origin/${BRANCH}`,
+    `🕒 ${nowWIB()}`
+  ]))
 
   let oldHead
   try {
     oldHead = (await git(['rev-parse', 'HEAD'])).out
   } catch (err) {
-    await ctx.reply(
-      box(['*UPDATE GAGAL*', '', 'Gak bisa baca HEAD:', ...gitErrDetail(err).map((l) => `• ${l}`)])
-    )
+    await ctx.react('⚠️')
+    await ctx.reply(card('⚠️', 'UPDATE', [
+      '❌ *UPDATE GAGAL*',
+      '',
+      '🔍 Gak bisa baca HEAD:',
+      ...gitErrDetail(err),
+      '',
+      `🕒 ${nowWIB()}`
+    ]))
     return
   }
 
@@ -378,14 +458,16 @@ async function handler(ctx) {
   try {
     await git(['fetch', 'origin', '--quiet'], 120_000)
   } catch (err) {
-    await ctx.reply(
-      box([
-        '*UPDATE GAGAL*',
-        '',
-        'Fetch origin error:',
-        ...gitErrDetail(err).map((l) => `• ${l}`)
-      ])
-    )
+    await ctx.react('⚠️')
+    await ctx.reply(card('⚠️', 'UPDATE', [
+      '❌ *UPDATE GAGAL*',
+      '',
+      '🔍 Fetch origin error:',
+      ...gitErrDetail(err),
+      '',
+      `⏱️ *${fmtDur(Date.now() - t0)}*`,
+      `🕒 ${nowWIB()}`
+    ]))
     return
   }
 
@@ -403,16 +485,18 @@ async function handler(ctx) {
 
   if (behind === '0') {
     const cur = (await git(['log', '-1', '--oneline'])).out
+    const [curHash = '', ...curMsg] = cur.split(' ')
     await ctx.react('✅')
-    await ctx.reply(
-      box([
-        '*UPDATE* ✅',
-        '',
-        'Script udah *terbaru* — gak ada commit baru.',
-        '',
-        `HEAD: ${cur}`
-      ])
-    )
+    await ctx.reply(card('✅', 'UPDATE', [
+      '✅ *UDAH TERBARU*',
+      '',
+      `📌 HEAD: \`${curHash}\``,
+      curMsg.length ? `💬 ${trunc(curMsg.join(' '), 36)}` : null,
+      '',
+      'ℹ️ Gak ada commit baru dari GitHub',
+      `⏱️ *${fmtDur(Date.now() - t0)}*`,
+      `🕒 ${nowWIB()}`
+    ].filter(Boolean)))
     return
   }
 
@@ -427,18 +511,18 @@ async function handler(ctx) {
 
   if (pullErr) {
     await ctx.react('⚠️')
-    await ctx.reply(
-      box([
-        '*UPDATE GAGAL*',
-        '',
-        ...gitErrDetail(pullErr).map((l) => `• ${l}`),
-        '',
-        'Kemungkinan ada file yang diedit',
-        'langsung di panel. Paling aman:',
-        'edit di lokal → push → .updatesc',
-        '(atau reset repo di panel)'
-      ])
-    )
+    await ctx.reply(card('⚠️', 'UPDATE', [
+      '❌ *UPDATE GAGAL*',
+      '',
+      ...gitErrDetail(pullErr),
+      '',
+      '💡 Kemungkinan ada file diedit langsung',
+      '   di panel. Paling aman: edit di lokal',
+      '   → push → .updatesc (atau reset repo)',
+      '',
+      `⏱️ *${fmtDur(Date.now() - t0)}*`,
+      `🕒 ${nowWIB()}`
+    ]))
     return
   }
 
@@ -483,38 +567,38 @@ async function handler(ctx) {
   )
   const onlyPlugins = files.length > 0 && files.every((f) => f.startsWith('plugins/'))
 
-  const SECTION_MAX = 6
-  const section = (label, list) => {
-    if (!list.length) return []
-    const rows = list.slice(0, SECTION_MAX).map((c) => {
-      const subj = c.subject.length > 52 ? `${c.subject.slice(0, 51)}…` : c.subject
-      return [`◦ ${subj}`, c.body ? `  _${c.body.split('\n')[0].slice(0, 60)}_` : null]
-    })
-    if (list.length > SECTION_MAX) rows.push([`… +${list.length - SECTION_MAX} lainnya`])
-    return [label, ...rows.flat().filter(Boolean), '']
-  }
+  const oldShort = oldHead.slice(0, 7)
+  const newShort = newHead.slice(0, 7)
 
-  const fileLines = files.slice(0, 8).map((f) => `◦ ${f}`)
-  if (files.length > 8) fileLines.push(`… +${files.length - 8} file lain`)
-
-  const status = [
-    `*${commits.length} commit* · *${files.length} file* diperbarui`,
-    '',
-    ...section('🆕 *FITUR BARU:*', groups.feat),
-    ...section('🔧 *FIX:*', groups.fix),
-    ...section('📝 *LAINNYA:*', groups.other),
-    files.length ? ['📁 *FILE BERUBAH:*', ...fileLines, ''] : [],
-    installed ? ['📦 npm install *sukses*', ''] : [],
-    installErr ? ['⚠️ npm install GAGAL:', ...installErr.map((l) => `• ${l}`), ''] : [],
-    needRestart
-      ? '🔁 Ada perubahan *core/lib/handlers* → *RESTART* bot di panel biar kebaca'
-      : onlyPlugins
-        ? '⚡ Cuma plugins/ → ke-*hot reload* sendiri, gak perlu restart'
-        : '✅ Selesai'
-  ].flat().filter((l) => l !== undefined)
+  const npmLine = installed
+    ? '📦 npm install *sukses*'
+    : installErr
+      ? '⚠️ npm install *gagal* (cek log)'
+      : '📦 npm install *lewati*'
+  const restartLine = needRestart
+    ? '🔁 *RESTART* diperlukan (core/lib/handlers)'
+    : onlyPlugins
+      ? '⚡ Hot reload aktif · gak perlu restart'
+      : '✅ Selesai'
 
   await ctx.react(installErr ? '⚠️' : '✅')
-  await ctx.reply(box(['*UPDATE SELESAI* ✅', '', ...status.filter(Boolean)]))
+  await ctx.reply(card(installErr ? '⚠️' : '✅', 'UPDATE', [
+    '✅ *UPDATE SELESAI*',
+    '',
+    `📌 \`${oldShort}\` ➜ \`${newShort}\``,
+    `⏱️ *${fmtDur(Date.now() - t0)}* · 🌿 *${BRANCH}*`,
+    '',
+    `📊 ${groups.feat.length} 🆕 · ${groups.fix.length} 🔧 · ${groups.other.length} 📝 · ${files.length} 📁`,
+    '',
+    ...section('🆕 *FITUR BARU*', groups.feat),
+    ...section('🔧 *FIX*', groups.fix),
+    ...section('📝 *LAINNYA*', groups.other),
+    ...fileSection(files),
+    npmLine,
+    restartLine,
+    '',
+    `🕒 ${nowWIB()}`
+  ]))
 }
 
 export { pluginConfig as config, handler }
