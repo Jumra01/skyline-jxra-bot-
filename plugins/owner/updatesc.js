@@ -21,13 +21,38 @@ import { promisify } from 'node:util'
 
 const pexec = promisify(execFile)
 
+// safe.directory=* → amanin kasus Docker/panel (repo beda user sama proses,
+// git nolak dengan "detected dubious ownership")
 function git(args, timeout = 60_000) {
-  return pexec('git', args, {
+  return pexec('git', ['-c', 'safe.directory=*', ...args], {
     cwd: process.cwd(),
     timeout,
     maxBuffer: 16 * 1024 * 1024,
     windowsHide: true
   }).then(({ stdout, stderr }) => ({ out: String(stdout).trim(), err: String(stderr).trim() }))
+}
+
+// Biar pesan error kebaca jelas: git gak ada / bukan repo / auth
+function gitErrDetail(err) {
+  const msg = String(err?.message || err || '')
+  if (err?.code === 'ENOENT' || /ENOENT|not found/i.test(msg)) {
+    return ['GIT GAK ADA di server ini.', 'Install dulu (Debian/Ubuntu):', 'apt install git']
+  }
+  if (/dubious ownership/i.test(msg)) {
+    return ['Deteksi dubious ownership (Docker).', 'Udah ditangani safe.directory, coba lagi.']
+  }
+  if (/does not appear to be a git repository|not a git repository|fatal: not a git/i.test(msg)) {
+    return ['Folder ini BUKAN git repo.', 'Deploy ulang pakai git clone:', 'git clone <repo-url> .']
+  }
+  if (/Permission denied \(publickey\)|could not read Username|Authentication failed|403|401/i.test(msg)) {
+    return [
+      'Auth GitHub GAGAL.',
+      'Remote kemungkinan SSH tapi', 'container gak punya key.',
+      'Solusi: clone ulang pakai HTTPS+token',
+      'atau tambahin deploy key di repo.'
+    ]
+  }
+  return msg.split('\n').filter(Boolean).slice(0, 5)
 }
 
 function box(lines) {
@@ -69,11 +94,9 @@ async function handler(ctx) {
   // 1. Pastiin cwd = git repo (deploy panel harus clone dari GitHub)
   try {
     await git(['rev-parse', '--is-inside-work-tree'])
-  } catch {
+  } catch (err) {
     await ctx.reply(
-      '❌ *UPDATE GAGAL*\n\n' +
-      'Folder bot ini bukan git repo.\n' +
-      'Deploy ulang dengan `git clone <repo>` biar .updatesc bisa jalan.'
+      box(['*UPDATE GAGAL*', '', ...gitErrDetail(err).map((l) => `• ${l}`)])
     )
     return
   }
@@ -84,8 +107,10 @@ async function handler(ctx) {
   let oldHead
   try {
     oldHead = (await git(['rev-parse', 'HEAD'])).out
-  } catch {
-    await ctx.reply('❌ Gak bisa baca HEAD repo — cek instalasi git di server.')
+  } catch (err) {
+    await ctx.reply(
+      box(['*UPDATE GAGAL*', '', 'Gak bisa baca HEAD:', ...gitErrDetail(err).map((l) => `• ${l}`)])
+    )
     return
   }
 
@@ -98,9 +123,7 @@ async function handler(ctx) {
         '*UPDATE GAGAL*',
         '',
         'Fetch origin error:',
-        ...(String(err?.message || err).split('\n').slice(0, 4).map((l) => `• ${l}`)),
-        '',
-        'Cek koneksi/akses git server (token expired?)'
+        ...gitErrDetail(err).map((l) => `• ${l}`)
       ])
     )
     return
@@ -143,13 +166,12 @@ async function handler(ctx) {
   }
 
   if (pullErr) {
-    const detail = String(pullErr?.message || pullErr).split('\n').slice(0, 5)
     await ctx.react('⚠️')
     await ctx.reply(
       box([
         '*UPDATE GAGAL*',
         '',
-        ...detail.map((l) => `• ${l}`),
+        ...gitErrDetail(pullErr).map((l) => `• ${l}`),
         '',
         'Kemungkinan ada file yang diedit',
         'langsung di panel. Paling aman:',
