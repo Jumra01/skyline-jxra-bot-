@@ -1,23 +1,51 @@
 /**
  * © skyline-JXRA
- * Hapus credit gak bikin u jago dumbass. 
+ * Hapus credit gak bikin u jago dumbass.
  * Hargai sebagaimana u mau dihargai.
  * config.js — Centralized configuration untuk skyline-JXRA
  */
 
 export default {
+  /* ════════════════════════════════════════════
+   *  BOT
+   * ════════════════════════════════════════════ */
   botName: 'skyline-JXRA',
 
+  /* ════════════════════════════════════════════
+   *  AUTH
+   *  method: 'auto'     → pilih QR / pairing via menu saat start
+   *           'qr'      → langsung QR
+   *           'pairing' → langsung pairing code
+   *  pairingNumber WAJIB diisi (format 628xxx) kalau mau pairing
+   *  code jalan otomatis (terutama via PM2 / non-interaktif).
+   * ════════════════════════════════════════════ */
   auth: {
     method: 'auto',
-    customCode: 'JHXFNY48',
+    pairingNumber: '',      // contoh: '6281234567890' (kosong = fallback QR)
     useCustomCode: true,
-    pairingNumber: '',
+    customCode: 'JHXFNY48', // 8 karakter: 1-9 & A-Z tanpa I, O, U
   },
 
-  prefixes: ['.', '!', '/', '#', ',', '😁', '🦅'],
+  /* ════════════════════════════════════════════
+   *  PERINTAH & PREFIX
+   * ════════════════════════════════════════════ */
   mainPrefix: '.',
+  prefixes: ['.', '!', '/', '#', ',', '😁', '🦅'],
 
+  /* ════════════════════════════════════════════
+   *  OWNER (cukup isi nomor di sini — format bebas:
+   *  628xxx / 08xxx / +628xxx / 628xxx@s.whatsapp.net
+   *  Nomor bot sendiri otomatis jadi owner.
+   * ════════════════════════════════════════════ */
+  owner: {
+    name: 'skyline-JXRA Developer',
+    numbers: ['6283121590572'],
+  },
+
+  /* ════════════════════════════════════════════
+   *  STAFF (opsional — buat label & role admin)
+   *  role: 'owner' | 'admin' — dicocokkan via nomor & LID
+   * ════════════════════════════════════════════ */
   staff: [
     { number: '6283121590572', role: 'owner', label: 'skyline-JXRA • Developer' },
     { number: '6283121590572', role: 'owner', label: 'JHPremix • Developer' },
@@ -25,61 +53,176 @@ export default {
     { number: '6283121590572', role: 'admin', label: 'XN • Staff Admin' },
   ],
 
-  // Fitur grup yang butuh on/off (permission admin/staff)
+  /* ════════════════════════════════════════════
+   *  PREMIUM — daftar & expiry disimpan di table
+   *  database `premiumdb` (data/users.sqlite,
+   *  TERPISAH dari session/ biar aman dari re-pair),
+   *  diatur via command owner:
+   *  .addprem <nomor> <durasi> / .delprem / .premlist
+   * ════════════════════════════════════════════ */
+
+  /* ════════════════════════════════════════════
+   *  GRUP
+   * ════════════════════════════════════════════ */
+  // Fitur grup on/off per grup (hanya admin grup / staff yang boleh ubah)
   toggleable: ['welcome', 'bye', 'antilink', 'game'],
 
-  // BLACKLIST domain antilink (default; bisa di-override per grup).
-  // Selain daftar ini = boleh. Yang di daftar = dihapus.
+  // Domain yang dihapus oleh antilink (default; bisa di-override per grup).
+  // Selain daftar ini = boleh.
   antilink: {
     defaultBlacklist: 'wa.me,chat.whatsapp.com,t.me,telegram.me',
   },
 
+  /* ════════════════════════════════════════════
+   *  STICKER
+   * ════════════════════════════════════════════ */
   sticker: {
     packName: 'Made with',
     author: 'skyline-JXRA♡',
     withExif: true,
-    maxVideoSeconds: 10
+    maxVideoSeconds: 10,
   },
 
+  /* ════════════════════════════════════════════
+   *  WORKER / WEBSOCKET (media)
+   * ════════════════════════════════════════════ */
   wsWorkerUrl: 'wss://audio.jhx.my.id/wss/audio',
   wsPort: 8090,
   wsPath: '/wss/audio',
 
+  /* ════════════════════════════════════════════
+   *  ANTI-SPAM & COOLDOWN
+   * ════════════════════════════════════════════ */
   antiSpam: {
     enabled: true,
-    max: 5,
+    max: 5,        // maks pesan dalam windowMs sebelum mute
     windowMs: 10_000,
-    muteMs: 30_000
+    muteMs: 30_000,
   },
-  cooldown: 3000,
+  cooldown: 3000,  // jeda antar command per user (ms)
 
-  autoRead: true,
-  typingPresence: true,
+  /* ════════════════════════════════════════════
+   *  EMERALD 🟩 (mata uang command — ala trading Minecraft)
+   *  Tiap command user biasa bayar defaultCost emerald
+   *  (owner/staff/premium bebas). Biaya per command bisa
+   *  dioverride lewat field `energi:` di config plugin.
+   *  Sumber: regen (+amount / interval), .daily, reward RPG
+   *  (battle/quest/jual barang). Saldo numpuk maks `max`.
+   *  Notif pemakaian (kartu HTML native): .notife on/off.
+   *  Riwayat: .riwayat
+   * ════════════════════════════════════════════ */
+  emerald: {
+    enabled: true,        // matikan total → semua command jadi gratis
+    defaultCost: 1,       // biaya default tiap command (override: `energi:` di plugin)
+    max: 64,              // batas saldo (ala stack Minecraft)
+    notify: true,         // master notif: true | false | 'private' (cuma chat pribadi)
+    regen: {
+      amount: 10,         // tambahan saldo per tick regen
+      intervalMs: 600_000, // tiap 10 menit (dihitung lazy, tanpa timer)
+    },
+    daily: {
+      amount: 30,         // hadiah .daily
+      cooldownMs: 86_400_000, // 24 jam
+    },
+    reward: {
+      // emerald per battle menang, sesuai tier monster
+      battle: { common: 1, uncommon: 1, rare: 2, epic: 3, legendary: 5 },
+      questDiv: 10,       // emerald quest = floor(gold / 10)
+      sellDiv: 20,        // emerald jual barang = floor(gold / 20), min 1
+    },
+  },
 
-  // Hot Reload — auto reload command di feat/ tiap ada file baru/edit/hapus.
-  // Gak perlu restart bot/server, gak perlu ketik .reload manual lagi.
+  /* ════════════════════════════════════════════
+   *  PRESENCE
+   * ════════════════════════════════════════════ */
+  autoRead: false,
+  typingPresence: false,
+
+  /* ════════════════════════════════════════════
+   *  HOT RELOAD
+   *  Auto reload command di plugins/ tiap file baru/edit/hapus.
+   *  Gak perlu restart bot/server.
+   * ════════════════════════════════════════════ */
   hotReload: {
     enabled: true,
     debounceMs: 400,   // jeda nunggu (ms) biar gak reload berkali-kali pas nyimpen beruntun
-    notifyOwner: true, // kirim WA ke owner tiap kali hot reload kejadian
+    notifyOwner: false, // kirim WA ke owner tiap kali hot reload kejadian
   },
 
-  // React Channel — auto-react postingan baru di channel khusus bot,
-  // + command .rch buat react manual ke postingan channel manapun.
+  /* ════════════════════════════════════════════
+   *  REACT CHANNEL
+   *  Auto-react postingan baru di channel khusus bot,
+   *  + command .rch buat react manual ke postingan channel manapun.
+   * ════════════════════════════════════════════ */
   reactChannel: {
     enabled: true,
-    dedicatedChannelUrl: 'https://whatsapp.com/channel/0029Vb5blhMEawdx2QFALZ1D',
+    dedicatedChannelUrl: 'https://whatsapp.com/channel/0029Vb8Tph9BVJl06WWw5q3B',
     emojis: ['🔥', '❤️', '😍', '👍', '😂', '🥳', '💯', '✨'],
   },
 
+  /* ════════════════════════════════════════════
+   *  KARTU GLOBAL (externalAdReply):
+   *  Thumbnail + judul yang nempel di atas bubble balasan bot
+   *  (ctx.reply — semua chat; lihat core/cta.js & core/replyStyle.js).
+   *  Thumbnail diganti owner via `.setreply thumb` (balas foto).
+   *  (Fitur .setcta & tombol CTA otomatis sudah dihapus.)
+   *  Override runtime disimpan di src/data/cta.json
+   * ════════════════════════════════════════════ */
+  cta: {
+    enabled: false, // (sisa) tombol CTA sudah dihapus — gak berefek
+    text: '📢 Saluran', // (sisa) label tombol lama — gak berefek
+    url: 'https://whatsapp.com/channel/0029Vb8Tph9BVJl06WWw5q3B', // fallback sourceUrl kalau card.sourceUrl kosong
+    card: {
+      enabled: true,
+      title: 'skyline-JXRA',                       // judul kartu
+      body: 'Join channel untuk update & info terbaru 📢',  // deskripsi di bawah judul
+      thumb: '',        // URL/path gambar; kosong = placeholder otomatis; 'off' = tanpa thumbnail
+      sourceUrl: '',    // link saat kartu diklik; kosong = ikut url di atas (channel)
+      large: true,      // thumbnail besar (renderLargerThumbnail)
+    },
+  },
+
+  /* ════════════════════════════════════════════
+   *  REPLY VARIANT (ala skyline-md .setreply)
+   *  Gaya tampilan ctx.reply() bot — v1 s/d v7:
+   *  1 BASIC • 2 PREMIUM (dokumen+quote kontak) •
+   *  3 TITANIUM (gif) • 4 LV (link preview) •
+   *  5 FAKE ORDER • 6 SIMPLE DOCUMENT (quote asli) •
+   *  7 FAKE LOCATION
+   *  Ganti runtime: .setreply → src/data/replyStyle.json
+   * ════════════════════════════════════════════ */
+  reply: {
+    variant: 1,
+    website: 'skyline.web.id', // dipakai varian v4 (link preview) — boleh domain saja; https:// ditambah otomatis. Kalau halamannya punya OG tags (github dsb), judul/deskripsi/foto preview diambil otomatis dari situ
+    v4: {
+      // Teks preview v4 — kosongkan untuk pakai OG halaman website;
+      // kalau diisi, teks ini yang dipakai (menang atas OG).
+      // Fallback (OG kosong + config kosong): judul/desc kartu CTA (cta.card di atas).
+      title: 'skyline-JXRA',
+      desc: '',
+      // Thumbnail preview v4 — timpa filenya langsung, atau balas foto + `.setreply thumb v4`.
+      // 'off' = tanpa thumbnail lokal (ikut OG image website).
+      thumb: 'assets/thumb/v4-thumb.jpg',
+    },
+  },
+
+  /* ════════════════════════════════════════════
+   *  PESAN DEFAULT
+   * ════════════════════════════════════════════ */
   messages: {
     wait: '⏳ Tunggu sebentar ya, Kak...',
     error: '😵 Terjadi kesalahan, harap coba kembali nanti',
     ownerOnly: '🚫 Fitur ini khusus OWNER!',
     adminOnly: '🚫 Fitur ini khusus ADMIN!',
     groupOnly: '🚫 Fitur ini khusus GRUP!',
+    privateOnly: '🚫 Fitur ini khusus PRIVATE CHAT!',
+    premiumOnly: '💎 Fitur ini khusus PREMIUM user!',
+    botAdminOnly: '🛡 Bot harus jadi ADMIN grup dulu.',
   },
 
+  /* ════════════════════════════════════════════
+   *  LOGGING
+   * ════════════════════════════════════════════ */
   logLevel: 'info',
   libraryLogLevel: 'error',
 }

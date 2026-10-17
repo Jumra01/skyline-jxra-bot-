@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { addQuest, getActiveQuests, getCompletedQuestIds, updateQuestProgress, gainXp } from './rpg.js'
 import { addReward } from './database.js'
+import config from '../config.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -69,12 +70,16 @@ export function progressQuests(jid, metrics) {
 
     const updated = updateQuestProgress(jid, row.quest_id, 1)
     if (updated?.status === 'completed') {
-      // gold & gems → wallet; XP → karakter
-      const wallet = addReward(jid, { gold: def.reward.gold, gems: def.reward.gems })
+      // gold & gems → wallet; XP → karakter; emerald 🟩 → wallet
+      // (default floor(gold/questDiv), bisa dioverride: reward.emerald di quests.json)
+      const questDiv = Math.max(1, Number(config.emerald?.reward?.questDiv) || 10)
+      const emerald = def.reward.emerald ?? Math.floor((def.reward.gold ?? 0) / questDiv)
+      const wallet = addReward(jid, { gold: def.reward.gold, gems: def.reward.gems, emerald })
       const { char } = gainXp(jid, def.reward.xp)
       done.push({
         ...def,
-        balance: { gold: wallet.gold, gems: wallet.gems, xp: char?.xp ?? 0 }
+        reward: { ...def.reward, emerald },
+        balance: { gold: wallet.gold, gems: wallet.gems, xp: char?.xp ?? 0, emerald: wallet.emerald }
       })
     }
   }

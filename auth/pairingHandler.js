@@ -21,6 +21,11 @@ function validateCode(raw) {
   return code
 }
 
+const PAIRING_SETTLE_MS = 15_000
+const PAIRING_RETRY_MS = 25_000
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
 export function setupPairing(client, phoneNumber) {
   let requested = false
 
@@ -36,14 +41,31 @@ export function setupPairing(client, phoneNumber) {
       const custom = useCustom ? validateCode(config.auth.customCode) : undefined
       if (useCustom && !custom) return
 
+      // Tunggu socket benar-benar siap. WA (terutama WA Bisnis) suppress
+      // notif pairing kalau companion-hello dikirim terlalu cepat setelah
+      // connect — delay settle dulu, lalu request. (Pola yang work di Baileys.)
+      logger.info(`⏳ Menunggu koneksi stabil ${PAIRING_SETTLE_MS / 1000}s sebelum request pairing code...`)
+      await sleep(PAIRING_SETTLE_MS)
+
       logger.info(`🔑 Request pairing code untuk +${phoneNumber}...`)
-      const issued = await client.auth.requestPairingCode(phoneNumber, true, custom)
+      let issued
+      try {
+        issued = await client.auth.requestPairingCode(phoneNumber, true, custom)
+      } catch (err) {
+        // Retry sekali dengan jeda lebih lama — beberapa nomor (WA Bisnis)
+        // butuh attempt kedua karena server masih rate-limit handshake pertama.
+        logger.warn(`⚠️ Request pertama gagal (${err.message}). Retry dalam ${PAIRING_RETRY_MS / 1000}s...`)
+        await sleep(PAIRING_RETRY_MS)
+        issued = await client.auth.requestPairingCode(phoneNumber, true, custom)
+      }
+
       const pretty = issued.match(/.{1,4}/g)?.join('-') ?? issued
 
       logger.success(`🔑 PAIRING CODE: ${pretty}`)
       logger.info('📲 Notif tautan perangkat dikirim ke HP — buka notifnya & tautkan kode di atas.')
       logger.info('ℹ️ Notif gak muncul? Gak masalah — bisa langsung input code di atas via:')
       logger.info('   WhatsApp → Perangkat tertaut → Tautkan perangkat → "Tautkan dengan nomor telepon".')
+      logger.info('   (WA Bisnis: Settings → Linked Devices → Link a Device → "Link with phone number")')
       logger.info('⚠️ JANGAN request berulang kali dalam waktu singkat (anti-abuse WA).')
     } catch (err) {
       requested = false

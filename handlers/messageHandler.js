@@ -8,9 +8,12 @@ import config from '../config.js'
 import { logger } from '../core/logger.js'
 import { buildContext } from '../core/context.js'
 import { readRichReply } from '../lib/richMessage.js'
-import { getFeature } from '../feat/loader.js'
+import { getFeature } from '../plugins/loader.js'
 import { checkCooldown, checkFlood } from '../core/cooldown.js'
-import { touchUser, incrementCommand, getUser, topUsers } from '../core/database.js'
+import { isBotGroupAdmin } from '../core/permission.js'
+import { getGroupMetaCached } from '../core/lid.js'
+import { touchUser, incrementCommand, getUser, topUsers, isPremiumActive, getEmerald, spendEmerald, logEmeraldUse, isEmeraldNotifyOn } from '../core/database.js'
+import { sendUsageCard, getNotifyGlobal } from '../lib/emeraldCard.js'
 import { sendTyping, markRead } from '../core/presence.js'
 import { reactTo } from '../core/react.js'
 
@@ -81,7 +84,9 @@ async function beautifyText(client, chat, text, mentionedJid) {
 
   let metaParticipants = []
   try {
-    const meta = await client.group.queryGroupMetadata(chat)
+    // [FIX DELAY] pakai metadata grup ber-cache — queryGroupMetadata langsung =
+    // network call tiap pesan ber-tag → nunda command masuk.
+    const meta = await getGroupMetaCached(client, chat)
     metaParticipants = meta.participants ?? []
   } catch { /* pakai users DB aja */ }
 
@@ -215,6 +220,32 @@ export async function route(client, event) {
     return
   }
 
+  // [UPDATE] Check template skyline: group / private / premium / botAdmin
+  if (feature.group && !ctx.isGroup) {
+    await ctx.reply(config.messages?.groupOnly || '🚫 Fitur ini khusus GRUP!')
+    return
+  }
+
+  if (feature.private && ctx.isGroup) {
+    await ctx.reply(config.messages?.privateOnly || '🚫 Fitur ini khusus PRIVATE CHAT!')
+    return
+  }
+
+  // Premium = expiry di database (table premiumdb, diatur via .addprem).
+  // Cek PN + LID biar kena juga kalau identitas datang sebagai @lid.
+  if (feature.premium && !ctx.isOwner && !ctx.isStaff) {
+    const active = isPremiumActive(ctx.sender) || (ctx.senderLid ? isPremiumActive(ctx.senderLid) : false)
+    if (!active) {
+      await ctx.reply(config.messages?.premiumOnly || '💎 Fitur ini khusus PREMIUM user!')
+      return
+    }
+  }
+
+  if (feature.botAdmin && ctx.isGroup && !(await isBotGroupAdmin(ctx))) {
+    await ctx.reply(config.messages?.botAdminOnly || '🛡 Bot harus jadi ADMIN grup dulu.')
+    return
+  }
+
   if (!ctx.isStaff && config.antiSpam?.enabled) {
     const flood = checkFlood(ctx.sender, config.antiSpam)
     if (flood.flooded) {
@@ -231,6 +262,49 @@ export async function route(client, event) {
     }
   }
 
+  // [UPDATE] EMERALD 🟩 — biaya command. Owner/staff/premium bebas.
+  // Biaya = `energi:` di config plugin, atau config.emerald.defaultCost.
+  // Dipotong SEBELUM run (anti-abuse), dicatat ke ledger emerald_log.
+  let emeraldCost = 0
+  let emeraldAfter = 0
+  if (config.emerald?.enabled !== false && !ctx.isOwner && !ctx.isStaff) {
+    const cost = Math.max(0, Math.floor(Number(feature.energi ?? config.emerald?.defaultCost ?? 0) || 0))
+    const premiumFree = cost > 0 && (
+      isPremiumActive(ctx.sender) || (ctx.senderLid ? isPremiumActive(ctx.senderLid) : false)
+    )
+    if (cost > 0 && !premiumFree) {
+      const have = getEmerald(ctx.sender)
+      if (have < cost) {
+        logger.info(`🟩 ${who} [${where}] emerald kurang buat ${commandName} (${have}/${cost})`)
+        await ctx.reply(
+`╭─💚「 *EMERALD KURANG* 」💚─╮
+│
+│ 🟩 Saldo kamu: *${have}*
+│ 💸 Butuh buat .${commandName}: *${cost}*
+│
+│ Cara nambah:
+│ • *.daily* — klaim harian (+30)
+│ • Tunggu regen *+10 / 10 menit*
+│ • Main RPG — *.hunt* *.battle* *.quest*
+│ • Cek riwayat — *.riwayat*
+│
+╰────────────────────✦╯`
+        )
+        return
+      }
+      const sisa = spendEmerald(ctx.sender, cost)
+      if (sisa === null) {
+        await ctx.reply('💚 Saldo emerald gak cukup. Cek .balance ya.')
+        return
+      }
+      emeraldCost = cost
+      emeraldAfter = sisa
+      try { logEmeraldUse(ctx.sender, commandName, cost) } catch (err) {
+        logger.warn({ err }, 'Gagal catat log emerald')
+      }
+    }
+  }
+
   if (config.typingPresence) void sendTyping(client, ctx.chat)
 
   ctx.prefix = matchedPrefix
@@ -243,6 +317,30 @@ export async function route(client, event) {
 
   try {
     await feature.run(ctx)
+
+    // [UPDATE] Notif pemakaian emerald — kartu HTML native setelah fitur SUKSES.
+    // Bisa dimatikan per-user (.notife off), global (.notife all off),
+    // atau via config.emerald.notify (false / 'private').
+    if (emeraldCost > 0) {
+      try {
+        const mode = config.emerald?.notify
+        const allowed =
+          mode !== false &&
+          isEmeraldNotifyOn(ctx.sender) &&
+          getNotifyGlobal() &&
+          (mode !== 'private' || !ctx.isGroup)
+        if (allowed) {
+          void sendUsageCard(ctx, {
+            command: `${matchedPrefix}${commandName}`,
+            cost: emeraldCost,
+            balance: emeraldAfter,
+            description: feature.description ?? '',
+          }).catch((err) => logger.warn({ err }, 'Notif emerald gagal dikirim'))
+        }
+      } catch (err) {
+        logger.warn({ err }, 'Notif emerald gagal disiapkan')
+      }
+    }
   } catch (err) {
     logger.error({ err, feature: feature.name }, 'Feature gagal dijalankan')
     await ctx.reply(`⚠️ Terjadi error saat menjalankan ${matchedPrefix}${feature.name}.`)

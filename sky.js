@@ -17,7 +17,7 @@ import { logger, clientLogger } from './core/logger.js'
 import { setupQR } from './auth/qrHandler.js'
 import { setupPairing } from './auth/pairingHandler.js'
 import { setupConnection, markShutdown } from './auth/connectionManager.js'
-import { loadFeatures } from './feat/loader.js'
+import { loadFeatures } from './plugins/loader.js'
 import { setupHotReload, stopHotReload } from './core/hotReload.js'
 import { route } from './handlers/messageHandler.js'
 import { setupGroupHandler } from './handlers/groupHandler.js'
@@ -110,12 +110,29 @@ function ask(question) {
   })
 }
 
+// Cek apakah sudah ada sesi login tersimpan (meJid ada di state.sqlite).
+// Biar restart gak kena menu auth lagi & gak perlu Enter dulu.
+async function hasSavedSession() {
+  try {
+    const creds = await store.session('default').auth.load()
+    return !!creds?.meJid
+  } catch (err) {
+    logger.warn({ err: err.message }, '⚠️ Gagal cek sesi tersimpan — fallback ke menu auth.')
+    return false
+  }
+}
+
 async function chooseAuth() {
   if (config.auth.method === 'qr') return 'qr'
   if (config.auth.method === 'pairing') return 'pairing'
 
   if (!process.stdin.isTTY) {
     logger.warn('ℹ️ Mode non-interaktif terdeteksi (pm2). Auth diambil dari config.')
+    return config.auth.pairingNumber ? 'pairing' : 'qr'
+  }
+
+  if (await hasSavedSession()) {
+    logger.success('✅ Sesi tersimpan ditemukan — langsung nyambung tanpa menu auth.')
     return config.auth.pairingNumber ? 'pairing' : 'qr'
   }
 

@@ -8,15 +8,11 @@
  * + getCompletedQuestIds buat urutan story quest.
  */
 import Database from 'better-sqlite3'
-import fs from 'node:fs'
 import { logger } from './logger.js'
+import { dbPath } from './dataDir.js'
 
-const sessionDir = './session'
-if (!fs.existsSync(sessionDir)) {
-  fs.mkdirSync(sessionDir, { recursive: true })
-}
-
-const db = new Database(`${sessionDir}/rpg.sqlite`)
+// DB RPG di ./data/ — selamat dari hapus session/ buat pairing ulang.
+const db = new Database(dbPath('rpg.sqlite'))
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS rpg_characters (

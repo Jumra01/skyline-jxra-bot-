@@ -6,12 +6,10 @@
  * Fondasi sistem on/off fitur ber-permission: welcome, bye, game, antilink, dll.
  */
 import Database from 'better-sqlite3'
-import fs from 'node:fs'
+import { dbPath } from './dataDir.js'
 
-const sessionDir = './session'
-if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true })
-
-const db = new Database(`${sessionDir}/settings.sqlite`)
+// Settings grup di ./data/ — selamat dari hapus session/ buat pairing ulang.
+const db = new Database(dbPath('settings.sqlite'))
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS group_settings (

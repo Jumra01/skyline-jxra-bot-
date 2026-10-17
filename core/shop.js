@@ -17,6 +17,7 @@ import { dirname, join } from 'node:path'
 import { getInventory, removeItem, addItem } from './rpg.js'
 import { getBalance, addReward, spendGold } from './database.js'
 import { ITEM_INDEX, resolveItemId } from '../src/rpg/dropTable.js'
+import config from '../config.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -153,7 +154,7 @@ export function resolveShopItem(raw) {
   )
 }
 
-/** Jual item → gold masuk dompet (buyback 60%). */
+/** Jual item → gold masuk dompet (buyback 60%) + emerald 🟩 tip pedagang. */
 export function sellItem(jid, itemId, amount) {
   const inv = getInventory(jid)
   const owned = inv.find((r) => r.item_id === itemId)
@@ -164,9 +165,12 @@ export function sellItem(jid, itemId, amount) {
   const totalGold = price * amount
 
   removeItem(jid, itemId, amount)
-  const bal = addReward(jid, { gold: totalGold })
+  // [UPDATE] Emerald 🟩 = floor(gold/sellDiv), min 1 per transaksi.
+  const sellDiv = Math.max(1, Number(config.emerald?.reward?.sellDiv) || 20)
+  const emerald = Math.max(1, Math.floor(totalGold / sellDiv))
+  const bal = addReward(jid, { gold: totalGold, emerald })
 
-  return { success: true, item: info?.name ?? itemId, amount, totalGold, price, balance: bal }
+  return { success: true, item: info?.name ?? itemId, amount, totalGold, price, emerald, balance: bal }
 }
 
 /** Beli item → gold keluar dompet. */

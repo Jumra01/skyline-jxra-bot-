@@ -43,8 +43,8 @@ lapisan aplikasi sendiri di atas library, dengan pembeda yang konkret:
   akurat walau pengirim datang sebagai LID.
 
 - **Struktur modular yang tegas.** `auth/`, `core/`, `lib/`, `handlers/`,
-  `feat/` — fitur baru gak akan mengacak-acak inti bot. Loader memindai
-  `feat/` secara rekursif dan mendaftarkan command + alias otomatis.
+  `plugins/` — fitur baru gak akan mengacak-acak inti bot. Loader memindai
+  `plugins/` secara rekursif dan mendaftarkan command + alias otomatis.
 
 - **Sistem role & permission dua lapis.** Owner/admin di level bot (config),
   ditambah deteksi admin grup untuk command grup. User biasa tidak bisa
@@ -66,6 +66,31 @@ lapisan aplikasi sendiri di atas library, dengan pembeda yang konkret:
 
 - **PM2-ready sejak awal.** Mode auth non-interaktif, log yang bersih dan
   informatif, sesi persisten lintas restart.
+
+## Fitur tambahan
+
+Selain fondasi di atas, base ini sudah membawa sejumlah fitur operasional:
+
+- **Menu interaktif bergaya modern** (`.menu`) — kartu info bot/user + list
+  kategori `single_select` + tombol `quick_reply`, thumbnail header foto
+  atau video (`assets/thumb/`).
+- **Gaya balasan kustom** (`.setreply`) — 7 varian `ctx.reply()` (basic,
+  premium document, gif, link preview OG, fake order, document, fake
+  location) yang otomatis dipakai di semua balasan teks bot, termasuk
+  thumbnail global (`.setreply thumb`).
+- **Sistem mata uang emerald** — regen berkala (+10 / 10 menit, cap 64),
+  `.daily`, `.riwayat`, charge per command, notifikasi kartu native HTML
+  (tema Minecraft) — `.notife`.
+- **Premium berbasis database** — `.addprem` / `.delprem` / `.premlist` /
+  `.cekprem` dengan expiry fleksibel (`30`, `7d`, `12h`), dual-store
+  PN + LID, self-heal row LID.
+- **Owner tools** — `.setthumb` (ganti thumbnail menu), `.setreply`,
+  backup, ban, getpp/setpp, reload, rpgdev, dll.
+- **Kartu HTML native** — engine `lib/emeraldCard.js` / pola
+  `FOAHtmlPrimitiveDemoDONOTUSE` buat render dashboard interaktif
+  langsung di chat (dipakai `.ping2`, `.riwayat`, game snake/dino).
+- **RPG lengkap** — karakter, gather, craft, equip, battle, quest, shop,
+  travel, cook, sell — SQLite terpisah (`data/rpg.sqlite`).
 
 ---
 
@@ -92,15 +117,20 @@ skyline-JXRA/
 ├── config.js              # Seluruh pengaturan bot, terpusat satu file
 ├── auth/                  # QR handler, pairing code, connection manager
 ├── core/                  # Logger, database, cooldown, staff, context,
-│                          #   presence, group settings, permission
-├── lib/                   # Rich message builder/reader, media, mesin stiker
+│                          #   presence, group settings, reply style, cta
+├── lib/                   # Rich message builder/reader, media, mesin stiker,
+│                          #   kartu HTML native (emeraldCard)
 ├── handlers/              # Routing pesan, event grup (welcome/bye), error
-├── feat/                  # Fitur (auto-load; terorganisir per kategori)
-└── session/               # Kredensial & database (gitignored)
+├── plugins/               # Fitur (auto-load; terorganisir per kategori)
+├── assets/                # Aset statis (thumbnail menu/CTA, reply media)
+├── data/                  # Database bot: users(+premium), rpg, settings
+│                          #   (gitignored — auto-migrasi dari session/)
+└── session/               # Kredensial auth saja (gitignored, aman dihapus
+                           #   buat pairing ulang)
 ```
 
 Prinsipnya: **`auth/`, `core/`, `lib/`, `handlers/` adalah dapur** — jarang
-disentuh; **`feat/` adalah etalase** — tempat fitur baru ditambah tanpa
+disentuh; **`plugins/` adalah etalase** — tempat fitur baru ditambah tanpa
 risiko merusak bagian lain.
 
 ---
@@ -178,8 +208,30 @@ tanpa pairing ulang.
 
 ## Menambah fitur
 
-File `.js` di dalam `feat/` (subfolder mana pun) dimuat otomatis saat start.
-Format minimal:
+File `.js` di dalam `plugins/` (subfolder mana pun) dimuat otomatis saat start.
+Loader mendukung dua format:
+
+### Format utama (gaya skyline-md)
+
+```js
+const pluginConfig = {
+  name: 'halo',
+  alias: ['hi'],
+  category: 'general',
+  description: 'Contoh fitur',
+  usage: '.halo',
+  example: '.halo',
+  cooldown: 5,
+}
+
+async function handler(ctx) {
+  await ctx.reply('Halo!')
+}
+
+export { pluginConfig as config, handler }
+```
+
+### Format legacy
 
 ```js
 export default {

@@ -33,3 +33,21 @@ export async function isGroupAdmin(ctx) {
   const role = await getGroupRole(ctx.client, ctx.chat, ctx.sender, ctx.senderLid)
   return role === 'admin' || role === 'superadmin'
 }
+
+/** Bot sendiri harus admin grup — buat feature.botAdmin (template skyline). */
+export async function isBotGroupAdmin(ctx) {
+  try {
+    const me = ctx.client?.auth?.getCurrentCredentials?.()
+    const meJid = me?.meJid
+    if (!meJid) return false
+    const meDigits = String(meJid).split('@')[0].split(':')[0].replace(/\D/g, '')
+    const meta = await ctx.client.group.queryGroupMetadata(ctx.chat)
+    return (meta.participants ?? []).some((p) => {
+      const ids = [p.jid, p.lid, p.phoneJid, p.pnJid, p.id, p.participantJid, p.jidAlt, p.lidJid]
+      const hit = ids.some((id) => id && (id === meJid || String(id).split('@')[0].replace(/\D/g, '') === meDigits))
+      return hit && (p.isAdmin || p.isSuperAdmin || p.rank === 'admin' || p.rank === 'superadmin' || p.role === 'admin' || p.role === 'superadmin')
+    })
+  } catch {
+    return false
+  }
+}

@@ -10,13 +10,14 @@
  * - Kalah → HP 1, XP penghibur
  */
 import Database from 'better-sqlite3'
-import fs from 'node:fs'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { getCharacter, updateCharacter, addItem, removeItem, getInventory, gainXp } from './rpg.js'
 import { addReward } from './database.js'
 import { progressQuests } from './questEngine.js'
+import { dbPath } from './dataDir.js'
+import config from '../config.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -24,9 +25,8 @@ const __dirname = dirname(__filename)
 const MONSTERS = JSON.parse(readFileSync(join(__dirname, '../src/rpg/monsters.json'), 'utf8'))
 const EQUIP = JSON.parse(readFileSync(join(__dirname, '../src/rpg/equip.json'), 'utf8'))
 
-const sessionDir = './session'
-if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true })
-const db = new Database(`${sessionDir}/rpg.sqlite`)
+// DB RPG di ./data/ — selamat dari hapus session/ buat pairing ulang.
+const db = new Database(dbPath('rpg.sqlite'))
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS rpg_equipment (
@@ -130,7 +130,9 @@ export function battle(jid, monsterId) {
   if (won) {
     const after = updateCharacter(jid, { hp: Math.max(1, pHp) })
     addItem(jid, monster.loot, 1)
-    const wallet = addReward(jid, { gold: monster.gold })
+    // [UPDATE] Emerald 🟩 per tier monster (config.emerald.reward.battle)
+    const emReward = Math.max(0, Number(config.emerald?.reward?.battle?.[monster.tier]) || 0)
+    const wallet = addReward(jid, { gold: monster.gold, emerald: emReward })
     const { char: c2 } = gainXp(jid, monster.xp)
     const weapon = damageWeapon(jid)
     const quests = progressQuests(jid, [`kill:${monster.id}`, `kill_tier:${monster.tier}`])
@@ -139,6 +141,7 @@ export function battle(jid, monsterId) {
       won: true, monster, rounds,
       hpLeft: after.hp,
       wallet, xp: c2?.xp ?? 0,
+      emerald: emReward,
       weapon, quests
     }
   }

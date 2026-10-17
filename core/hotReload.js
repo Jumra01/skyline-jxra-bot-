@@ -2,12 +2,12 @@
  * © skyline-JXRA
  * Hapus credit gak bikin u jago dumbass.
  * Hargai sebagaimana u mau dihargai.
- * hotReload.js — Watch folder feat/, auto panggil loadFeatures() begitu ada
+ * hotReload.js — Watch folder plugins/, auto panggil loadFeatures() begitu ada
  * file yang ditambah/diedit/dihapus. Gak perlu ketik .reload manual lagi,
  * dan gak perlu restart bot/session WA sama sekali.
  *
- * Catatan penting: ini cuma nge-cover file di feat/ (command), sama persis
- * kayak yang udh ada di command .reload manual (feat/owner/reload.js) —
+ * Catatan penting: ini cuma nge-cover file di plugins/ (command), sama persis
+ * kayak yang udh ada di command .reload manual (plugins/owner/reload.js) —
  * cuma sekarang triggernye otomatis dari filesystem, bukan dari chat.
  * Perubahan di sky.js / core / handlers / lib / auth tetap butuh restart,
  * karena file-file itu di-import sekali pas boot dan di-cache Node (ESM),
@@ -17,12 +17,12 @@ import chokidar from 'chokidar'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, relative } from 'node:path'
 import { logger } from './logger.js'
-import { loadFeatures } from '../feat/loader.js'
+import { loadFeatures } from '../plugins/loader.js'
 import config from '../config.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT_DIR = join(__dirname, '..')
-const FEAT_DIR = join(ROOT_DIR, 'feat')
+const FEAT_DIR = join(ROOT_DIR, 'plugins')
 
 const EVENT_LABEL = {
   add: 'File baru ➕',

@@ -13,12 +13,28 @@
 const isPn = (j) => typeof j === 'string' && j.endsWith('@s.whatsapp.net')
 const isLid = (j) => typeof j === 'string' && j.endsWith('@lid')
 
+// [FIX DELAY] Cache metadata grup 60 detik — queryGroupMetadata = panggilan network,
+// sebelumnya diulang tiap resolve tag/balasan (.addprem/.delprem) → delay kelihatan.
+const META_TTL = 60_000
+const metaCache = new Map() // groupJid → { at, meta }
+
+async function getMetaCached(client, groupJid) {
+  const hit = metaCache.get(groupJid)
+  if (hit && Date.now() - hit.at < META_TTL) return hit.meta
+  const meta = await client.group.queryGroupMetadata(groupJid)
+  metaCache.set(groupJid, { at: Date.now(), meta })
+  return meta
+}
+
+/** [FIX DELAY] Metadata grup dengan cache 60s — dipakai lintas modul biar gak bolak-balik network. */
+export { getMetaCached as getGroupMetaCached }
+
 /** Kalau jid LID, petakan ke PN. Kalau gagal/udah PN, biarkan. */
 export async function resolveLidToPn(client, groupJid, jid) {
   if (!isLid(jid)) return jid
 
   try {
-    const meta = await client.group.queryGroupMetadata(groupJid)
+    const meta = await getMetaCached(client, groupJid)
     const parts = meta.participants ?? []
 
     // 1) Participant bawa dua bentuk identitas → map langsung
