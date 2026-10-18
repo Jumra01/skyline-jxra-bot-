@@ -20,6 +20,7 @@ import { WebSocketServer } from 'ws';
 import { Readable } from 'node:stream';
 import http from 'node:http';
 import { URL } from 'node:url';
+import { logger } from '../../core/logger.js';
 
 const EXT_MIME = {
   mp3: 'audio/mpeg',
@@ -50,7 +51,7 @@ export function createMediaWsServer({ port = 8090, path = '/wss/audio' } = {}) {
     const sourceUrl = u.searchParams.get('url');
 
     if (!sourceUrl) {
-      console.log('[MediaWS] reject: missing url param');
+      logger.warn('[MediaWS] reject: missing url param');
       ws.close(4001, 'missing url param');
       return;
     }
@@ -58,7 +59,7 @@ export function createMediaWsServer({ port = 8090, path = '/wss/audio' } = {}) {
     // param mime menang; kalau gak ada, infer dari ekstensi; terakhir baru fallback
     const mime = u.searchParams.get('mime') || mimeFromUrl(sourceUrl) || 'application/octet-stream';
 
-    console.log('[MediaWS] connect | mime=' + mime + ' | url=' + sourceUrl.slice(0, 80));
+    logger.info('[MediaWS] connect | mime=' + mime + ' | url=' + sourceUrl.slice(0, 80));
 
     let cancelled = false;
     ws.on('close', () => { cancelled = true; });
@@ -90,7 +91,7 @@ export function createMediaWsServer({ port = 8090, path = '/wss/audio' } = {}) {
         if (!cancelled) ws.send(JSON.stringify({ type: 'end' }));
         try { if (!cancelled) ws.close(); } catch {}
       } catch (e) {
-        console.log('[MediaWS] stream error:', e.message || e);
+        logger.warn({ err: e.message || e }, '[MediaWS] stream error');
         try { stream?.destroy?.(); } catch {}
         try { ws.send(JSON.stringify({ type: 'error', message: String(e.message || e) })); } catch {}
         try { ws.close(); } catch {}
@@ -98,6 +99,6 @@ export function createMediaWsServer({ port = 8090, path = '/wss/audio' } = {}) {
     })();
   });
 
-  server.listen(port, () => console.log(`[MediaWS] server aktif di :${port}${path}`));
+  server.listen(port, () => logger.info(`🌐 MediaWS aktif di :${port}${path}`));
   return { server, wss };
 }

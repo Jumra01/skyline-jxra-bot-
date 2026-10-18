@@ -6,6 +6,7 @@
  */
 import { downloadMediaMessage, resolveMediaPayload } from 'zapo-js'
 import { faceSwap } from '../../scraper/FACESWAP.js'
+import { logger } from '../../core/logger.js'
 
 const MAX_BUF = 10 * 1024 * 1024
 const SESSION_TTL = 5 * 60 * 1000
@@ -40,7 +41,7 @@ async function extractImageBuffer(message) {
     const buf = await streamToBuffer(stream)
     return buf?.length ? buf : null
   } catch (e) {
-    console.log('[FaceSwap] extract image gagal:', String(e.message || e).slice(0, 120))
+    logger.warn('[FaceSwap] extract image gagal: ' + String(e.message || e).slice(0, 120))
     return null
   }
 }
@@ -78,7 +79,7 @@ async function processSwap(ctx, target, swap) {
     const res = await faceSwap({ target, swap })
     resultUrl = res.resultUrl
   } catch (e) {
-    console.log('[FaceSwap] engine error:', String(e.message || e).slice(0, 300))
+    logger.warn('[FaceSwap] engine error: ' + String(e.message || e).slice(0, 300))
     await ctx.react('❎')
     return ctx.reply('❌ Gagal proses Face Swap. Coba lagi dengan foto wajah yang jelas (close-up, tidak tertutup).')
   }
@@ -97,7 +98,7 @@ async function processSwap(ctx, target, swap) {
     })
     await ctx.react('✅')
   } catch (e) {
-    console.log('[FaceSwap] send error:', String(e.message || e).slice(0, 200))
+    logger.warn('[FaceSwap] send error: ' + String(e.message || e).slice(0, 200))
     await ctx.react('❎')
     return ctx.reply('❌ Gagal kirim hasil Face Swap.')
   }

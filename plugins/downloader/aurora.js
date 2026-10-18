@@ -7,6 +7,7 @@
 
 import config from '../../config.js';
 import { sendRichJH } from '../../lib/jhrich.js';
+import { logger } from '../../core/logger.js';
 
 const API_BASE = 'https://api.jhx.my.id';
 const API_HEADERS = {
@@ -1025,7 +1026,7 @@ async function handler(ctx) {
 
       const sent = await sendRichJH(ctx, htmlPayload);
 
-      console.log('[Aurora] sent via jhrich | id=' + (sent?.id || '?'));
+      logger.debug('[Aurora] sent via jhrich | id=' + (sent?.id || '?'));
       await ctx.react('🎛️');
     } catch (e) {
       await ctx.react('❎');

@@ -13,7 +13,7 @@ import { createMediaProcessor } from '@zapo-js/media-utils'
 import { createInterface } from 'node:readline'
 import fs from 'node:fs'
 import config from './config.js'
-import { logger, clientLogger } from './core/logger.js'
+import { logger, clientLogger, box } from './core/logger.js'
 import { printBanner, printInfo } from './core/banner.js'
 import { setupQR } from './auth/qrHandler.js'
 import { setupPairing } from './auth/pairingHandler.js'
@@ -137,11 +137,11 @@ async function chooseAuth() {
     return config.auth.pairingNumber ? 'pairing' : 'qr'
   }
 
-  console.log('\n🤖 skyline-JXRA — Authentication')
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-  console.log('  [1] 📱 QR Code (scan dari WhatsApp)')
-  console.log(`  [2] 🔑 Pairing Code (custom: ${config.auth.customCode})`)
-  const answer = await ask('\nInput Jawaban (ketik 1 / 2, lalu Enter): ')
+  box(`🔐 AUTHENTICATION — ${config.botName}`, [
+    '[1] 📱 QR Code (scan dari WhatsApp)',
+    `[2] 🔑 Pairing Code (custom: ${config.auth.customCode})`
+  ], { color: '36' })
+  const answer = await ask('Input Jawaban (ketik 1 / 2, lalu Enter): ')
   return answer === '2' ? 'pairing' : 'qr'
 }
 

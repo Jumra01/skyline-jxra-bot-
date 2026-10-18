@@ -7,19 +7,16 @@
 import qrcode from 'qrcode'
 import fs from 'node:fs'
 import config from '../config.js'
-import { logger } from '../core/logger.js'
+import { logger, box } from '../core/logger.js'
 
 const QR = config.qr ?? { small: true, saveAsImage: true, imagePath: './session/qr.png' }
 
-function banner() {
-  const title = ` ${config.botName} — scan QR buat pairing `
-  const line = '═'.repeat(title.length + 2)
-  return `\n╔${line}╗\n║${title}║\n╚${line}╝\n`
-}
-
 export function setupQR(client) {
   client.on('auth_qr', async ({ qr, ttlMs }) => {
-    console.log(banner())
+    box(`📱 SCAN QR — ${config.botName}`, [
+      'WhatsApp → Perangkat tertaut → Tautkan perangkat',
+      `⏳ QR berlaku ${Math.round(ttlMs / 1000)} detik`
+    ], { color: '36' })
 
     try {
       const term = await qrcode.toString(qr, { type: 'terminal', small: QR.small !== false })

@@ -20,6 +20,7 @@
  */
 import { tokenize, LANGS } from '../../lib/highlight.js'
 import { proto } from 'zapo-js'
+import { logger } from '../../core/logger.js'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -148,7 +149,7 @@ async function loadFromStoreApi(client, jid, id) {
     try {
       const r = await fn()
       if (r && typeof r === 'object') {
-        console.log('[CRM] store API hit via: ' + name)
+        logger.debug('[CRM] store API hit via: ' + name)
         return r.message ? r.message : (r.key ? r.message : r)
       }
     } catch {}
@@ -198,23 +199,23 @@ async function loadFromSqlite(jid, id) {
     let payload = row.payload
     if (Buffer.isBuffer(payload) || payload instanceof Uint8Array) {
       const msg = proto.Message.decode(new Uint8Array(payload))
-      console.log('[CRM] sqlite hit (proto decode) | table=' + tab)
+      logger.debug('[CRM] sqlite hit (proto decode) | table=' + tab)
       return msg
     }
     if (typeof payload === 'string') {
       if (payload.trim().startsWith('{')) {
-        console.log('[CRM] sqlite hit (json) | table=' + tab)
+        logger.debug('[CRM] sqlite hit (json) | table=' + tab)
         return JSON.parse(payload)
       }
       try {
         const msg = proto.Message.decode(Buffer.from(payload, 'base64'))
-        console.log('[CRM] sqlite hit (base64 proto) | table=' + tab)
+        logger.debug('[CRM] sqlite hit (base64 proto) | table=' + tab)
         return msg
       } catch {}
     }
     return null
   } catch (e) {
-    console.log('[CRM] sqlite read fail:', String(e.message || e).slice(0, 120))
+    logger.warn('[CRM] sqlite read fail: ' + String(e.message || e).slice(0, 120))
     return null
   } finally {
     try { db?.close?.() } catch {}

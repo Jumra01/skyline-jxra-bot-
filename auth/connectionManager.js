@@ -4,7 +4,7 @@
  * Hargai sebagaimana u mau dihargai.
  * connectionManager.js — Connection state & reconnection dengan backoff.
  */
-import { logger } from '../core/logger.js'
+import { logger, box } from '../core/logger.js'
 
 let shuttingDown = false
 
@@ -20,7 +20,10 @@ export function setupConnection(client) {
     if (shuttingDown) return // intentional close — diem aja
 
     if (event.status === 'open') {
-      logger.success(`🟢 Terhubung${event.isNewLogin ? ' (login baru)' : ''}`)
+      box('🟢 TERHUBUNG', [
+        event.isNewLogin ? '🔐 Login baru (pairing pertama)' : '🔗 Sesi tersambung',
+        `🕐 ${new Date().toLocaleTimeString('id-ID', { hour12: false })}`
+      ], { color: '32' })
       reconnectAttempt = 0
       return
     }
@@ -28,7 +31,10 @@ export function setupConnection(client) {
     logger.warn({ reason: event.reason, isLogout: event.isLogout }, '🔴 Koneksi terputus')
 
     if (event.isLogout) {
-      logger.error('❌ Device di-unlink. Hapus folder session/ lalu jalankan ulang.')
+      box('🔴 DEVICE DI-UNLINK', [
+        'Sesi logout dari HP / server.',
+        'Hapus folder session/ lalu jalankan ulang.'
+      ], { color: '31' })
       return
     }
 

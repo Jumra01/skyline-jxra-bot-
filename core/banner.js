@@ -20,8 +20,8 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import config from '../config.js'
+import { paint, colorsEnabled, dispWidth, RESET } from './consoleStyle.js'
 
-const RESET = '\x1b[0m'
 const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 
 // ── Font block 5 baris (tiap glyph lebarnya boleh beda, barisnya wajib rata) ──
@@ -131,42 +131,9 @@ const TAGLINE = bannerCfg.tagline ?? DEFAULT_TAGLINE
 
 const { lines: ART, width: ART_WIDTH } = buildArt(WORDS)
 
-// Warna ANSI cuma kalau didukung (TTY / FORCE_COLOR), hormati NO_COLOR.
-const useColor = (() => {
-  if (process.env.NO_COLOR) return false
-  const fc = process.env.FORCE_COLOR
-  if (fc !== undefined && fc !== '0' && fc !== 'false') return true
-  return !!process.stdout.isTTY
-})()
-
-const paint = (code, text) => (useColor ? `\x1b[${code}m${text}\x1b[0m` : text)
-
-function stripAnsi(text) {
-  return String(text).replace(/\x1b\[[0-9;]*m/g, '')
-}
-
-// Lebar tampilan tekstual (emoji/CJK = 2, ZWJ & variation selector = 0)
-function charWidth(cp) {
-  if (cp === 0x200d) return 0
-  if (cp >= 0xfe00 && cp <= 0xfe0f) return 0
-  if (cp >= 0x1f3fb && cp <= 0x1f3ff) return 0
-  if (cp >= 0x1f000) return 2
-  if (cp >= 0x2600 && cp <= 0x27bf) return 2
-  if (cp >= 0xff00 && cp <= 0xff60) return 2
-  if (cp >= 0x2e80 && cp <= 0xa4cf) return 2
-  if (cp >= 0xac00 && cp <= 0xd7a3) return 2
-  return 1
-}
-
-function dispWidth(text) {
-  let w = 0
-  for (const ch of stripAnsi(text)) w += charWidth(ch.codePointAt(0))
-  return w
-}
-
 // Gradasi warna per kolom buat ASCII art (biru muda → biru tua)
 function paintArt(line, colors) {
-  if (!useColor) return line
+  if (!colorsEnabled) return line
   const [from, to] = colors
   let out = ''
   for (let i = 0; i < line.length; i++) {
