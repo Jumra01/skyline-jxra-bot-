@@ -3,106 +3,113 @@
  * Hapus credit gak bikin u jago dumbass. 
  * Hargai sebagaimana u mau dihargai.
  * SPOTIFY.js — Scraper Spotify Searcher + Downloader by SKYLINE-JXRA
+ * [UPDATE 2026-10-18] Search pakai Spotify Web API (Client Credentials) —
+ *   TANPA browser. puppeteer dihapus dari project (hemat ±652 MB disk,
+ *   wajib buat panel Pterodactyl 1 GB).
+ *   Kredensial dibaca dari env SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET
+ *   (fallback: config.spotify.clientId / clientSecret).
+ *   Download (JHSpotDL / JHSDown) tetap pakai axios — gak butuh browser.
  */
 
-import puppeteer from 'puppeteer';
+import config from '../config.js';
 
 const axios = (await import('axios')).default;
 const FormData = (await import('form-data')).default;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 
-function deepFindByUriPrefix(obj, prefix, found = new Map(), depth = 0) {
-  if (!obj || typeof obj !== 'object' || depth > 20) return found;
-  if (typeof obj.uri === 'string' && obj.uri.startsWith(prefix) && obj.name) {
-    if (!found.has(obj.uri)) found.set(obj.uri, obj);
-  }
-  for (const key of Object.keys(obj)) {
-    const val = obj[key];
-    if (val && typeof val === 'object') deepFindByUriPrefix(val, prefix, found, depth + 1);
-  }
-  return found;
+const TOKEN_URL = 'https://accounts.spotify.com/api/token';
+const SEARCH_URL = 'https://api.spotify.com/v1/search';
+
+/* ── Kredensial app Spotify (env menang, config cuma fallback) ────────── */
+function getCreds() {
+  const id = String(process.env.SPOTIFY_CLIENT_ID || config.spotify?.clientId || '').trim();
+  const secret = String(process.env.SPOTIFY_CLIENT_SECRET || config.spotify?.clientSecret || '').trim();
+  return { id, secret };
 }
 
-function extractFromBodies(bodies, prefix) {
-  const merged = new Map();
-  for (const text of bodies) {
-    try {
-      const parsed = JSON.parse(text);
-      deepFindByUriPrefix(parsed, prefix, merged);
-    } catch (_) {}
+/* ── App token (Client Credentials) + cache ±55 menit ─────────────────── */
+let cachedToken = { value: null, exp: 0 };
+
+async function getAppToken() {
+  if (cachedToken.value && Date.now() < cachedToken.exp) return cachedToken.value;
+
+  const { id, secret } = getCreds();
+  if (!id || !secret) {
+    const e = new Error('SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET belum diset');
+    e.code = 'NO_CREDS';
+    throw e;
   }
-  return [...merged.values()];
+
+  const res = await fetch(TOKEN_URL, {
+    method: 'POST',
+    headers: {
+      authorization: `Basic ${Buffer.from(`${id}:${secret}`).toString('base64')}`,
+      'content-type': 'application/x-www-form-urlencoded'
+    },
+    body: 'grant_type=client_credentials',
+    signal: AbortSignal.timeout(15_000)
+  });
+
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || !body.access_token) {
+    const e = new Error(body.error_description || body.error || `token HTTP ${res.status}`);
+    e.code = 'TOKEN_FAILED';
+    throw e;
+  }
+
+  // expires_in biasanya 3600s → simpan 3300s biar aman dari expiry di tengah jalan
+  const ttl = Math.min(Number(body.expires_in) > 0 ? Number(body.expires_in) - 300 : 3300, 3300);
+  cachedToken = { value: body.access_token, exp: Date.now() + ttl * 1000 };
+  return cachedToken.value;
 }
 
-function mapTrack(t) {
-  const tryExtract = () => {
-    if (Array.isArray(t.artists?.items)) return t.artists.items.map((a) => a.profile?.name || a.name).filter(Boolean);
-    if (Array.isArray(t.artists)) return t.artists.map((a) => a.profile?.name || a.name).filter(Boolean);
-    if (Array.isArray(t.firstArtist?.items)) return t.firstArtist.items.map((a) => a.profile?.name || a.name).filter(Boolean);
-    if (t.artist?.name) return [t.artist.name];
-    return [];
-  };
-  const artistsList = tryExtract();
-
+/* ── Map track Spotify Web API → shape internal plugin ───────────────── */
+function mapApiTrack(t) {
   return {
-    id: t.uri?.split(':')[2],
+    id: t.id,
     uri: t.uri,
     name: t.name,
-    artists: artistsList.join(', ') || undefined,
-    album: t.albumOfTrack?.name || t.album?.name,
-    duration_ms: t.duration?.totalMilliseconds || t.duration_ms,
-    cover: t.albumOfTrack?.coverArt?.sources?.[0]?.url || t.album?.images?.[0]?.url,
-    preview_url: t.previewUrl || t.preview_url || null,
-    spotify_url: `https://open.spotify.com/track/${t.uri?.split(':')[2]}`
+    artists: (t.artists || []).map((a) => a.name).filter(Boolean).join(', ') || undefined,
+    album: t.album?.name,
+    duration_ms: t.duration_ms,
+    cover: t.album?.images?.[0]?.url,
+    preview_url: t.preview_url || null,
+    spotify_url: t.external_urls?.spotify || `https://open.spotify.com/track/${t.id}`
   };
 }
 
-export async function JHSpotSearch(query) {
+export async function JHSpotSearch(query, limit = 5) {
   const baseRes = { status: true, author_skrep: 'skyline-JXRA', kesayangan: 'Fiony Alveria♡', data: {} };
-  let browser;
 
   try {
-    browser = await puppeteer.launch({
-      headless: 'new',
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+    const token = await getAppToken();
+    const take = Math.min(Math.max(Number(limit) || 5, 1), 20);
+    const url = `${SEARCH_URL}?q=${encodeURIComponent(query)}&type=track&limit=${take}`;
+
+    const res = await fetch(url, {
+      headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
+      signal: AbortSignal.timeout(15_000)
     });
 
-    const page = await browser.newPage();
-    await page.setUserAgent(UA);
-    await page.setViewport({ width: 1366, height: 900 });
-
-    const capturedBodies = [];
-    page.on('response', async (res) => {
-      try {
-        const ct = res.headers()['content-type'] || '';
-        if (ct.includes('application/json')) {
-          const text = await res.text();
-          if (text && text.length < 3000000) capturedBodies.push(text);
-        }
-      } catch (_) {}
-    });
-
-    const searchUrl = `https://open.spotify.com/search/${encodeURIComponent(query)}`;
-    await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 45000 });
-    await new Promise((r) => setTimeout(r, 2000));
-
-    if (capturedBodies.length === 0) {
-      throw new Error('Gagal menangkap response JSON dari server Spotify.');
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(body.error?.message || `HTTP ${res.status}`);
     }
 
-    const tracks = extractFromBodies(capturedBodies, 'spotify:track:').map(mapTrack);
+    const tracks = (body.tracks?.items || []).map(mapApiTrack).filter((t) => t.id);
 
     if (!tracks.length) {
       throw new Error('Tidak ditemukan hasil lagu untuk query tersebut.');
     }
 
-    baseRes.data = { tracks: tracks.slice(0, 5) };
+    baseRes.data = { tracks };
     return baseRes;
 
   } catch (error) {
+    if (error.code === 'NO_CREDS') {
+      return { ...baseRes, status: false, needCreds: true, error: error.message };
+    }
     return { ...baseRes, status: false, error: error.message };
-  } finally {
-    if (browser) await browser.close().catch(() => {});
   }
 }
 

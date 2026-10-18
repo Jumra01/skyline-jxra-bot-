@@ -84,6 +84,25 @@ export default {
   },
 
   /* ════════════════════════════════════════════
+   *  SPOTIFY (opsional — buat `.spotify <judul>`)
+   *  Search pakai Spotify Web API, butuh app
+   *  kredensial (gratis) dari:
+   *    https://developer.spotify.com/dashboard
+   *  JANGAN tulis rahasia di file ini (ke-commit!).
+   *  Set lewat environment variable:
+   *    SPOTIFY_CLIENT_ID
+   *    SPOTIFY_CLIENT_SECRET
+   *  (Pterodactyl: tab Startup → Environment Variables)
+   *  Field di bawah cuma fallback kalau env kosong.
+   *  Kosong = search by judul mati, tapi
+   *  `.spotify <link Spotify>` tetap jalan.
+   * ════════════════════════════════════════════ */
+  spotify: {
+    clientId: '',
+    clientSecret: '',
+  },
+
+  /* ════════════════════════════════════════════
    *  WORKER / WEBSOCKET (media)
    * ════════════════════════════════════════════ */
   wsWorkerUrl: 'wss://audio.jhx.my.id/wss/audio',

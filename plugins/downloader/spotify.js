@@ -3,6 +3,9 @@
  * Hapus credit gak bikin u jago dumbass. 
  * Hargai sebagaimana u mau dihargai.
  * spotify.js — Search dan Download lagu dari Spotify
+ * [UPDATE 2026-10-18] Search by judul pakai Spotify Web API (Client
+ *   Credentials) — puppeteer sudah dibuang dari project.
+ *   `.spotify <link>` tetap pakai provider axios seperti sebelumnya.
  */
 
 import { onRichReply } from '../../handlers/messageHandler.js';
@@ -226,6 +229,19 @@ async function handler(ctx) {
       const searchRes = await JHSpotSearch(query);
       if (!searchRes.status || !searchRes.data?.tracks?.length) {
         await ctx.react('❎');
+
+        // Kredensial Spotify belum diset → kasih panduan, bukan error mentah
+        if (searchRes.needCreds) {
+          return ctx.reply(
+            '🔑 *Search Spotify belum aktif*\n\n' +
+            'Buat app gratis di developer.spotify.com, ambil *Client ID* & *Client Secret*,\n' +
+            'lalu set environment variable:\n' +
+            '  ◦ `SPOTIFY_CLIENT_ID`\n' +
+            '  ◦ `SPOTIFY_CLIENT_SECRET`\n\n' +
+            'Sementara itu `.spotify <link Spotify>` tetap bisa dipakai 🎧'
+          );
+        }
+
         return ctx.reply('❌ Lagu tidak ditemukan: ' + (searchRes.error || 'Pencarian kosong.'));
       }
 
