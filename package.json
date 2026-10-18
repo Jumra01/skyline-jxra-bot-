@@ -18,6 +18,7 @@
     "chokidar": "^5.0.0",
     "crypto-js": "^4.2.0",
     "file-type": "^22.0.2",
+    "form-data": "^4.0.6",
     "image-size": "^2.0.4",
     "node-webpmux": "^3.2.1",
     "pino": "^9.4.0",
@@ -26,6 +27,7 @@
     "sharp": "^0.35.4",
     "syntax-error": "^1.4.0",
     "wreq-js": "^3.2.0",
+    "ws": "^8.21.3",
     "zapo-js": "^1.10.0"
   },
   "engines": {
