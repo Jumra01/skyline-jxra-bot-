@@ -16,6 +16,7 @@
  * Trigger:
  *   • command  → `.bot <pertanyaan>` (+ `.bot reset` buat hapus riwayat)
  *   • mention  → tag nomor bot di grup (tanpa prefix), kalau mentionTrigger aktif
+ *   • reply    → BALES (quote) pesan bot, kalau replyTrigger aktif
  *
  * Persona/prompt: file `data/ai-persona.txt` (ganti via `.setpersona`).
  * Riwayat: disimpan di `data/ai-chat.json` (per nomor), dibatasi maxHistory.
@@ -30,6 +31,7 @@ import { checkCooldown, checkFlood } from '../../core/cooldown.js'
 import { getBotNumber } from '../../core/staff.js'
 import { getUser } from '../../core/database.js'
 import { setMentionHandler } from '../../core/mentionTrigger.js'
+import { resolveLidToPn } from '../../core/lid.js'
 import { readPersona } from '../../lib/aiPersona.js'
 
 const DATA_DIR = './data'
@@ -56,8 +58,12 @@ const WARN_RATIO = 0.9              // ≥90% kuota → tempel peringatan di bal
 const AION = {
   name: 'aion',
   baseUrl: 'https://api.aionlabs.ai/v1',
-  // aion-rp-llama-3.1-8b = "completely uncensored", jago roleplay/ngobrol.
-  model: 'aion-labs/aion-rp-llama-3.1-8b', // alternatif: aion-labs/aion-2.0
+  // aion-3.5 = model andalan (is_moderated: false → tanpa filter), paling
+  // pinter ngikutin instruksi & paling akurat ngenalin siapa lawan bicaranya.
+  // CATATAN PENTING: aion-rp-llama-3.1-8b (yang dulu dipakai) itu model RP —
+  // dia nganggep obrolan sebagai fiksi, jadi sering GAK ngenalin nama user
+  // (ngaruh jadi karakter sendiri). Jangan dibalikin ke rp kalau gak perlu.
+  model: 'aion-labs/aion-3.5', // alternatif: aion-labs/aion-2.0 (juga nyambung)
 }
 
 const pluginConfig = {
@@ -99,6 +105,7 @@ function cfg() {
     dailyTokenLimit: Math.max(0, Number(c.dailyTokenLimit ?? DEFAULT_DAILY_TOKENS) || 0),
     timeoutMs: Math.max(5000, Number(c.timeoutMs) || 60_000),
     mentionTrigger: c.mentionTrigger !== false,
+    replyTrigger: c.replyTrigger !== false,
     systemPrompt: String(c.systemPrompt || '').trim(),
   }
 }
@@ -201,16 +208,25 @@ function userProfile(ctx) {
   }
 }
 
-function buildSystem(ctx, persona) {
+function buildSystem(ctx, persona, botName) {
   const u = userProfile(ctx)
+  const self = botName || config.botName || 'bot ini'
   return `${persona}
 
-[Konteks lawan bicara]
-Nama: ${u.name}
-Nomor: ${u.number}
-Peran: ${u.role}
-Jenis chat: ${ctx.isGroup ? 'grup' : 'chat pribadi'}
-Sapa dia dengan namanya sesekali. Balas pakai bahasa yang dia pakai.`
+[KONTEKS LAWAN BICARA — WAJIB DIBACA SEBELUM BALAS]
+Kamu sekarang sedang mengobrol dengan SATU orang berikut:
+  • Nama  : ${u.name}
+  • Nomor : ${u.number}
+  • Peran : ${u.role}
+  • Ruang : ${ctx.isGroup ? 'grup WhatsApp' : 'chat pribadi'}
+
+Aturan identitas (jangan dilanggar):
+- Nama di atas adalah nama ORANG YANG MENGAJAKMU NGOMONG — BUKAN namamu.
+- NAMAMU sendiri: "${self}". Kalau ditanya "kamu siapa", jawab itu.
+- Kalau dia tanya "siapa aku / siapa nama saya / kamu tau aku siapa", jawab
+  pakai data di atas (nama + peran), jangan ngarang nama lain.
+- Sapa dia dengan namanya sesekali biar kerasa personal.
+- Balas pakai bahasa yang dia pakai (Indonesia → Indonesia, Inggris → Inggris).`
 }
 
 /* ══════════════════════ panggil API ══════════════════════ */
@@ -228,30 +244,38 @@ function parseErr(data) {
 }
 
 async function askModel(conf, system, messages) {
-  const res = await axios.post(
-    `${conf.baseUrl}/chat/completions`,
-    {
-      model: conf.model,
-      messages: [{ role: 'system', content: system }, ...messages],
-      temperature: 0.8,
-      max_tokens: 800,
-    },
-    {
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${conf.apikey}` },
-      timeout: conf.timeoutMs,
-      validateStatus: () => true,
+  // Model Aion rata-rata "reasoning" — jawaban final ada di `message.content`,
+  // tapi kalau max_tokens kekecilan, token kepakai buat mikir & content KOSONG.
+  // Jadi: coba normal dulu, kalau kosong ulang sekali dengan budget lebih gede.
+  for (const budget of [1024, 3072]) {
+    const res = await axios.post(
+      `${conf.baseUrl}/chat/completions`,
+      {
+        model: conf.model,
+        messages: [{ role: 'system', content: system }, ...messages],
+        temperature: 0.8,
+        max_tokens: budget,
+      },
+      {
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${conf.apikey}` },
+        timeout: conf.timeoutMs,
+        validateStatus: () => true,
+      }
+    )
+    if (res.status < 200 || res.status >= 300) {
+      const err = new Error(parseErr(res.data) || `HTTP ${res.status}`)
+      err.status = res.status
+      throw err
     }
-  )
-  if (res.status < 200 || res.status >= 300) {
-    const err = new Error(parseErr(res.data) || `HTTP ${res.status}`)
-    err.status = res.status
-    throw err
+    const msg = res.data?.choices?.[0]?.message || {}
+    const content = typeof msg.content === 'string' ? msg.content.trim() : ''
+    const tokens = Number(res.data?.usage?.total_tokens) || 0
+    if (content) return { content, tokens }
+    // content kosong → cuma sisa reasoning kehabisan token, coba lagi lebih lega
+    logger.debug({ model: conf.model, budget, reasoning: String(msg.reasoning || '').length }, '[AIChat] content kosong, ulang dengan token lebih besar')
+    if (budget === 3072) return { content: '', tokens }
   }
-  const content = res.data?.choices?.[0]?.message?.content
-  return {
-    content: typeof content === 'string' ? content.trim() : '',
-    tokens: Number(res.data?.usage?.total_tokens) || 0,
-  }
+  return { content: '', tokens: 0 }
 }
 
 function nfmt(n) {
@@ -376,13 +400,15 @@ function helpText(p, conf) {
     : ''
   return (
     '🤖 *AI CHAT — Aion Labs*\n\n' +
-    `Model: \`${conf.model}\` (uncensored)\n` +
+    `Model: \`${conf.model}\` (tanpa filter)\n` +
     `Aku inget riwayat obrolan kita (maks ${conf.maxHistory} pesan).\n` +
     kuota +
     '\n*Cara pakai:*\n' +
     `> ${p}bot <pertanyaan>\n` +
     `> ${p}bot reset — hapus riwayat\n` +
-    (conf.mentionTrigger ? '> tag nomor aku langsung di grup\n\n' : '\n') +
+    (conf.mentionTrigger ? '> tag nomor aku langsung (tanpa prefix)\n' : '') +
+    (conf.mentionTrigger && conf.replyTrigger ? '> atau BALES/quote pesan-ku\n' : '') +
+    (conf.mentionTrigger || conf.replyTrigger ? '\n' : '\n') +
     '*Contoh:*\n' +
     `> ${p}bot jelasin apa itu lubang hitam singkat`
   )
@@ -419,32 +445,85 @@ function digits(s) {
   return String(s || '').replace(/\D/g, '')
 }
 
-async function botLid(ctx) {
+/** Semua bentuk identitas bot: nomor + jid (PN/LID) yang kita tau. */
+function botIdentity(ctx) {
   const num = getBotNumber()
+  let meJid = null
+  try { meJid = ctx?.client?.auth?.getCurrentCredentials?.()?.meJid ?? null } catch { /* ignore */ }
+  const userId = ctx?.client?.user?.id ?? ctx?.client?.user?.lid ?? null
+  const jids = [num ? `${num}@s.whatsapp.net` : null, meJid, userId].filter(Boolean)
+  return { num, jids }
+}
+
+async function botLid(ctx) {
+  const { num } = botIdentity(ctx)
   if (!num) return null
-  if (botLidCache?.num === num) return botLidCache.lid
+  // cache cuma kalau ketemu — kalau gagal, biar bisa dicoba lagi kapan-kapan
+  if (botLidCache?.num === num && botLidCache.lid) return botLidCache.lid
   try {
     const rows = await ctx.client?.profile?.getLidsByPhoneNumbers?.([num])
-    const lid = (rows ?? [])[0]?.lidJid ?? null
-    botLidCache = { num, lid }
+    const lid = (rows ?? [])[0]?.lidJid ?? (rows ?? [])[0]?.lid ?? null
+    if (lid) botLidCache = { num, lid }
     return lid
   } catch {
-    botLidCache = { num, lid: null }
     return null
   }
 }
 
-async function isBotMentioned(ctx) {
-  const num = getBotNumber()
-  if (!num) return false
-  const mentioned = Array.isArray(ctx.mentioned) ? ctx.mentioned : []
-  if (mentioned.some((j) => digits(j) === num)) return true
-  if (mentioned.length) {
-    const lid = await botLid(ctx)
-    if (lid && mentioned.includes(lid)) return true
+/** Kumpulin mentionedJid dari SEMUA jenis pesan (teks, caption gambar/video, dll). */
+function mentionedJids(ctx) {
+  const out = new Set(Array.isArray(ctx?.mentioned) ? ctx.mentioned : [])
+  const msg = ctx?.event?.message || {}
+  for (const v of Object.values(msg)) {
+    const list = v?.contextInfo?.mentionedJid
+    if (Array.isArray(list)) for (const j of list) out.add(j)
+  }
+  return [...out].filter(Boolean)
+}
+
+/** Pengirim pesan yang di-quote (swipe-reply) — buat deteksi "bales pesan bot". */
+function quotedParticipant(ctx) {
+  const msg = ctx?.event?.message || {}
+  for (const v of Object.values(msg)) {
+    const c = v?.contextInfo
+    if (!c) continue
+    const p = c.participant ?? c.participantAlt ?? c.remoteJid
+    if (p) return p
+  }
+  return null
+}
+
+/** `jid` ini bot sendiri? (cocok lewat nomor, jid, LID, atau LID→PN) */
+async function isBotJid(ctx, jid) {
+  if (!jid) return false
+  const { num, jids } = botIdentity(ctx)
+  if (num && digits(jid) === num) return true
+  if (jids.includes(jid)) return true
+  const lid = await botLid(ctx)
+  if (lid && jid === lid) return true
+  if (String(jid).endsWith('@lid')) {
+    const pn = await resolveLidToPn(ctx.client, ctx.chat, jid)
+    if (pn) {
+      if (num && digits(pn) === num) return true
+      if (jids.includes(pn)) return true
+    }
+  }
+  return false
+}
+
+/**
+ * Bot "diajak ngobrol"? = di-TAG (PN/LID/teks @nomor) ATAU dibales
+ * (quote pesan bot, kalau `replyTrigger` gak dimatiin) → dua-duanya manggil AI.
+ */
+async function isBotMentioned(ctx, conf) {
+  const { num } = botIdentity(ctx)
+  for (const j of mentionedJids(ctx)) {
+    if (await isBotJid(ctx, j)) return true
   }
   const body = String(ctx.body || '').replace(INVISIBLE_RE, '')
-  return body.includes(`@${num}`)
+  if (num && new RegExp(`@${num}(?![0-9])`).test(body)) return true
+  if (conf?.replyTrigger !== false && (await isBotJid(ctx, quotedParticipant(ctx)))) return true
+  return false
 }
 
 function stripMention(text, num) {
@@ -457,12 +536,14 @@ async function onMention(ctx) {
   const conf = cfg()
   if (!conf.enabled || !conf.mentionTrigger) return false
   if (!conf.apikey) return false // jangan spam kalau key belum diisi
-  if (!(await isBotMentioned(ctx))) return false
+  if (!(await isBotMentioned(ctx, conf))) return false
 
   const num = getBotNumber()
   const text = stripMention(ctx.body, num)
   if (!text) {
-    await ctx.reply('Iya? Ada yang bisa aku bantu? Tulis pertanyaannya ya 😊')
+    const u = userProfile(ctx)
+    const siapa = u.name && u.name !== 'Tanpa Nama' ? ` ${u.name}` : ''
+    await ctx.reply(`Halo${siapa}! 👋 Ada yang bisa aku bantu? Tag aku bareng pertanyaannya ya 😊`)
     return true
   }
 
@@ -490,5 +571,6 @@ export { pluginConfig as config, handler }
 // Buat pengujian internal (loader cuma baca `config` + `handler`).
 export const _internals = {
   cfg, askModel, runChat, humanError, isLimitErr, limitMsg,
-  usageToday, addUsage, USAGE_FILE, AION,
+  usageToday, addUsage, USAGE_FILE, AION, buildSystem, userProfile,
+  isBotMentioned, mentionedJids, quotedParticipant, stripMention,
 }
