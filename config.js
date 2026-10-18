@@ -143,20 +143,10 @@ export default {
    * ════════════════════════════════════════════ */
   ai: {
     enabled: true,
-    // 'auto' (default) = API langsung (gaya ella-zen skyline-md) kalau ada
-    //                    apikey; kalau ditolak server (FreeTier) otomatis
-    //                    pindah ke CLI lokal kalau ada.
-    // 'api'  = selalu API langsung ke opencode.ai (butuh apikey)
-    // 'cli'  = selalu CLI OpenCode di server (gratis, tanpa key)
-    // CATATAN: model `*-free` DITOLAK 403 dari luar OpenCode — jalur api
-    // cuma jalan kalau workspace Console punya model berbayar aktif.
-    mode: 'auto',
-    apikey: '', // bisa juga via env OPENCODE_API_KEY (lebih aman, config ini ke-track git)
-    baseUrl: 'https://opencode.ai/zen/v1',
     model: 'deepseek-v4.1-flash-free',
     fallbackModels: ['glm-5.3-flash-free', 'mimo-v2.6-flash-free', 'big-pickle'],
-    maxHistory: 15,      // jumlah pesan riwayat per user
-    maxChars: 12000,     // batas panjang prompt ke model (jalur CLI)
+    maxHistory: 12,      // jumlah pesan riwayat per user
+    maxChars: 12000,     // batas panjang prompt ke model
     timeoutMs: 120_000,  // batas tunggu balasan model (ms)
   },
 
