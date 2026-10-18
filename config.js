@@ -118,6 +118,47 @@ export default {
   },
 
   /* ════════════════════════════════════════════
+   *  OMNI EDITOR (edit gambar AI)
+   *  Backend skyline.web.id — dipakai plugins/ai/omniedit.js (.omniedit)
+   *  `apikey` = key admin (aturan lama §4.3 boleh dilanggar atas
+   *  permintaan owner). Bisa di-override via env OMNI_API_KEY /
+   *  OMNI_WEBSITE (utk deploy panel) — kosongkan config kalau pakai env.
+   * ════════════════════════════════════════════ */
+  omniedit: {
+    website: 'https://skyline.web.id',
+    apikey: '',
+  },
+
+  /* ════════════════════════════════════════════
+   *  PANEL PTERODACTYL (server tempat bot ini jalan)
+   *  Kalau diisi, `.restart` nge-restart SERVER PANEL-nya
+   *  sendiri lewat Client API — bukan cuma proses `node sky.js`.
+   *  Ini jalur yang dipakai kalau bot deploy di panel (owner
+   *  gak pakai PM2), karena kalau proses utama container
+   *  mati, wings ikut ngebunuh anaknya.
+   *
+   *  Cara isi:
+   *   • domain    → https://panel.domainmu.com
+   *   • apikey    → API Klien (ptr_...), akses: power + read
+   *                 Panel → Account → API → Create API Key
+   *                 (centang "Power" dan "Read Info")
+   *   • serverid  → UUID / short id server BOT INI.
+   *                 Ambil dari URL panel:
+   *                 .../server/1a2b3c4d → isi "1a2b3c4d"
+   *
+   *  Bisa juga lewat env (Pterodactyl: tab Startup):
+   *    PTERO_DOMAIN / PTERO_APIKEY / PTERO_SERVERID
+   *  Kosongkan config kalau pakai env.
+   *  Kosong semua → `.restart` pakai jalur lama
+   *  (PM2 / respawn manual).
+   * ════════════════════════════════════════════ */
+  panel: {
+    domain: '',
+    apikey: '',
+    serverid: '',
+  },
+
+  /* ════════════════════════════════════════════
    *  WORKER / WEBSOCKET (media)
    * ════════════════════════════════════════════ */
   wsWorkerUrl: 'wss://audio.jhx.my.id/wss/audio',
