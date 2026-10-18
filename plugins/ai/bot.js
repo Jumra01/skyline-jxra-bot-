@@ -5,8 +5,13 @@
  * bot.js — Chat AI yang INGET riwayat obrolan (.bot / tag nomor bot).
  *
  * Provider OpenAI-compatible (atur di config.js → blok `aiChat`):
- *   gemini | groq | openrouter | deepseek | custom
+ *   venice | gemini | groq | openrouter | deepseek | ollama | custom
  * Yang gratis (tanpa kartu): Gemini, Groq, OpenRouter (model ":free").
+ * Venice punya model TANPA sensor (butuh kredit). Ollama = lokal tanpa filter.
+ *
+ * Key/provider bisa di-override TANPA nyentuh config (gak ikut ke GitHub):
+ *   src/data/ai.json → { "provider": "...", "apikey": "...", "model": "..." }
+ *   (prioritas: env AICHAT_API_KEY > src/data/ai.json > config.aiChat)
  *
  * Trigger:
  *   • command  → `.bot <pertanyaan>` (+ `.bot reset` buat hapus riwayat)
@@ -17,6 +22,7 @@
  */
 import axios from 'axios'
 import fs from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import config from '../../config.js'
 import { logger } from '../../core/logger.js'
 import { checkCooldown, checkFlood } from '../../core/cooldown.js'
@@ -27,8 +33,21 @@ import { readPersona } from '../../lib/aiPersona.js'
 
 const DATA_DIR = './data'
 const STORE_FILE = `${DATA_DIR}/ai-chat.json`
+// Override runtime (GITIGNORED, biar apikey gak ikut ke GitHub):
+//   src/data/ai.json → { "provider": "...", "apikey": "...", "model": "...", "baseUrl": "..." }
+// Dibaca LIVE tiap balasan → ganti apikey/model gak perlu restart.
+// Path di-resolve relatif ke file ini (aman walau cwd bukan root repo).
+// `AICHAT_OVERRIDE_FILE` cuma buat pengujian (arahin ke file lain / file kosong).
+const OVERRIDE_FILE = process.env.AICHAT_OVERRIDE_FILE
+  ? String(process.env.AICHAT_OVERRIDE_FILE)
+  : fileURLToPath(new URL('../../src/data/ai.json', import.meta.url))
 const MAX_TRACKED_USERS = 300   // batas jumlah user yang disimpan di disk
 const MAX_CHARS = 4000          // potong pesan biar prompt gak meledak
+// Penghitung token harian (biar bisa KASIH PERINGATAN sebelum kuota provider habis).
+// Disimpan di data/ai-usage.json (gitignored), reset otomatis ganti hari (UTC).
+const USAGE_FILE = `${DATA_DIR}/ai-usage.json`
+const DEFAULT_DAILY_TOKENS = 20_000 // free tier Aion = 20K token/hari
+const WARN_RATIO = 0.9              // ≥90% kuota → tempel peringatan di balasan
 
 // Preset provider OpenAI-compatible. `model` bisa diganti di config.
 const PROVIDERS = {
@@ -48,6 +67,30 @@ const PROVIDERS = {
     baseUrl: 'https://api.deepseek.com/v1',
     model: 'deepseek-chat', // alternatif: deepseek-reasoner
   },
+  venice: {
+    // Venice AI — punya model TANPA sensor (butuh kredit di akun Venice).
+    baseUrl: 'https://api.venice.ai/api/v1',
+    // venice-uncensored-1-2 = ditandai "most_uncensored" di katalog Venice.
+    model: 'venice-uncensored-1-2', // alternatif roleplay: venice-uncensored-role-play
+  },
+  aion: {
+    // Aion Labs — GRATIS (tanpa kartu) + model BENERAN UNCENSORED,
+    // khusus roleplay/ngobrol. Free tier: 15 RPM / 20K token per hari.
+    // Ambil key gratis: https://www.aionlabs.ai/app/api-keys/
+    baseUrl: 'https://api.aionlabs.ai/v1',
+    model: 'aion-labs/aion-rp-llama-3.1-8b', // uncensored RP; alternatif: aion-labs/aion-2.0
+  },
+  kilocode: {
+    // Kilo Code gateway — GRATIS & TANPA API KEY sama sekali (200 req/jam).
+    // Tapi modelnya ADA filter (bukan uncensored). Cocok buat fallback cepat.
+    baseUrl: 'https://api.kilo.ai/api/gateway',
+    model: 'openrouter/free',
+  },
+  ollama: {
+    // Model lokal (tanpa filter provider). Butuh Ollama jalan di server.
+    baseUrl: 'http://127.0.0.1:11434/v1',
+    model: 'dolphin3:8b', // alternatif: huihui_ai/qwen3-abliterated:14b, gemma3-abliterated
+  },
   custom: { baseUrl: '', model: '' },
 }
 
@@ -55,7 +98,7 @@ const pluginConfig = {
   name: 'bot',
   alias: ['aichat', 'ngobrol', 'chatai'],
   category: 'ai',
-  description: 'Chat AI (Gemini/Groq/DeepSeek/OpenRouter) — inget riwayat obrolan',
+  description: 'Chat AI (Venice/Gemini/Groq/DeepSeek/OpenRouter) — inget riwayat obrolan',
   usage: '.bot <pertanyaan>  |  .bot reset  |  tag nomor bot di grup',
   example: '.bot jelasin apa itu lubang hitam singkat',
   isOwner: false,
@@ -70,17 +113,26 @@ const pluginConfig = {
 }
 
 /* ══════════════════════ config ══════════════════════ */
+function overrides() {
+  try {
+    const o = JSON.parse(fs.readFileSync(OVERRIDE_FILE, 'utf8'))
+    return o && typeof o === 'object' ? o : {}
+  } catch { return {} }
+}
+
 function cfg() {
   const c = config.aiChat || {}
-  const provider = String(c.provider || 'gemini').toLowerCase()
+  const o = overrides() // prioritas: env > src/data/ai.json > config.js
+  const provider = String(o.provider || c.provider || 'gemini').toLowerCase()
   const preset = PROVIDERS[provider] || PROVIDERS.custom
   return {
     enabled: c.enabled !== false,
     provider,
-    baseUrl: String(c.baseUrl || preset.baseUrl || '').replace(/\/+$/, ''),
-    model: String(c.model || preset.model || '').trim(),
-    apikey: String(process.env.AICHAT_API_KEY || c.apikey || '').trim(),
+    baseUrl: String(o.baseUrl || c.baseUrl || preset.baseUrl || '').replace(/\/+$/, ''),
+    model: String(o.model || c.model || preset.model || '').trim(),
+    apikey: String(process.env.AICHAT_API_KEY || o.apikey || c.apikey || '').trim(),
     maxHistory: Math.max(2, Math.min(100, Number(c.maxHistory) || 20)),
+    dailyTokenLimit: Math.max(0, Number(c.dailyTokenLimit ?? DEFAULT_DAILY_TOKENS) || 0),
     timeoutMs: Math.max(5000, Number(c.timeoutMs) || 60_000),
     mentionTrigger: c.mentionTrigger !== false,
     systemPrompt: String(c.systemPrompt || '').trim(),
@@ -135,6 +187,36 @@ function getHistory(key, max) {
 function resetHistory(key) {
   store.delete(key)
   saveStore()
+}
+
+/* ══════════════════════ kuota token harian ══════════════════════ */
+// Perkiraan pemakaian token provider per hari (dari `usage` yang dibalikin API).
+// Dipakai buat: (1) nolak duluan kalau kuota udah abis, (2) ngingetin kalau mepet.
+function todayUTC() {
+  return new Date().toISOString().slice(0, 10) // YYYY-MM-DD
+}
+
+function usageToday() {
+  try {
+    const u = JSON.parse(fs.readFileSync(USAGE_FILE, 'utf8'))
+    if (u && u.day === todayUTC()) return Math.max(0, Number(u.total) || 0)
+  } catch { /* belum ada → 0 */ }
+  return 0
+}
+
+function addUsage(tokens) {
+  const n = Math.max(0, Number(tokens) || 0)
+  if (!n) return usageToday()
+  const total = usageToday() + n
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true })
+    const tmp = `${USAGE_FILE}.tmp`
+    fs.writeFileSync(tmp, JSON.stringify({ day: todayUTC(), total }))
+    fs.renameSync(tmp, USAGE_FILE)
+  } catch (err) {
+    logger.warn({ err: String(err?.message || err) }, '[AIChat] gagal simpan usage')
+  }
+  return total
 }
 
 /* ══════════════════════ prompt & profil ══════════════════════ */
@@ -202,17 +284,49 @@ async function askModel(conf, system, messages) {
     throw err
   }
   const content = res.data?.choices?.[0]?.message?.content
-  return typeof content === 'string' ? content.trim() : ''
+  return {
+    content: typeof content === 'string' ? content.trim() : '',
+    tokens: Number(res.data?.usage?.total_tokens) || 0,
+  }
+}
+
+function nfmt(n) {
+  return Number(n || 0).toLocaleString('id-ID')
+}
+
+// Pesan waktu kuota AI harian habis / provider lagi nge-limit.
+function limitMsg(conf, used = 0) {
+  const lim = Number(conf?.dailyTokenLimit) || DEFAULT_DAILY_TOKENS
+  return (
+    '🚦 *FITUR AI SEDANG LIMIT*\n\n' +
+    `Kuota token harian udah habis (±${nfmt(lim)} token/hari — paket gratis).\n` +
+    (used ? `> Terpakai hari ini: *${nfmt(used)}* token\n` : '') +
+    '\n*Coba lagi BESOK* ya — kuota reset otomatis tiap ganti hari.\n' +
+    '> Biar lebih hemat: kecilin riwayat (`maxHistory`) di config.'
+  )
+}
+
+function isLimitErr(err) {
+  const status = err?.status
+  const msg = String(err?.message || err)
+  return status === 429 || /rate.?limit|usage limit|quota|too many requests|exceed/i.test(msg)
 }
 
 function humanError(err) {
   const status = err?.status
   const msg = String(err?.message || err)
-  if (status === 401 || status === 403) return '❌ API key ditolak. Cek lagi apikey & provider di config.aiChat.'
-  if (status === 429) return '🐢 Kena batas (rate limit) provider. Tunggu sebentar, lalu coba lagi ya.'
-  if (status === 404) return '❌ Model/endpoint gak ketemu. Cek `aiChat.model` & `aiChat.provider`.'
+  // Kuota/limit provider (token habis, rate limit) → peringatan "sedang limit"
+  if (isLimitErr(err)) {
+    return limitMsg(null, usageToday())
+  }
+  if (status === 402 || /insufficient|balance|credit/i.test(msg)) {
+    return '💳 Saldo akun AI habis / belum ada kredit.\n> Top up di penyedia (Venice: https://venice.ai/settings/api)'
+  }
+  if (status === 401 || status === 403) return '❌ API key ditolak. Cek lagi apikey & provider di `src/data/ai.json` / config.aiChat.'
+  if (status === 404) return '❌ Model/endpoint gak ketemu. Cek `model` & `provider` kamu.'
   if (status === 400) return `❌ Permintaan ditolak provider: ${msg.slice(0, 160)}`
   if (err?.code === 'ECONNABORTED' || /timeout/i.test(msg)) return '⏱️ AI kelamaan balas. Coba lagi ya.'
+  if (status >= 500) return '🛠️ Server AI lagi error (gangguan di sisi penyedia). Coba lagi nanti ya.'
   return `❌ Gagal hubungi AI: ${msg.slice(0, 160)}`
 }
 
@@ -225,6 +339,12 @@ async function runChat(ctx, text) {
     return { ok: false, reply: '❌ Provider AI belum lengkap (baseUrl/model kosong). Cek config.aiChat.' }
   }
 
+  // Kuota harian udah abis? Gak usah panggil API (mubazir) — langsung kasih peringatan.
+  const usedBefore = conf.dailyTokenLimit > 0 ? usageToday() : 0
+  if (conf.dailyTokenLimit > 0 && usedBefore >= conf.dailyTokenLimit) {
+    return { ok: false, limit: true, reply: limitMsg(conf, usedBefore) }
+  }
+
   const key = historyKey(ctx)
   const h = getHistory(key, conf.maxHistory)
   h.at = Date.now()
@@ -234,13 +354,17 @@ async function runChat(ctx, text) {
   const system = conf.systemPrompt || readPersona()
 
   let answer
+  let tokens = 0
   try {
-    answer = await askModel(conf, buildSystem(ctx, system), h.msgs)
+    const res = await askModel(conf, buildSystem(ctx, system), h.msgs)
+    answer = res.content
+    tokens = res.tokens
   } catch (err) {
     h.msgs.pop() // pesan gagal jangan nyangkut di riwayat
     saveStore()
     logger.warn({ err: String(err?.message || err).slice(0, 200) }, '[AIChat] gagal')
-    return { ok: false, reply: humanError(err) }
+    const le = isLimitErr(err)
+    return { ok: false, limit: le, reply: le ? limitMsg(conf, usageToday()) : humanError(err) }
   }
 
   if (!answer) {
@@ -252,7 +376,17 @@ async function runChat(ctx, text) {
   h.msgs.push({ role: 'assistant', content: answer.slice(0, MAX_CHARS) })
   if (h.msgs.length > conf.maxHistory) h.msgs = h.msgs.slice(-conf.maxHistory)
   saveStore()
-  return { ok: true, reply: answer.slice(0, MAX_CHARS) }
+
+  let out = answer.slice(0, MAX_CHARS)
+  // Catat token + tempel peringatan kalau kuota harian udah mepet (≥90%).
+  if (conf.dailyTokenLimit > 0) {
+    const total = addUsage(tokens)
+    if (total >= conf.dailyTokenLimit * WARN_RATIO) {
+      const left = Math.max(0, conf.dailyTokenLimit - total)
+      out += `\n\n_⚠️ Kuota AI hari ini mepet — sisa ±${nfmt(left)} token. Reset otomatis besok._`
+    }
+  }
+  return { ok: true, reply: out }
 }
 
 /* ══════════════════════ teks bantuan ══════════════════════ */
@@ -261,21 +395,29 @@ function missingKeyMsg(conf) {
     '⚠️ *API KEY AI BELUM DIISI*\n\n' +
     `Provider aktif: *${conf.provider}*${conf.model ? ` (${conf.model})` : ''}\n\n` +
     'Ambil key GRATIS (tanpa kartu kredit):\n' +
+    '> 🎭 *Aion Labs (uncensored)* — https://www.aionlabs.ai/app/api-keys/\n' +
     '> 🔹 Gemini — https://aistudio.google.com/apikey\n' +
     '> 🔹 Groq — https://console.groq.com/keys\n' +
-    '> 🔹 OpenRouter — https://openrouter.ai/keys\n\n' +
-    '*Cara isi:*\n' +
+    '> 🔹 OpenRouter — https://openrouter.ai/keys\n' +
+    '> 🎭 Venice (tanpa sensor, butuh kredit) — https://venice.ai/settings/api\n\n' +
+    '*Cara isi (pilih salah satu):*\n' +
+    '> `src/data/ai.json` → `{ "apikey": "..." }` (gak ikut ke GitHub)\n' +
     '> `config.js` → blok `aiChat.apikey`\n' +
     '> atau set env `AICHAT_API_KEY`'
   )
 }
 
 function helpText(p, conf) {
+  const used = conf.dailyTokenLimit > 0 ? usageToday() : 0
+  const kuota = conf.dailyTokenLimit > 0
+    ? `Kuota harian: *${nfmt(used)}* / ${nfmt(conf.dailyTokenLimit)} token\n`
+    : ''
   return (
     '🤖 *AI CHAT*\n\n' +
     `Provider: *${conf.provider}*${conf.model ? ` · ${conf.model}` : ''}\n` +
-    `Aku inget riwayat obrolan kita (maks ${conf.maxHistory} pesan).\n\n` +
-    '*Cara pakai:*\n' +
+    `Aku inget riwayat obrolan kita (maks ${conf.maxHistory} pesan).\n` +
+    kuota +
+    '\n*Cara pakai:*\n' +
     `> ${p}bot <pertanyaan>\n` +
     `> ${p}bot reset — hapus riwayat\n` +
     (conf.mentionTrigger ? '> tag nomor aku langsung di grup\n\n' : '\n') +
@@ -303,7 +445,7 @@ async function handler(ctx) {
 
   await ctx.react('🕕')
   const r = await runChat(ctx, text)
-  await ctx.react(r.ok ? '✅' : '❎')
+  await ctx.react(r.ok ? '✅' : r.limit ? '🚦' : '❎')
   return ctx.reply(r.reply)
 }
 
@@ -374,7 +516,7 @@ async function onMention(ctx) {
 
   await ctx.react('🕕')
   const r = await runChat(ctx, text)
-  await ctx.react(r.ok ? '✅' : '❎')
+  await ctx.react(r.ok ? '✅' : r.limit ? '🚦' : '❎')
   await ctx.reply(r.reply)
   return true
 }
@@ -383,3 +525,8 @@ loadStore()
 setMentionHandler(onMention)
 
 export { pluginConfig as config, handler }
+// Buat pengujian internal (loader cuma baca `config` + `handler`).
+export const _internals = {
+  cfg, askModel, runChat, humanError, isLimitErr, limitMsg,
+  usageToday, addUsage, USAGE_FILE, PROVIDERS,
+}

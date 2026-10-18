@@ -138,17 +138,30 @@ export default {
    *    • groq        → https://console.groq.com/keys
    *    • openrouter  → https://openrouter.ai/keys   (model ":free")
    *  Berbayar murah: deepseek → https://platform.deepseek.com
+   *  LOKAL / TANPA SENSOR (paling bebas — di-host sendiri):
+   *    • ollama  → OpenAI-compat di http://127.0.0.1:11434/v1
+   *                model: dolphin3:8b, huihui_ai/qwen3-abliterated:14b
+   *  VENICE AI (model tanpa sensor, BUTUH KREDIT di akun Venice):
+   *    • venice  → https://api.venice.ai/api/v1
+   *                model: venice-uncensored-1-2 ("most_uncensored")
+   *  CATATAN: provider hosted (Gemini/Groq/OpenRouter/Venice) TETAP punya
+   *  policy sendiri; bebas-sensor total cuma dijamin kalau model dijalankan
+   *  sendiri (lokal).
    *  `apikey` SENGAJA DIKOSONGKAN — tiap orang isi punya sendiri.
-   *  Buat deploy panel, gak perlu edit config — pakai env AICHAT_API_KEY.
+   *  CARA ISI KEY (tanpa nyentuh file yang di-commit):
+   *    • paling gampang: file `src/data/ai.json` (GITIGNORED):
+   *      { "provider": "aion", "model": "...", "apikey": "..." }
+   *    • atau env AICHAT_API_KEY (Pterodactyl: tab Startup).
    *  Persona/prompt: file `data/ai-persona.txt` atau command `.setpersona`.
    * ════════════════════════════════════════════ */
   aiChat: {
     enabled: true,        // matiin total kalau lagi gak mau pakai
-    provider: 'gemini',   // gemini | groq | openrouter | deepseek | custom
-    apikey: '',           // kosong → cek env AICHAT_API_KEY
-    model: '',            // kosong → default provider (lihat PROVIDERS di plugin)
+    provider: 'aion',     // aion | venice | gemini | groq | openrouter | deepseek | kilocode | ollama | custom
+    apikey: '',           // kosong → cek src/data/ai.json → env AICHAT_API_KEY
+    model: 'aion-labs/aion-rp-llama-3.1-8b', // kosong → default provider (lihat PROVIDERS di plugin)
     baseUrl: '',          // kosong → default provider
     maxHistory: 20,       // jumlah pesan riwayat per user (user + assistant)
+    dailyTokenLimit: 20000, // kuota token/hari (free tier Aion = 20K). 0 = tanpa batas peringatan
     timeoutMs: 60_000,    // batas tunggu balasan AI (ms)
     mentionTrigger: true, // balas otomatis kalau nomor bot di-tag (tanpa prefix)
     systemPrompt: '',     // kosong → pakai data/ai-persona.txt / default
