@@ -12,6 +12,21 @@ export default {
   botName: 'skyline-JXRA',
 
   /* ════════════════════════════════════════════
+   *  BANNER CONSOLE (tampilan saat bot start)
+   *  ASCII art auto di-generate dari `words` —
+   *  tinggal ganti/tekan kata, huruf besar/kecil bebas.
+   *  align: 'left' | 'right' | 'center'
+   *  (hapus blok ini = balik ke default SKYLINE / JXRA)
+   * ════════════════════════════════════════════ */
+  banner: {
+    words: [
+      { text: 'SKYLINE', align: 'left' },
+      { text: 'JXRA', align: 'right' },
+    ],
+    tagline: '⚡ next-gen WhatsApp bot · powered by zapo-js',
+  },
+
+  /* ════════════════════════════════════════════
    *  AUTH
    *  method: 'auto'     → pilih QR / pairing via menu saat start
    *           'qr'      → langsung QR

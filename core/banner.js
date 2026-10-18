@@ -4,6 +4,18 @@
  * Hargai sebagaimana u mau dihargai.
  * banner.js — Tampilan console saat bot start: ASCII art + kotak info.
  * Dipanggil dari sky.js (printBanner + printInfo). Gak nyentuh logic bot.
+ *
+ * ── GANTI TULISAN BANNER (gampang) ──
+ * Cukup edit `words` di config.js (blok `banner`). Tiap kata auto di-render
+ * jadi block letters 5 baris — huruf besar/kecil bebas, gak perlu nyusun manual.
+ *   banner: {
+ *     words: [
+ *       { text: 'SKYLINE', align: 'left'  },
+ *       { text: 'JXRA',    align: 'right' },
+ *     ],
+ *     tagline: '⚡ next-gen WhatsApp bot · powered by zapo-js',
+ *   }
+ * Kalau blok `banner` di config gak ada, dipakai DEFAULT_WORDS di bawah.
  */
 import fs from 'node:fs'
 import os from 'node:os'
@@ -12,27 +24,112 @@ import config from '../config.js'
 const RESET = '\x1b[0m'
 const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 
-// ASCII art "SKYLINE" + "JXRA" (block letters, font 5 baris).
-const SKYLINE = [
-  ' ██████ ██   ██ ██   ██ ██      ███████ ██    ██ ███████',
-  '██      ██  ██   ██ ██  ██         ██   ███   ██ ██',
-  ' █████  █████     ███   ██         ██   ██ ██ ██ █████',
-  '     ██ ██  ██     ██   ██         ██   ██  ████ ██',
-  '██████  ██   ██    ██   ███████ ███████ ██    ██ ███████'
+// ── Font block 5 baris (tiap glyph lebarnya boleh beda, barisnya wajib rata) ──
+const GLYPH_H = 5
+const GAP = 1 // spasi antar huruf
+const FONT = {
+  A: [' █████ ', '██   ██', '███████', '██   ██', '██   ██'],
+  B: ['██████ ', '██   ██', '██████ ', '██   ██', '██████ '],
+  C: [' ██████', '██     ', '██     ', '██     ', ' ██████'],
+  D: ['██████ ', '██   ██', '██   ██', '██   ██', '██████ '],
+  E: ['███████', '██     ', '█████  ', '██     ', '███████'],
+  F: ['███████', '██     ', '█████  ', '██     ', '██     '],
+  G: [' ██████', '██     ', '██ ████', '██   ██', ' ██████'],
+  H: ['██   ██', '██   ██', '███████', '██   ██', '██   ██'],
+  I: ['███████', '   ██  ', '   ██  ', '   ██  ', '███████'],
+  J: ['   ████', '     ██', '     ██', '██   ██', ' █████ '],
+  K: ['██   ██', '██  ██ ', '█████  ', '██  ██ ', '██   ██'],
+  L: ['██     ', '██     ', '██     ', '██     ', '███████'],
+  M: ['██   ██', '███████', '███████', '██   ██', '██   ██'],
+  N: ['██    ██', '███   ██', '██ ██ ██', '██  ████', '██    ██'],
+  O: [' █████ ', '██   ██', '██   ██', '██   ██', ' █████ '],
+  P: ['██████ ', '██   ██', '██████ ', '██     ', '██     '],
+  Q: [' █████ ', '██   ██', '██   ██', '██ ████', ' ██████'],
+  R: ['██████ ', '██   ██', '██████ ', '██  ██ ', '██   ██'],
+  S: [' ██████', '██     ', ' █████ ', '     ██', '██████ '],
+  T: ['███████', '   ██  ', '   ██  ', '   ██  ', '   ██  '],
+  U: ['██   ██', '██   ██', '██   ██', '██   ██', ' █████ '],
+  V: ['██   ██', '██   ██', '██   ██', ' ██ ██ ', '  ███  '],
+  W: ['██   ██', '██   ██', '███████', '███████', '██   ██'],
+  X: ['██   ██', ' ██ ██ ', '  ███  ', ' ██ ██ ', '██   ██'],
+  Y: ['██   ██', ' ██ ██ ', '  ███  ', '   ██  ', '   ██  '],
+  Z: ['███████', '    ██ ', '  ███  ', ' ██    ', '███████'],
+  0: [' █████ ', '██   ██', '██   ██', '██   ██', ' █████ '],
+  1: ['   ██  ', '  ███  ', '   ██  ', '   ██  ', '███████'],
+  2: [' █████ ', '██   ██', '   ██  ', '  ██   ', '███████'],
+  3: ['██████ ', '     ██', ' █████ ', '     ██', '██████ '],
+  4: ['██   ██', '██   ██', '███████', '     ██', '     ██'],
+  5: ['███████', '██     ', '██████ ', '     ██', '██████ '],
+  6: [' █████ ', '██     ', '██████ ', '██   ██', ' █████ '],
+  7: ['███████', '     ██', '    ██ ', '   ██  ', '   ██  '],
+  8: [' █████ ', '██   ██', ' █████ ', '██   ██', ' █████ '],
+  9: [' █████ ', '██   ██', ' ██████', '     ██', ' █████ '],
+  ' ': ['       ', '       ', '       ', '       ', '       '],
+  '-': ['       ', '       ', ' █████ ', '       ', '       '],
+  '.': ['       ', '       ', '       ', '       ', '   ██  '],
+  '!': ['   ██  ', '   ██  ', '   ██  ', '       ', '   ██  '],
+  '?': [' █████ ', '██   ██', '   ██  ', '       ', '   ██  ']
+}
+
+// Dipakai kalau config.banner gak diisi
+const DEFAULT_WORDS = [
+  { text: 'SKYLINE', align: 'left' },
+  { text: 'JXRA', align: 'right' }
 ]
-const JXRA = [
-  '   ████ ██   ██ ██████   █████',
-  '     ██  ██ ██  ██   ██ ██   ██',
-  '     ██   ███   ██████  ███████',
-  '██   ██  ██ ██  ██  ██  ██   ██',
-  ' █████  ██   ██ ██   ██ ██   ██'
-]
-const ART_WIDTH = 56
-const ART = [
-  ...SKYLINE,
-  // "JXRA" dirapatkan ke kanan biar rata kanan sama baris SKYLINE
-  ...JXRA.map((line) => ' '.repeat(ART_WIDTH - 31) + line)
-]
+const DEFAULT_TAGLINE = '⚡ next-gen WhatsApp bot · powered by zapo-js'
+
+// Satu glyph → baris-baris rata sendiri (lebar = baris terpanjang)
+function glyphRows(ch) {
+  const raw = FONT[ch] ?? FONT['?']
+  const w = Math.max(...raw.map((r) => r.length))
+  return raw.map((r) => r.padEnd(w))
+}
+
+// Satu kata → array baris (tinggi GLYPH_H)
+function renderWord(text) {
+  const rows = Array.from({ length: GLYPH_H }, () => '')
+  for (const ch of String(text).toUpperCase()) {
+    const glyph = glyphRows(ch)
+    for (let r = 0; r < GLYPH_H; r++) rows[r] += glyph[r] + ' '.repeat(GAP)
+  }
+  return rows.map((r) => r.replace(/\s+$/, ''))
+}
+
+// Gabung beberapa kata jadi art (align per kata: left | center | right)
+function buildArt(words) {
+  const blocks = words
+    .filter((w) => w && String(w.text ?? w).trim() !== '')
+    .map((w, i) => {
+      const raw = typeof w === 'string' ? { text: w } : w
+      return {
+        rows: renderWord(raw.text),
+        align: raw.align ?? (i === 0 ? 'left' : 'right')
+      }
+    })
+  if (!blocks.length) return buildArt(DEFAULT_WORDS)
+
+  const width = Math.max(...blocks.flatMap((b) => b.rows.map((r) => r.length)))
+  const lines = []
+  for (const block of blocks) {
+    for (const r of block.rows) {
+      const pad =
+        block.align === 'right' ? width - r.length
+          : block.align === 'center' ? Math.floor((width - r.length) / 2)
+            : 0
+      lines.push(' '.repeat(Math.max(0, pad)) + r)
+    }
+  }
+  return { lines, width }
+}
+
+// ── Ambil setting dari config (fallback ke default) ──
+const bannerCfg = config.banner ?? {}
+const WORDS = Array.isArray(bannerCfg.words) && bannerCfg.words.length
+  ? bannerCfg.words
+  : DEFAULT_WORDS
+const TAGLINE = bannerCfg.tagline ?? DEFAULT_TAGLINE
+
+const { lines: ART, width: ART_WIDTH } = buildArt(WORDS)
 
 // Warna ANSI cuma kalau didukung (TTY / FORCE_COLOR), hormati NO_COLOR.
 const useColor = (() => {
@@ -48,7 +145,7 @@ function stripAnsi(text) {
   return String(text).replace(/\x1b\[[0-9;]*m/g, '')
 }
 
-// Lebar tampilan 1 karakter (emoji/CJK dihitung 2, ZWJ & variation selector 0).
+// Lebar tampilan tekstual (emoji/CJK = 2, ZWJ & variation selector = 0)
 function charWidth(cp) {
   if (cp === 0x200d) return 0
   if (cp >= 0xfe00 && cp <= 0xfe0f) return 0
@@ -67,7 +164,7 @@ function dispWidth(text) {
   return w
 }
 
-// Gradasi warna per kolom buat ASCII art (biru muda → biru tua).
+// Gradasi warna per kolom buat ASCII art (biru muda → biru tua)
 function paintArt(line, colors) {
   if (!useColor) return line
   const [from, to] = colors
@@ -91,7 +188,7 @@ function fmtTimeWIB(date) {
   return `${d} · ${t} WIB`
 }
 
-// Banner ASCII art — dipanggil di awal main().
+// Banner ASCII art — dipanggil di awal main()
 export function printBanner() {
   const gradFrom = [125, 211, 252] // sky-300
   const gradTo = [37, 99, 235] // blue-600
@@ -100,11 +197,11 @@ export function printBanner() {
   console.log('')
   for (const line of ART) console.log(paintArt(line, colors))
   console.log('')
-  console.log('  ' + paint('2', '⚡ next-gen WhatsApp bot') + paint('2', ' · ') + paint('2', 'powered by zapo-js'))
+  console.log('  ' + paint('2', TAGLINE))
   console.log('')
 }
 
-// Kotak info — dipanggil setelah loadFeatures() biar jumlah fitur kebaca.
+// Kotak info — dipanggil setelah loadFeatures() biar jumlah fitur kebaca
 export function printInfo({ count = 0, total = 0, failed = [] } = {}) {
   const owner = config.owner ?? {}
   const ownerText = [owner.name, Array.isArray(owner.numbers) ? owner.numbers[0] : owner.numbers]
