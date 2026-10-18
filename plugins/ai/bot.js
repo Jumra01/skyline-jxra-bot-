@@ -2,16 +2,16 @@
  * © skyline-JXRA
  * Hapus credit gak bikin u jago dumbass.
  * Hargai sebagaimana u mau dihargai.
- * bot.js — Chat AI yang INGET riwayat obrolan (.bot / tag nomor bot).
+ * bot.js — Chat AI (Aion Labs) yang INGET riwayat obrolan (.bot / tag nomor bot).
  *
- * Provider OpenAI-compatible (atur di config.js → blok `aiChat`):
- *   venice | gemini | groq | openrouter | deepseek | ollama | custom
- * Yang gratis (tanpa kartu): Gemini, Groq, OpenRouter (model ":free").
- * Venice punya model TANPA sensor (butuh kredit). Ollama = lokal tanpa filter.
+ * PROVIDER: **Aion Labs** (https://api.aionlabs.ai/v1, OpenAI-compatible).
+ *   Model default `aion-labs/aion-rp-llama-3.1-8b` = "completely uncensored",
+ *   jago roleplay/ngobrol. Free tier: 15 req/menit · 20.000 token/hari.
  *
- * Key/provider bisa di-override TANPA nyentuh config (gak ikut ke GitHub):
- *   src/data/ai.json → { "provider": "...", "apikey": "...", "model": "..." }
- *   (prioritas: env AICHAT_API_KEY > src/data/ai.json > config.aiChat)
+ * Semua pengaturan ada di config.js → blok `aiChat` (model/apikey/dll).
+ * Key bisa ditimpa TANPA nyentuh config (prioritas paling tinggi dulu):
+ *   env AICHAT_API_KEY  >  src/data/ai.json  >  config.aiChat
+ * (file `src/data/ai.json` GITIGNORED — isi manual kalau perlu)
  *
  * Trigger:
  *   • command  → `.bot <pertanyaan>` (+ `.bot reset` buat hapus riwayat)
@@ -19,6 +19,7 @@
  *
  * Persona/prompt: file `data/ai-persona.txt` (ganti via `.setpersona`).
  * Riwayat: disimpan di `data/ai-chat.json` (per nomor), dibatasi maxHistory.
+ * Kuota  : `data/ai-usage.json` (penghitung token harian, peringatan kalau habis).
  */
 import axios from 'axios'
 import fs from 'node:fs'
@@ -49,56 +50,21 @@ const USAGE_FILE = `${DATA_DIR}/ai-usage.json`
 const DEFAULT_DAILY_TOKENS = 20_000 // free tier Aion = 20K token/hari
 const WARN_RATIO = 0.9              // ≥90% kuota → tempel peringatan di balasan
 
-// Preset provider OpenAI-compatible. `model` bisa diganti di config.
-const PROVIDERS = {
-  gemini: {
-    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
-    model: 'gemini-2.5-flash', // alternatif: gemini-2.5-flash-lite, gemini-2.5-pro
-  },
-  groq: {
-    baseUrl: 'https://api.groq.com/openai/v1',
-    model: 'llama-3.3-70b-versatile', // alternatif: openai/gpt-oss-120b, qwen/qwen3-32b
-  },
-  openrouter: {
-    baseUrl: 'https://openrouter.ai/api/v1',
-    model: 'openrouter/free', // alternatif: nvidia/nemotron-3-ultra:free, google/gemma-4-31b-it:free
-  },
-  deepseek: {
-    baseUrl: 'https://api.deepseek.com/v1',
-    model: 'deepseek-chat', // alternatif: deepseek-reasoner
-  },
-  venice: {
-    // Venice AI — punya model TANPA sensor (butuh kredit di akun Venice).
-    baseUrl: 'https://api.venice.ai/api/v1',
-    // venice-uncensored-1-2 = ditandai "most_uncensored" di katalog Venice.
-    model: 'venice-uncensored-1-2', // alternatif roleplay: venice-uncensored-role-play
-  },
-  aion: {
-    // Aion Labs — GRATIS (tanpa kartu) + model BENERAN UNCENSORED,
-    // khusus roleplay/ngobrol. Free tier: 15 RPM / 20K token per hari.
-    // Ambil key gratis: https://www.aionlabs.ai/app/api-keys/
-    baseUrl: 'https://api.aionlabs.ai/v1',
-    model: 'aion-labs/aion-rp-llama-3.1-8b', // uncensored RP; alternatif: aion-labs/aion-2.0
-  },
-  kilocode: {
-    // Kilo Code gateway — GRATIS & TANPA API KEY sama sekali (200 req/jam).
-    // Tapi modelnya ADA filter (bukan uncensored). Cocok buat fallback cepat.
-    baseUrl: 'https://api.kilo.ai/api/gateway',
-    model: 'openrouter/free',
-  },
-  ollama: {
-    // Model lokal (tanpa filter provider). Butuh Ollama jalan di server.
-    baseUrl: 'http://127.0.0.1:11434/v1',
-    model: 'dolphin3:8b', // alternatif: huihui_ai/qwen3-abliterated:14b, gemma3-abliterated
-  },
-  custom: { baseUrl: '', model: '' },
+// ── Aion Labs (satu-satunya provider fitur ini) ──
+// https://api.aionlabs.ai/v1 (OpenAI-compatible). Free tier: 15 RPM, 20K token/hari.
+// Ambil key GRATIS (tanpa kartu): https://www.aionlabs.ai/app/api-keys/
+const AION = {
+  name: 'aion',
+  baseUrl: 'https://api.aionlabs.ai/v1',
+  // aion-rp-llama-3.1-8b = "completely uncensored", jago roleplay/ngobrol.
+  model: 'aion-labs/aion-rp-llama-3.1-8b', // alternatif: aion-labs/aion-2.0
 }
 
 const pluginConfig = {
   name: 'bot',
   alias: ['aichat', 'ngobrol', 'chatai'],
   category: 'ai',
-  description: 'Chat AI (Venice/Gemini/Groq/DeepSeek/OpenRouter) — inget riwayat obrolan',
+  description: 'Chat AI Aion Labs (uncensored) — inget riwayat obrolan',
   usage: '.bot <pertanyaan>  |  .bot reset  |  tag nomor bot di grup',
   example: '.bot jelasin apa itu lubang hitam singkat',
   isOwner: false,
@@ -123,13 +89,11 @@ function overrides() {
 function cfg() {
   const c = config.aiChat || {}
   const o = overrides() // prioritas: env > src/data/ai.json > config.js
-  const provider = String(o.provider || c.provider || 'gemini').toLowerCase()
-  const preset = PROVIDERS[provider] || PROVIDERS.custom
   return {
     enabled: c.enabled !== false,
-    provider,
-    baseUrl: String(o.baseUrl || c.baseUrl || preset.baseUrl || '').replace(/\/+$/, ''),
-    model: String(o.model || c.model || preset.model || '').trim(),
+    provider: AION.name, // fokus Aion Labs
+    baseUrl: String(o.baseUrl || c.baseUrl || AION.baseUrl).replace(/\/+$/, ''),
+    model: String(o.model || c.model || AION.model).trim(),
     apikey: String(process.env.AICHAT_API_KEY || o.apikey || c.apikey || '').trim(),
     maxHistory: Math.max(2, Math.min(100, Number(c.maxHistory) || 20)),
     dailyTokenLimit: Math.max(0, Number(c.dailyTokenLimit ?? DEFAULT_DAILY_TOKENS) || 0),
@@ -315,19 +279,21 @@ function isLimitErr(err) {
 function humanError(err) {
   const status = err?.status
   const msg = String(err?.message || err)
-  // Kuota/limit provider (token habis, rate limit) → peringatan "sedang limit"
+  // Kuota/limit Aion (token habis / rate limit) → peringatan "sedang limit"
   if (isLimitErr(err)) {
     return limitMsg(null, usageToday())
   }
   if (status === 402 || /insufficient|balance|credit/i.test(msg)) {
-    return '💳 Saldo akun AI habis / belum ada kredit.\n> Top up di penyedia (Venice: https://venice.ai/settings/api)'
+    return '💳 Saldo/kredit akun Aion habis.\n> Cek: https://www.aionlabs.ai/pricing/'
   }
-  if (status === 401 || status === 403) return '❌ API key ditolak. Cek lagi apikey & provider di `src/data/ai.json` / config.aiChat.'
-  if (status === 404) return '❌ Model/endpoint gak ketemu. Cek `model` & `provider` kamu.'
-  if (status === 400) return `❌ Permintaan ditolak provider: ${msg.slice(0, 160)}`
+  if (status === 401 || status === 403) {
+    return '❌ API key Aion ditolak.\n> Cek `apikey` di `config.js` → blok `aiChat` (atau env `AICHAT_API_KEY`).'
+  }
+  if (status === 404) return '❌ Model Aion gak ketemu. Cek `aiChat.model` di `config.js`.'
+  if (status === 400) return `❌ Permintaan ditolak Aion: ${msg.slice(0, 160)}`
   if (err?.code === 'ECONNABORTED' || /timeout/i.test(msg)) return '⏱️ AI kelamaan balas. Coba lagi ya.'
-  if (status >= 500) return '🛠️ Server AI lagi error (gangguan di sisi penyedia). Coba lagi nanti ya.'
-  return `❌ Gagal hubungi AI: ${msg.slice(0, 160)}`
+  if (status >= 500) return '🛠️ Server Aion lagi error (gangguan di sisi mereka). Coba lagi nanti ya.'
+  return `❌ Gagal hubungi Aion: ${msg.slice(0, 160)}`
 }
 
 /* ══════════════════════ alur chat inti ══════════════════════ */
@@ -390,21 +356,16 @@ async function runChat(ctx, text) {
 }
 
 /* ══════════════════════ teks bantuan ══════════════════════ */
-function missingKeyMsg(conf, p = '.') {
+function missingKeyMsg(conf) {
   return (
-    '⚠️ *API KEY AI BELUM DIISI*\n\n' +
-    `Provider aktif: *${conf.provider}*${conf.model ? ` (${conf.model})` : ''}\n\n` +
-    `⚡ *Paling gampang:* kirim \`${p}setaikey <apikey>\` di sini.\n` +
-    '(key disimpan lokal, GAK ikut ke GitHub, langsung kepakai)\n\n' +
+    '⚠️ *API KEY AION BELUM DIISI*\n\n' +
+    `Model: \`${conf.model}\`\n\n` +
     'Ambil key GRATIS (tanpa kartu kredit):\n' +
-    '> 🎭 *Aion Labs (uncensored)* — https://www.aionlabs.ai/app/api-keys/\n' +
-    '> 🔹 Gemini — https://aistudio.google.com/apikey\n' +
-    '> 🔹 Groq — https://console.groq.com/keys\n' +
-    '> 🔹 OpenRouter — https://openrouter.ai/keys\n\n' +
-    '*Cara isi manual (pilih salah satu):*\n' +
-    '> `src/data/ai.json` → `{ "apikey": "..." }` (gak ikut ke GitHub)\n' +
-    '> env `AICHAT_API_KEY` (Pterodactyl: tab *Startup*) — paling anti-hilang\n' +
-    '> `config.js` → blok `aiChat.apikey`'
+    '> 🎭 https://www.aionlabs.ai/app/api-keys/\n\n' +
+    '*Cara isi (pilih salah satu):*\n' +
+    '> `config.js` → blok `aiChat.apikey`\n' +
+    '> env `AICHAT_API_KEY` (Pterodactyl: tab *Startup*)\n' +
+    '> file `src/data/ai.json` → `{ "apikey": "..." }` (gak ikut ke GitHub)'
   )
 }
 
@@ -414,14 +375,13 @@ function helpText(p, conf) {
     ? `Kuota harian: *${nfmt(used)}* / ${nfmt(conf.dailyTokenLimit)} token\n`
     : ''
   return (
-    '🤖 *AI CHAT*\n\n' +
-    `Provider: *${conf.provider}*${conf.model ? ` · ${conf.model}` : ''}\n` +
+    '🤖 *AI CHAT — Aion Labs*\n\n' +
+    `Model: \`${conf.model}\` (uncensored)\n` +
     `Aku inget riwayat obrolan kita (maks ${conf.maxHistory} pesan).\n` +
     kuota +
     '\n*Cara pakai:*\n' +
     `> ${p}bot <pertanyaan>\n` +
     `> ${p}bot reset — hapus riwayat\n` +
-    `> ${p}setaikey — ganti API key AI (owner)\n` +
     (conf.mentionTrigger ? '> tag nomor aku langsung di grup\n\n' : '\n') +
     '*Contoh:*\n' +
     `> ${p}bot jelasin apa itu lubang hitam singkat`
@@ -443,7 +403,7 @@ async function handler(ctx) {
     return ctx.reply('🧹 Oke, riwayat obrolan kita udah aku lupain. Mulai dari awal lagi ya!')
   }
 
-  if (!conf.apikey) return ctx.reply(missingKeyMsg(conf, p))
+  if (!conf.apikey) return ctx.reply(missingKeyMsg(conf))
 
   await ctx.react('🕕')
   const r = await runChat(ctx, text)
@@ -530,5 +490,5 @@ export { pluginConfig as config, handler }
 // Buat pengujian internal (loader cuma baca `config` + `handler`).
 export const _internals = {
   cfg, askModel, runChat, humanError, isLimitErr, limitMsg,
-  usageToday, addUsage, USAGE_FILE, PROVIDERS,
+  usageToday, addUsage, USAGE_FILE, AION,
 }

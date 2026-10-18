@@ -133,35 +133,24 @@ export default {
 
   /* ════════════════════════════════════════════
    *  AI CHAT (.bot) — chat AI yang INGET riwayat obrolan
-   *  Provider OpenAI-compatible. Yang GRATIS (tanpa kartu):
-   *    • gemini      → https://aistudio.google.com/apikey
-   *    • groq        → https://console.groq.com/keys
-   *    • openrouter  → https://openrouter.ai/keys   (model ":free")
-   *  Berbayar murah: deepseek → https://platform.deepseek.com
-   *  LOKAL / TANPA SENSOR (paling bebas — di-host sendiri):
-   *    • ollama  → OpenAI-compat di http://127.0.0.1:11434/v1
-   *                model: dolphin3:8b, huihui_ai/qwen3-abliterated:14b
-   *  VENICE AI (model tanpa sensor, BUTUH KREDIT di akun Venice):
-   *    • venice  → https://api.venice.ai/api/v1
-   *                model: venice-uncensored-1-2 ("most_uncensored")
-   *  CATATAN: provider hosted (Gemini/Groq/OpenRouter/Venice) TETAP punya
-   *  policy sendiri; bebas-sensor total cuma dijamin kalau model dijalankan
-   *  sendiri (lokal).
-   *  `apikey` SENGAJA DIKOSONGKAN — tiap orang isi punya sendiri.
-   *  `apikey` DITANAM (pilihan owner — repo ini emang publik & mau langsung
-   *  jalan tanpa setup). Tetap bisa ditimpa tanpa nyentuh file ini:
+   *  PROVIDER: **Aion Labs** — https://api.aionlabs.ai/v1 (OpenAI-compatible)
+   *    • Model default: aion-labs/aion-rp-llama-3.1-8b
+   *      ("completely uncensored", jago roleplay/ngobrol)
+   *    • Free tier: 15 req/menit · 20.000 token/hari (tanpa kartu kredit)
+   *    • Ambil key GRATIS: https://www.aionlabs.ai/app/api-keys/
+   *  `apikey` DITANAM (pilihan owner — repo ini publik & mau langsung jalan
+   *  tanpa setup). Tetap bisa ditimpa tanpa nyentuh file ini:
    *    • env AICHAT_API_KEY (paling diutamakan)
    *    • file `src/data/ai.json` (GITIGNORED) → { "apikey": "..." }
    *  Persona/prompt: file `data/ai-persona.txt` atau command `.setpersona`.
    * ════════════════════════════════════════════ */
   aiChat: {
     enabled: true,        // matiin total kalau lagi gak mau pakai
-    provider: 'aion',     // aion | venice | gemini | groq | openrouter | deepseek | kilocode | ollama | custom
     apikey: 'alv2_3ZgYP4bG9uvT4JpEYyxvt_NgkJM_-DlnFe0pb2r9rag', // Aion Labs (free tier 20K token/hari)
-    model: 'aion-labs/aion-rp-llama-3.1-8b', // kosong → default provider (lihat PROVIDERS di plugin)
-    baseUrl: '',          // kosong → default provider
+    model: 'aion-labs/aion-rp-llama-3.1-8b', // alternatif: aion-labs/aion-2.0
+    baseUrl: '',          // kosong → default Aion (jangan diubah kecuali tau)
     maxHistory: 20,       // jumlah pesan riwayat per user (user + assistant)
-    dailyTokenLimit: 20000, // kuota token/hari (free tier Aion = 20K). 0 = tanpa batas peringatan
+    dailyTokenLimit: 20000, // kuota token/hari (free tier Aion = 20K). 0 = matiin peringatan
     timeoutMs: 60_000,    // batas tunggu balasan AI (ms)
     mentionTrigger: true, // balas otomatis kalau nomor bot di-tag (tanpa prefix)
     systemPrompt: '',     // kosong → pakai data/ai-persona.txt / default
