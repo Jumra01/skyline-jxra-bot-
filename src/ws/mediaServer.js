@@ -38,7 +38,7 @@ function mimeFromUrl(u) {
   return EXT_MIME[ext] || null;
 }
 
-export function createMediaWsServer({ port = 8090, path = '/wss/audio' } = {}) {
+export function createMediaWsServer({ port = 8090, path = '/wss/audio', host = '127.0.0.1', token = '' } = {}) {
   const server = http.createServer((req, res) => {
     res.writeHead(426, { 'Content-Type': 'text/plain' });
     res.end('Upgrade required');
@@ -49,6 +49,13 @@ export function createMediaWsServer({ port = 8090, path = '/wss/audio' } = {}) {
   wss.on('connection', (ws, req) => {
     const u = new URL(req.url, 'http://localhost');
     const sourceUrl = u.searchParams.get('url');
+
+    // Token gate (opsional) — cegah server dipakai jadi proxy terbuka.
+    if (token && u.searchParams.get('token') !== token) {
+      logger.warn('[MediaWS] reject: token salah/kosong');
+      ws.close(4003, 'invalid token');
+      return;
+    }
 
     if (!sourceUrl) {
       logger.warn('[MediaWS] reject: missing url param');
@@ -99,6 +106,6 @@ export function createMediaWsServer({ port = 8090, path = '/wss/audio' } = {}) {
     })();
   });
 
-  server.listen(port, () => logger.info(`🌐 MediaWS aktif di :${port}${path}`));
+  server.listen(port, host, () => logger.info(`🌐 MediaWS aktif di ${host}:${port}${path}${token ? ' (token aktif)' : ''}`));
   return { server, wss };
 }

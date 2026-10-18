@@ -137,6 +137,13 @@ export default {
   wsWorkerUrl: 'wss://audio.jhx.my.id/wss/audio',
   wsPort: 8090,
   wsPath: '/wss/audio',
+  // Host bind server MediaWS lokal.
+  // '127.0.0.1' = cuma bisa diakses dari dalam VPS (aman, anti open-proxy/SSRF).
+  // Set '0.0.0.0' HANYA kalau memang perlu diakses dari luar + sudah ada firewall.
+  wsHost: '127.0.0.1',
+  // Token opsional buat client yang connect (`?token=...`).
+  // Kosong = tanpa token (asumsi host sudah dibatasi ke localhost).
+  wsToken: '',
 
   /* ════════════════════════════════════════════
    *  ANTI-SPAM & COOLDOWN

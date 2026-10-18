@@ -57,7 +57,7 @@ function setupOwnerMetaHandler(client) {
 
       const staffEntry = getStaffEntry(senderNumber, lidJid)
 
-      logger.info({ primary, alt, lidJid, pnJid, senderNumber, matched: !!staffEntry }, 'meta: debug owner check')
+      logger.debug({ primary, alt, senderNumber, matched: !!staffEntry }, 'meta: cek owner')
 
       if (staffEntry?.role !== 'owner') {
         logger.warn(`meta: ditolak — +${senderNumber || lidJid || 'unknown'} bukan owner`)
@@ -187,7 +187,9 @@ async function main() {
 
   createMediaWsServer({
     port: Number(config.wsPort || 8090),
-    path: config.wsPath || '/wss/audio'
+    path: config.wsPath || '/wss/audio',
+    host: config.wsHost || '127.0.0.1',
+    token: config.wsToken || ''
   })
 
   setupHotReload(client)
