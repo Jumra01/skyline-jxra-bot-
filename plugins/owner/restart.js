@@ -4,26 +4,22 @@
  * Hargai sebagaimana u mau dihargai.
  * restart.js — Matikan & nyalakan ulang bot (owner).
  *
- * Tiga jalur, urut prioritas:
- *   0) PANEL PTERODACTYL (config.panel / env PTERO_*) → jalur utama kalau
- *      bot deploy di panel: panggil Client API
- *      `POST /api/client/servers/{id}/power` (signal: restart|start) →
- *      wings nge-restart container-nya. Ini SATU-SATUNYA cara restart
- *      yang bener di panel — respawn manual dari dalam gak bakal selamat
- *      karena begitu PID utama mati wings ikut bunuh semua anaknya.
- *   1) Dijalankan PM2 (terdeteksi NODE_APP_INSTANCE / pm_id / pm_log_path)
- *      → kirim SIGINT ke diri sendiri → sky.js shutdown rapi
- *        (disconnect WA + stopHotReload) → exit(0) → PM2 autorestart.
- *      → owner bilang gak pakai PM2, cabang ini cuma fallback.
- *   2) Manual (`node sky.js` / `npm run dev`) → respawn proses baru:
- *      → spawn restarter detached DULU (sebelum proses dimatikan!) dan
- *        tunggu event 'spawn' — kalau gagal, BATAL restart, bot tetap hidup.
- *      → restarter nunggu proses lama mati (poll kill(pid,0), max 15s),
- *        baru bunuh wrapper `--watch`, lalu spawn `node sky.js` baru.
+ * Alur sama kayak skyline-md: react → balas info box → tunggu 2 detik →
+ * spawn proses baru (detached) → matiin proses lama.
  *
- * Kenapa gak cukup `process.exit(0)` polos (sudah dibuktikan tes):
- *   • `node --watch` (npm run dev) TIDAK nge-restart kalau child exit —
- *     dia cuma idle nunggu file berubah → bot mati selamanya.
+ * Yang beda dari versi aslinya (semua gak kelihatan dari chat, tapi
+ * nolong bot gak mati permanen):
+ *   • `node sky.js` (entry repo ini), bukan `index.js`.
+ *   • spawn DICEK dulu lewat event 'spawn'/'error' — `spawn` gagal itu
+ *     ASYNC, try/catch biasa gak nangkep. Kalau gagal → batal restart,
+ *     bot tetap hidup. (Versi skyline-md: spawn gagal = bot mati selamanya.)
+ *   • restarter nunggu proses lama beneran mati (poll kill(pid,0)) sebelum
+ *     spawn, biar gak dobel instance kalau shutdown lambat.
+ *   • bunuh wrapper `node --watch` lama (kondisi `npm run dev`) — kalau
+ *     gak, watcher-nya idel terus dan kamu punya 2 bot nyala.
+ *     `process.exit(0)` polos juga gak nge-restart di `node --watch`.
+ *   • shutdown via SIGINT dulu biar sky.js disconnect WA + stopHotReload
+ *     rapi, baru exit(0). (skyline-md: `process.exit(0)` langsung.)
  *
  * Repo root dihitung dari lokasi file ini — jalan di mana pun cwd.
  */
@@ -31,8 +27,6 @@ import { spawn } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import axios from 'axios'
-import config from '../../config.js'
 import { logger } from '../../core/logger.js'
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url))
@@ -40,9 +34,9 @@ const ENTRY = join(ROOT, 'sky.js')
 
 const pluginConfig = {
   name: 'restart',
-  alias: ['reboot', 'restartbot'],
+  alias: ['reset', 'reboot', 'restartbot'],
   category: 'owner',
-  description: 'Restart bot / server panel (owner)',
+  description: 'Restart bot process (real restart)',
   usage: '.restart',
   example: '.restart',
   isOwner: true,
@@ -51,72 +45,8 @@ const pluginConfig = {
   isPrivate: false,
   isAdmin: false,
   isBotAdmin: false,
-  cooldown: 15,
+  cooldown: 30,
   isEnabled: true,
-}
-
-/* ══════════ panel Pterodactyl — Client API ══════════ */
-function pteroHeaders(key) {
-  return {
-    Authorization: `Bearer ${key}`,
-    'Content-Type': 'application/json',
-    Accept: 'Application/vnd.pterodactyl.v1+json',
-  }
-}
-
-/** Config panel (config.panel, bisa di-override env buat deploy panel). */
-function panelCfg() {
-  return {
-    domain: String(process.env.PTERO_DOMAIN || config.panel?.domain || '').replace(/\/+$/, ''),
-    apikey: String(process.env.PTERO_APIKEY || config.panel?.apikey || '').trim(),
-    serverid: String(process.env.PTERO_SERVERID || config.panel?.serverid || '').trim(),
-  }
-}
-
-function panelReady() {
-  const p = panelCfg()
-  return Boolean(p.domain && p.apikey && p.serverid)
-}
-
-/** 'running' | 'offline' | null (gak kebaca). */
-async function panelState() {
-  const p = panelCfg()
-  try {
-    const { data } = await axios.get(`${p.domain}/api/client/servers/${p.serverid}/resources`, {
-      headers: pteroHeaders(p.apikey),
-      timeout: 12000,
-      validateStatus: () => true,
-    })
-    return data?.attributes?.current_state || null
-  } catch (e) {
-    logger.error({ err: String(e?.message || e) }, '[Restart] cek state server panel gagal')
-    return null
-  }
-}
-
-/** Kirim sinyal power. Balas { ok, status } — ok = panel terima (2xx). */
-async function panelPower(signal) {
-  const p = panelCfg()
-  try {
-    const res = await axios.post(
-      `${p.domain}/api/client/servers/${p.serverid}/power`,
-      { signal },
-      { headers: pteroHeaders(p.apikey), timeout: 15000, validateStatus: () => true }
-    )
-    logger.info({ status: res.status, signal }, '[Restart] respons Client API power')
-    return { ok: res.status >= 200 && res.status < 300, status: res.status }
-  } catch (e) {
-    logger.error({ err: String(e?.message || e) }, '[Restart] kirim sinyal power panel gagal')
-    return { ok: false, status: 0, err: String(e?.message || e) }
-  }
-}
-
-function panelErrHint(status, err) {
-  if (status === 401 || status === 403)
-    return 'API key salah, atau gak dicentang izin *Power* + *Read Info*.'
-  if (status === 404) return 'Server ID salah, atau servernya udah dihapus.'
-  if (status === 422) return 'Panel nolak signal — cek lagi `serverid` di config.'
-  return err ? `Gak bisa nyambung ke panel:\n\`${err}\`` : `Panel balas HTTP ${status}.`
 }
 
 /* ══════════ deteksi supervisor ══════════ */
@@ -163,7 +93,7 @@ function findWatchPid() {
  *   argv[3] repo root
  *   argv[4] pid proses bot lama (nunggu sampe beneran mati)
  * Balasan Promise<boolean>: true = restarter sudah hidup, false = GAGAL
- * (kamu kasih error event — `spawn` gagal itu ASYNC, try/catch biasa gak nangkep).
+ * (kamu kasih error event — `spawn` gagal itu ASYNC, try/catch gak nangkep).
  */
 function scheduleRespawn(watchPid, delayMs, parentPid = process.pid, execPath = process.execPath) {
   const helper = `
@@ -245,102 +175,45 @@ function shutdown(reason) {
 }
 
 async function handler(ctx) {
-  const panel = panelCfg()
-  const filled = [panel.domain, panel.apikey, panel.serverid].filter(Boolean).length
-  if (filled > 0 && filled < 3) {
-    logger.warn(
-      '[Restart] config.panel keisi SEBAGIAN (' +
-        ['domain', 'apikey', 'serverid'].filter((k) => !panel[k]).join(', ') +
-        ' belum) — .restart pakai jalur lama.'
-    )
-  }
-
-  /* ── Jalur 0: PANEL PTERODACTYL ──
-   * Owner deploy di panel & gak pakai PM2. Dari dalam container kita
-   * gak bisa respawn diri — begitu PID utama mati wings ikut bunuh
-   * anaknya. Jadi minta panel yang nge-restart container-nya. */
-  if (panelReady()) {
-    const state = await panelState()
-    const signal = state === 'running' ? 'restart' : 'start'
-
-    await ctx.react('♻️')
-    await ctx.reply(
-      '♻️ *RESTART SERVER PANEL*\n\n' +
-        `Panel: *${panel.domain}*\n` +
-        `Server: *${panel.serverid}*\n` +
-        `Action: *${signal}*\n\n` +
-        'Server panel lagi direstart — bot bakal mati sebentar, terus ' +
-        'nyala lagi otomatis lewat startup command panel.\n' +
-        'Sesi WhatsApp gak bakal ilang.'
-    )
-
-    // kasih pesan keburu terkirim sebelum container dibunuh wings
-    await new Promise((r) => setTimeout(r, 1500))
-
-    const r = await panelPower(signal)
-    if (!r.ok) {
-      // JANGAN shutdown — panel nolak, bot harus tetap hidup
-      return ctx.reply(
-        '❌ *GAGAL RESTART PANEL*\n\n' +
-          panelErrHint(r.status, r.err) +
-          '\n\nBot tetap jalan. Kamu bisa restart manual lewat dashboard panel.'
-      )
-    }
-
-    logger.warn(`[Restart] mode panel → sinyal ${signal} diterima wings`)
-    shutdown(`[Restart] mode panel → container diserahkan ke wings (signal=${signal})`)
-    return
-  }
-
-  /* ── Jalur 1: PM2 ── */
   const isPm2 = underPm2()
 
-  // ── Cek dulu, SEBELUM janjiin restart. Gagal = bot tetap hidup. ──
-  if (!isPm2) {
-    if (!existsSync(ENTRY)) {
-      return ctx.reply(
-        '❌ `sky.js` gak ketemu di `' + ROOT + '` — bot jadi TIDAK di-restart (biar gak mati permanen).'
-      )
-    }
-    const ok = await scheduleRespawn(findWatchPid(), 800, process.pid)
-    if (!ok) {
-      return ctx.reply(
-        '❌ Gagal menyiapkan restarter — bot TIDAK jadi di-restart (biar gak mati permanen).\n' +
-          'Jalankan ulang manual: `npm start` / `npm run dev`.'
-      )
-    }
-  }
-
-  await ctx.react('♻️')
+  await ctx.react('🔄')
   await ctx.reply(
-    '♻️ *RESTART BOT*\n\n' +
-      `Mode: *${isPm2 ? 'PM2 (autorestart)' : 'respawn manual'}*\n` +
-      'Bot akan mati sebentar, lalu nyambung lagi dalam beberapa detik.\n' +
-      'Sesi WhatsApp gak bakal ilang.'
+    '🔄 *ʀᴇsᴛᴀʀᴛɪɴɢ ʙᴏᴛ...*\n\n' +
+      `╭┈┈⬡「 📊 *ɪɴꜰᴏ* 」\n` +
+      `┃ ⏰ Time: ${new Date().toLocaleTimeString('id-ID')}\n` +
+      `┃ 🔧 Method: ${isPm2 ? 'PM2 Autorestart' : 'Process Spawn'}\n` +
+      `┃ 📦 PID: ${process.pid}\n` +
+      `╰┈┈⬡\n\n` +
+      `> Bot akan restart dalam 2 detik...\n` +
+      `> Proses mungkin memakan waktu 10-30 detik`
   )
 
   // kasih pesan keburu terkirim sebelum proses mati
-  await new Promise((r) => setTimeout(r, 1500))
+  await new Promise((r) => setTimeout(r, 2000))
 
-  shutdown(
-    isPm2
-      ? '[Restart] mode PM2 → SIGINT, serahin ke PM2 autorestart'
-      : `[Restart] mode respawn manual (watchPid=${findWatchPid() || 'tanpa'}) → SIGINT`
-  )
+  // Jalur PM2: keluar rapi, PM2 yang nyalain lagi. Gak usah spawn (nanti dobel).
+  if (isPm2) return shutdown('[Restart] PM2 → SIGINT, serahin ke PM2 autorestart')
+
+  // Cek dulu SEBELUM matiin diri — spawn gagal = bot jangan sampai mati permanen.
+  if (!existsSync(ENTRY)) {
+    return ctx.reply(
+      '❌ `sky.js` gak ketemu di `' + ROOT + '` — bot jadi TIDAK di-restart (biar gak mati permanen).'
+    )
+  }
+  const watchPid = findWatchPid()
+  const ok = await scheduleRespawn(watchPid, 800, process.pid)
+  if (!ok) {
+    return ctx.reply(
+      '❌ Gagal bikin proses baru — bot TIDAK jadi di-restart (biar gak mati permanen).\n' +
+        'Jalankan ulang manual: `npm start` / `npm run dev`.'
+    )
+  }
+
+  shutdown(`[Restart] respawn manual (watchPid=${watchPid || 'tanpa'}) → SIGINT`)
 }
 
 export { pluginConfig as config, handler }
 
 // buat pengujian (gak dipakai loader — loader cuma baca `config` + `handler`)
-export const _internals = {
-  underPm2,
-  findWatchPid,
-  readProc,
-  scheduleRespawn,
-  panelCfg,
-  panelReady,
-  panelState,
-  panelPower,
-  ROOT,
-  ENTRY,
-}
+export const _internals = { underPm2, findWatchPid, readProc, scheduleRespawn, ROOT, ENTRY }
