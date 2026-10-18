@@ -132,6 +132,25 @@ export default {
   },
 
   /* ════════════════════════════════════════════
+   *  AI CHAT (`.bot`) — model FREE OpenCode Zen
+   *  Dipakai plugins/ai/bot.js.
+   *  Model `*-free` cuma mau dipanggil dari DALAM
+   *  OpenCode (403 FreeTierError kalau dari luar),
+   *  jadi bot manggil API lokal `opencode api` —
+   *  gratis $0, TIDAK butuh API key sama sekali.
+   *  Ganti model via `model`/`fallbackModels`
+   *  atau env OPENCODE_AI_MODEL.
+   * ════════════════════════════════════════════ */
+  ai: {
+    enabled: true,
+    model: 'deepseek-v4.1-flash-free',
+    fallbackModels: ['glm-5.3-flash-free', 'mimo-v2.6-flash-free', 'big-pickle'],
+    maxHistory: 12,      // jumlah pesan riwayat per user
+    maxChars: 12000,     // batas panjang prompt ke model
+    timeoutMs: 120_000,  // batas tunggu balasan model (ms)
+  },
+
+  /* ════════════════════════════════════════════
    *  WORKER / WEBSOCKET (media)
    * ════════════════════════════════════════════ */
   wsWorkerUrl: 'wss://audio.jhx.my.id/wss/audio',
