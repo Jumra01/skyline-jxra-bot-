@@ -87,6 +87,68 @@ const SC_MAP = {
 const toSmallCaps = (t) => [...String(t).toLowerCase()].map((c) => SC_MAP[c] || c).join('')
 const trunc = (s, n) => (String(s).length > n ? `${String(s).slice(0, n - 1)}…` : String(s))
 
+/* ══════════════════════════════════════════════════════════════
+ *  NILAI MILIK USER (apikey dll) — disimpan sebelum pull,
+ *  dibalikin setelah config.js ditimpa versi GitHub.
+ *
+ *  Kenapa perlu: config.js di GitHub sengaja KOSONG (tiap pengguna
+ *  isi punya mereka sendiri). Kalau dibiarkan, `git pull` bakal
+ *  DITOLAK tiap kali config.js berubah di upstream → klien kejebak
+ *  dan blok config fitur baru gak pernah masuk.
+ * ══════════════════════════════════════════════════════════════ */
+const KEEP_FIELDS = [
+  { block: 'omniedit', key: 'apikey' },
+  { block: 'spotify', key: 'clientId' },
+  { block: 'spotify', key: 'clientSecret' },
+]
+const KEEP_BAK = 'config.js.update.bak'
+
+/** Cari rentang `{ ... }` milik blok bernama `name`. */
+function findBlock(src, name) {
+  const at = src.search(new RegExp(`(^|\\n)[ \\t]*${name}[ \\t]*:[ \\t]*\\{`))
+  if (at < 0) return null
+  const open = src.indexOf('{', at)
+  let depth = 0
+  for (let i = open; i < src.length; i++) {
+    const c = src[i]
+    if (c === '{') depth++
+    else if (c === '}') {
+      depth--
+      if (depth === 0) return { open, close: i }
+    }
+  }
+  return null
+}
+
+/** Baca nilai KEEP_FIELDS dari sumber config.js (cuma yang keisi). */
+function readKeep(src) {
+  const out = []
+  for (const { block, key } of KEEP_FIELDS) {
+    const b = findBlock(src, block)
+    if (!b) continue
+    const m = src
+      .slice(b.open, b.close)
+      .match(new RegExp(`(^|[\\s{,])${key}[ \\t]*:[ \\t]*(['"\`])([^'"\`]*)\\2`))
+    if (m && m[3]) out.push({ block, key, value: m[3] })
+  }
+  return out
+}
+
+/** Tulis balik nilai KEEP_FIELDS ke sumber config.js baru. */
+function writeKeep(src, keeps) {
+  let out = src
+  for (const { block, key, value } of keeps) {
+    const b = findBlock(out, block)
+    if (!b) continue // bloknya gak ada di config baru → biarin, nanti ke-lapor
+    const seg = out.slice(b.open, b.close)
+    const re = new RegExp(`(^|[\\s{,])(${key}[ \\t]*:[ \\t]*)(['"\`])([^'"\`]*)\\3`)
+    if (!re.test(seg)) continue // field-nya gak ada → biarin
+    const nseg = seg.replace(re, (_f, pre, decl, q) => `${pre}${decl}${q}${value}${q}`)
+    out = out.slice(0, b.open) + nseg + out.slice(b.close)
+  }
+  return out
+}
+
 function card(emoji, title, lines) {
   const out = [`╭─〔 ${emoji} \`${toSmallCaps(title)}\` 〕─⬣`]
   for (const line of lines) out.push(line === '' ? '│' : `│ ${line}`)
@@ -772,6 +834,24 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
     return
   }
 
+  // ── Simpen nilai milik user (apikey dll) dulu ──
+  // config.js lokal pasti beda dari GitHub (user ngisi apikey sendiri),
+  // dan `pull --ff-only` bakal NOLAK kalau file tracked berubah lokal.
+  // Jadi: backup → balikin ke versi HEAD → pull → balikin nilainya.
+  let keeps = []
+  let cfgReset = false
+  try {
+    const srcNow = await fs.readFile('config.js', 'utf8')
+    keeps = readKeep(srcNow)
+    const dirty = (await git(['status', '--porcelain', '--', 'config.js'])).out
+    if (dirty) {
+      await fs.writeFile(KEEP_BAK, srcNow, 'utf8')          // jaring pengaman
+      const head = await git(['show', 'HEAD:config.js'])    // versi commit lokal
+      await fs.writeFile('config.js', head.out + '\n', 'utf8')
+      cfgReset = true
+    }
+  } catch {}
+
   // Pull (--ff-only: tolak kalau ada editan lokal di panel — jangan edit
   // file langsung di server, editnya di lokal lalu push)
   let pullErr = null
@@ -779,6 +859,15 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
     await git(['pull', '--ff-only', 'origin', BRANCH], 120_000)
   } catch (err) {
     pullErr = err
+  }
+
+  // Pull gagal → config.js tadi udah dibalikin ke versi HEAD, tapi nilai
+  // user belum tentu balik. Balikin sekarang juga biar gak ada yang hilang.
+  if (pullErr && keeps.length) {
+    try {
+      const cur = await fs.readFile('config.js', 'utf8')
+      await fs.writeFile('config.js', writeKeep(cur, keeps), 'utf8')
+    } catch {}
   }
 
   if (pullErr) {
@@ -808,6 +897,23 @@ ${gitErrDetail(pullErr).map((l) => row(hesc(l))).join('')}`,
       `🕒 ${nowWIB()}`
     ])
     return
+  }
+
+  // ── Balikin nilai milik user ke config.js hasil update ──
+  const kept = []
+  const lost = []
+  if (keeps.length) {
+    try {
+      const fresh = await fs.readFile('config.js', 'utf8')
+      await fs.writeFile('config.js', writeKeep(fresh, keeps), 'utf8')
+      const verify = readKeep(await fs.readFile('config.js', 'utf8'))
+      for (const k of keeps) {
+        const ok = verify.some((v) => v.block === k.block && v.key === k.key && v.value === k.value)
+        ;(ok ? kept : lost).push(`${k.block}.${k.key}`)
+      }
+    } catch {
+      for (const k of keeps) lost.push(`${k.block}.${k.key}`)
+    }
   }
 
   const newHead = (await git(['rev-parse', 'HEAD'])).out
@@ -889,17 +995,29 @@ ${gitErrDetail(pullErr).map((l) => row(hesc(l))).join('')}`,
     ].filter(Boolean),
     stats: [
       { k: '📦 npm install', v: installed ? 'sukses' : installErr ? 'GAGAL' : 'lewati', cls: installed ? 'ok' : installErr ? 'bad' : 'dim' },
+      kept.length
+        ? { k: '🔑 apikey', v: `${kept.length} dipertahankan`, cls: 'ok' }
+        : lost.length
+          ? { k: '🔑 apikey', v: `${lost.length} GAGAL balik`, cls: 'bad' }
+          : null,
       needRestart
         ? { k: '🔁 aksi', v: 'RESTART di panel', cls: 'bad' }
         : onlyPlugins
           ? { k: '⚡ aksi', v: 'hot reload · gak perlu restart', cls: 'ok' }
           : { k: '✅ aksi', v: 'selesai', cls: 'ok' }
-    ],
-    notes: needRestart
-      ? [{ t: '🔁 Ada file <b>core/lib/handlers</b> berubah —<br><b>RESTART bot di panel</b> biar kebaca.', cls: 'warn' }]
-      : onlyPlugins
-        ? [{ t: '⚡ Cuma <b>plugins/</b> — ke-hot-reload<br>sendiri, gak perlu restart.' }]
-        : [{ t: '✅ Update bersih, gak ada<br>perubahan berisiko.' }],
+    ].filter(Boolean),
+    notes: [
+      lost.length
+        ? { t: `🔑 <b>${lost.length} nilai user gak kebalikin</b> —<br>nilai lamanya ada di <b>${hesc(KEEP_BAK)}</b>.`, cls: 'bad' }
+        : cfgReset
+          ? { t: '🔑 apikey kamu disimpan dulu,<br>terus dibalikin ke config baru.' }
+          : null,
+      needRestart
+        ? { t: '🔁 Ada file <b>core/lib/handlers</b> berubah —<br><b>RESTART bot di panel</b> biar kebaca.', cls: 'warn' }
+        : onlyPlugins
+          ? { t: '⚡ Cuma <b>plugins/</b> — ke-hot-reload<br>sendiri, gak perlu restart.' }
+          : { t: '✅ Update bersih, gak ada<br>perubahan berisiko.' }
+    ].filter(Boolean),
     buttons: [{ t: '🕒 ' + nowWIB(), cls: '' }]
   }, [
     '*UPDATE SELESAI* ✅',
@@ -914,6 +1032,11 @@ ${gitErrDetail(pullErr).map((l) => row(hesc(l))).join('')}`,
     ...section('📝 *LAINNYA*', groups.other),
     ...fileSection(files),
     installed ? '📦 npm install *sukses*' : installErr ? '⚠️ npm install *gagal* (cek log)' : '📦 npm install *lewati*',
+    kept.length
+      ? `🔑 apikey dipertahankan (${kept.join(', ')})`
+      : lost.length
+        ? `⚠️ apikey GAGAL balik — cek \`${KEEP_BAK}\``
+        : '',
     needRestart
       ? '🔁 *RESTART* diperlukan (core/lib/handlers)'
       : onlyPlugins
@@ -925,3 +1048,6 @@ ${gitErrDetail(pullErr).map((l) => row(hesc(l))).join('')}`,
 }
 
 export { pluginConfig as config, handler }
+
+// buat pengujian (loader cuma baca `config` + `handler`)
+export const _internals = { KEEP_FIELDS, KEEP_BAK, findBlock, readKeep, writeKeep }
