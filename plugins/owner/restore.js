@@ -19,12 +19,14 @@
  * Thumbnail yang isinya cuma default (user belum pernah ganti) sengaja
  * DILEWAT — biar gak ngebatalin update default dari repo.
  *
+ * Backup yang BERHASIL dipulihkan ikut DIHAPUS (biar gak numpuk);
+ * yang gagal tetap disimpan buat dicoba ulang. `.updatesc` berikutnya
+ * bikin backup baru lagi dari nilai yang ada sekarang.
+ *
  * Catatan: balikin apikey di config.js butuh RESTART biar kebaca bot.
  */
 import { onRichReply } from '../../handlers/messageHandler.js'
-import {
-  KEEP_FILES, KEEP_BAK, KEEP_BAK_DIR, backupStatus, restoreFromBackup
-} from '../../lib/keepSettings.js'
+import { backupStatus, restoreFromBackup } from '../../lib/keepSettings.js'
 
 const SC_MAP = {
   a: 'ᴀ', b: 'ʙ', c: 'ᴄ', d: 'ᴅ', e: 'ᴇ', f: 'ꜰ', g: 'ɢ', h: 'ʜ', i: 'ɪ',
@@ -86,17 +88,21 @@ async function act(ctx, which) {
   const r = await restoreFromBackup(spec)
   const total = r.kept.length + r.assetsKept.length
   const gagal = r.lost.length + r.assetsLost.length
+  const bersih = (r.cleanedConfig ? 1 : 0) + r.cleanedAssets.length
 
-  const lines = ['', '🔑 *APIKEY / NILAI CONFIG*', r.kept.length ? r.kept.map((k) => `  ✅ \`${k}\``).join('\n') || '  —' : '  — (gak dipulihkan)', '', '🖼️ *THUMBNAIL*', r.assetsKept.length ? r.assetsKept.map((f) => `  ✅ \`${f.split('/').pop()}\``).join('\n') : '  — (gak dipulihkan)']
+  const lines = ['', '🔑 *APIKEY / NILAI CONFIG*', r.kept.length ? r.kept.map((k) => `  ✅ \`${k}\``).join('\n') : '  — (gak dipulihkan)', '', '🖼️ *THUMBNAIL*', r.assetsKept.length ? r.assetsKept.map((f) => `  ✅ \`${f.split('/').pop()}\``).join('\n') : '  — (gak dipulihkan)']
 
-  if (gagal) lines.push('', `⚠️ *${gagal} gagal dipulihkan* — cek \`${KEEP_BAK}\` & \`${KEEP_BAK_DIR}/\``)
+  if (bersih) lines.push('', `🗑️ *${bersih} file backup dihapus* (udah kebalik)`)
+  if (gagal) lines.push('', `⚠️ *${gagal} gagal dipulihkan* — backup-nya TETAP disimpan`, '   buat dicoba ulang nanti.')
   if (total) lines.push('', '♻️ Jalankan *.restart* biar apikey di config kebaca bot.')
 
-  await ctx.reply(card(gagal ? '⚠️' : '✅', total ? 'PULIHAN SELESAI' : 'GAK ADA YANG DIPULIHKAN', [
+  await ctx.reply(card(total ? (gagal ? '⚠️' : '✅') : '📭', total ? 'PULIHAN SELESAI' : 'GAK ADA YANG DIPULIHKAN', [
     `Mode: *${which === 'all' ? 'SEMUA' : which.toUpperCase()}*`,
     ...lines,
     '',
-    `🔐 ${total} setting dipulihkan · ${gagal} gagal`
+    total || gagal
+      ? `🔐 ${total} setting dipulihkan · ${gagal} gagal`
+      : 'Belum ada backup tersimpan.'
   ]))
 
   await ctx.react(gagal ? '⚠️' : '✅')
