@@ -124,8 +124,12 @@ async function handler(ctx) {
 
   if (!apikey) {
     return ctx.reply(
-      '🔑 API key Omni Editor belum diatur.\n' +
-        'Isi blok `omniedit.apikey` di `config.js` (atau set env `OMNI_API_KEY`).'
+      '⚠️ *API KEY ANDA BELUM ADA*\n\n' +
+        'Fitur Omni Editor belum bisa dipakai karena API key belum diisi.\n\n' +
+        `> Silahkan buat API key anda di *${website}*\n\n` +
+        '*Cara isi:*\n' +
+        `> \`config.js\` → blok \`omniedit.apikey\`\n` +
+        `> atau set env \`OMNI_API_KEY\``
     )
   }
 

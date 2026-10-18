@@ -120,9 +120,11 @@ export default {
   /* ════════════════════════════════════════════
    *  OMNI EDITOR (edit gambar AI)
    *  Backend skyline.web.id — dipakai plugins/ai/omniedit.js (.omniedit)
-   *  `apikey` = key admin (aturan lama §4.3 boleh dilanggar atas
-   *  permintaan owner). Bisa di-override via env OMNI_API_KEY /
-   *  OMNI_WEBSITE (utk deploy panel) — kosongkan config kalau pakai env.
+   *  `apikey` SENGAJA DIKOSONGKAN — tiap orang isi punya mereka
+   *  sendiri, dibuat di skyline.web.id. Kalau kosong, `.omniedit`
+   *  nolak & nyuruh bikin key dulu.
+   *  Buat deploy panel, gak perlu edit config — pakai env:
+   *    OMNI_API_KEY / OMNI_WEBSITE
    * ════════════════════════════════════════════ */
   omniedit: {
     website: 'https://skyline.web.id',
