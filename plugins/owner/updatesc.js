@@ -14,6 +14,14 @@
  *   auto             → kalau package.json / package-lock.json ikut berubah,
  *                      jalanin `npm install --omit=dev` sendiri setelah pull.
  *
+ * SETTING MILIK USER: update sengaja dijalankan BERSIH — semua file repo
+ * (kode, nilai default config, thumbnail) ikut versi terbaru. Nilai yang
+ * user isi sendiri (apikey dll) dan thumbnail yang pernah diganti dulu
+ * di-BACKUP ke `config.js.update.bak` + `updatesc-keep.bak/`, lalu
+ * dipulihin lewat fitur terpisah `.restore` (lihat plugins/owner/restore.js)
+ * — jadi script tetap ter-update, settingan bisa dibalikin kapan aja.
+ * Lihat lib/keepSettings.js.
+ *
  * Hasil akhir dirender kartu HTML native (richResponseMessage/unifiedResponse,
  * pola ping2/snake — §9 AGENTS.md) tema chrome biru-silver-putih-hitam;
  * progress & fallback tetap kartu teks.
@@ -35,6 +43,10 @@ import { gunzip } from 'node:zlib'
 import path from 'node:path'
 import os from 'node:os'
 import crypto from 'node:crypto'
+import {
+  KEEP_FILES, KEEP_BAK, KEEP_BAK_DIR,
+  readKeep, saveKeep
+} from '../../lib/keepSettings.js'
 
 const pexec = promisify(execFile)
 const pgunzip = promisify(gunzip)
@@ -87,202 +99,25 @@ const SC_MAP = {
 const toSmallCaps = (t) => [...String(t).toLowerCase()].map((c) => SC_MAP[c] || c).join('')
 const trunc = (s, n) => (String(s).length > n ? `${String(s).slice(0, n - 1)}…` : String(s))
 
-/* ══════════════════════════════════════════════════════════════
- *  NILAI MILIK USER (apikey dll) — disimpan sebelum pull,
- *  dibalikin setelah config.js ditimpa versi GitHub.
- *
- *  Kenapa perlu: config.js di GitHub sengaja KOSONG (tiap pengguna
- *  isi punya mereka sendiri). Kalau dibiarkan, `git pull` bakal
- *  DITOLAK tiap kali config.js berubah di upstream → klien kejebak
- *  dan blok config fitur baru gak pernah masuk.
- * ══════════════════════════════════════════════════════════════ */
-const KEEP_FIELDS = [
-  { block: 'omniedit', key: 'apikey' },
-  { block: 'spotify', key: 'clientId' },
-  { block: 'spotify', key: 'clientSecret' },
-]
-const KEEP_BAK = 'config.js.update.bak'
-
-/* File BINARY punya user yang juga ke-track di git — pas update bakal
- * ketimpa balik ke versi default. (`.setthumb` / `.setreply thumb`
- * nulis langsung ke path ini.) Nama folder sengaja diakhiri `.bak`
- * biar kena rule `*.bak` di .gitignore — gak usah nambah ignore baru. */
-const KEEP_FILES = [
-  'assets/thumb/menu.jpg',
-  'assets/thumb/allmenu.jpg',
-  'assets/thumb/cta-thumb.jpg',
-  'assets/thumb/v4-thumb.jpg',
-]
-const KEEP_BAK_DIR = 'updatesc-keep.bak'
-
-/** Cari rentang `{ ... }` milik blok bernama `name`. */
-function findBlock(src, name) {
-  const at = src.search(new RegExp(`(^|\\n)[ \\t]*${name}[ \\t]*:[ \\t]*\\{`))
-  if (at < 0) return null
-  const open = src.indexOf('{', at)
-  let depth = 0
-  for (let i = open; i < src.length; i++) {
-    const c = src[i]
-    if (c === '{') depth++
-    else if (c === '}') {
-      depth--
-      if (depth === 0) return { open, close: i }
-    }
-  }
-  return null
-}
-
-/** Baca nilai KEEP_FIELDS dari sumber config.js (cuma yang keisi). */
-function readKeep(src) {
-  const out = []
-  for (const { block, key } of KEEP_FIELDS) {
-    const b = findBlock(src, block)
-    if (!b) continue
-    const m = src
-      .slice(b.open, b.close)
-      .match(new RegExp(`(^|[\\s{,])${key}[ \\t]*:[ \\t]*(['"\`])([^'"\`]*)\\2`))
-    if (m && m[3]) out.push({ block, key, value: m[3] })
-  }
-  return out
-}
-
-/** Tulis balik nilai KEEP_FIELDS ke sumber config.js baru. */
-function writeKeep(src, keeps) {
-  let out = src
-  for (const { block, key, value } of keeps) {
-    const b = findBlock(out, block)
-    if (!b) continue // bloknya gak ada di config baru → biarin, nanti ke-lapor
-    const seg = out.slice(b.open, b.close)
-    const re = new RegExp(`(^|[\\s{,])(${key}[ \\t]*:[ \\t]*)(['"\`])([^'"\`]*)\\3`)
-    if (!re.test(seg)) continue // field-nya gak ada → biarin
-    const nseg = seg.replace(re, (_f, pre, decl, q) => `${pre}${decl}${q}${value}${q}`)
-    out = out.slice(0, b.open) + nseg + out.slice(b.close)
-  }
-  return out
-}
-
-/** SHA-1 blob git (`blob <len>\0<isi>`) — biar biner bisa dibanding. */
-function gitBlobSha(buf) {
-  return crypto.createHash('sha1').update(`blob ${buf.length}\0`).update(buf).digest('hex')
-}
-
 /**
- * File ini isinya PERSIS sama kayak versi HEAD? Berarti user belum
- * pernah ngubahnya → biarin versi barunya dari update yang menang.
- * Gak ada git / file belum ada → dianggap "diubah user" (restore).
+ * Laporan soal backup setting milik user di `.updatesc`.
+ * Pemulihan sengaja TIDAK otomatis di sini — biar update bersih masuk
+ * semua; klien tinggal jalanin `.restore` kapan aja.
  */
-async function assetPristine(rel) {
-  try {
-    const headSha = (await git(['rev-parse', `HEAD:${rel}`], 15_000)).out.trim()
-    return gitBlobSha(await fs.readFile(rel)) === headSha
-  } catch {
-    return false
-  }
+function savedStats(saved) {
+  return saved ? [{ k: '🔐 setting', v: `${saved} di-backup`, cls: 'ok' }] : []
 }
 
-/** Backup nilai milik user (config + thumbnail). Balikin { keeps, assets }. */
-async function saveKeep() {
-  const keeps = []
-  const assets = []
-  try {
-    const src = await fs.readFile('config.js', 'utf8')
-    keeps.push(...readKeep(src))
-    if (keeps.length) await fs.writeFile(KEEP_BAK, src, 'utf8') // jaring pengaman
-  } catch {}
-  for (const rel of KEEP_FILES) {
-    try {
-      await fs.access(rel)
-      await fs.mkdir(KEEP_BAK_DIR, { recursive: true })
-      await fs.copyFile(rel, path.join(KEEP_BAK_DIR, path.basename(rel)))
-      assets.push({ rel, pristine: await assetPristine(rel) })
-    } catch {}
-  }
-  return { keeps, assets }
-}
-
-/** Tulis balik nilai milik user. Balikin { kept, lost, assetsKept, assetsLost }. */
-async function restoreKeep(state) {
-  const keeps = state?.keeps ?? []
-  const assets = state?.assets ?? []
-  const kept = []
-  const lost = []
-  const assetsKept = []
-  const assetsLost = []
-
-  // ── nilai di config.js ──
-  if (keeps.length) {
-    try {
-      const fresh = await fs.readFile('config.js', 'utf8')
-      await fs.writeFile('config.js', writeKeep(fresh, keeps), 'utf8')
-      // verifikasi beneran kebaca — jangan percaya tulis aja
-      const verify = readKeep(await fs.readFile('config.js', 'utf8'))
-      for (const k of keeps) {
-        const ok = verify.some((v) => v.block === k.block && v.key === k.key && v.value === k.value)
-        ;(ok ? kept : lost).push(`${k.block}.${k.key}`)
+function savedNote(saved) {
+  return saved
+    ? {
+        t: `🔐 ${saved} setting kamu disimpan dulu sebelum<br>ketimpa. Jalankan <b>.restore</b> buat balikin —<br><b>kode tetap versi terbaru</b>.`
       }
-    } catch {
-      for (const k of keeps) lost.push(`${k.block}.${k.key}`)
-    }
-  }
-
-  // ── file biner punya user (thumbnail) ──
-  for (const { rel, pristine } of assets) {
-    if (pristine) continue // user gak pernah ubah → versi update baru menang
-    const bak = path.join(KEEP_BAK_DIR, path.basename(rel))
-    try {
-      await fs.mkdir(path.dirname(rel), { recursive: true })
-      await fs.copyFile(bak, rel)
-      const sama = gitBlobSha(await fs.readFile(rel)) === gitBlobSha(await fs.readFile(bak))
-      ;(sama ? assetsKept : assetsLost).push(rel)
-    } catch {
-      assetsLost.push(rel)
-    }
-  }
-
-  return { kept, lost, assetsKept, assetsLost }
+    : null
 }
 
-/** Baris statistik "apikey / thumbnail dipertahankan" buat kartu hasil. */
-function keepStats(kept, lost, assetsKept, assetsLost) {
-  return [
-    kept.length
-      ? { k: '🔑 apikey', v: `${kept.length} dipertahankan`, cls: 'ok' }
-      : lost.length
-        ? { k: '🔑 apikey', v: `${lost.length} GAGAL balik`, cls: 'bad' }
-        : null,
-    assetsKept.length
-      ? { k: '🖼️ thumbnail', v: `${assetsKept.length} disesuaikan`, cls: 'ok' }
-      : assetsLost.length
-        ? { k: '🖼️ thumbnail', v: `${assetsLost.length} GAGAL balik`, cls: 'bad' }
-        : null
-  ].filter(Boolean)
-}
-
-/** Satu catatan ringkas soal setting yang dipertahankan (null = skip). */
-function keepNote(kept, lost, assetsKept, assetsLost) {
-  if (lost.length || assetsLost.length) {
-    const n = lost.length + assetsLost.length
-    return {
-      t: `🔑 <b>${n} setting gak kebalikin</b> —<br>nilai lamanya ada di <b>${hesc(KEEP_BAK)}</b><br>dan folder <b>${hesc(KEEP_BAK_DIR)}/</b>.`,
-      cls: 'bad'
-    }
-  }
-  if (kept.length || assetsKept.length) {
-    const n = kept.length + assetsKept.length
-    return { t: `🔑 ${n} setting kamu disimpan dulu,<br>terus dibalikin ke file hasil update.` }
-  }
-  return null
-}
-
-/** Baris teks fallback (kartu versi teks) soal setting yang dipertahankan. */
-function keepLine(kept, lost, assetsKept, assetsLost) {
-  if (lost.length || assetsLost.length) {
-    return `⚠️ ${lost.length + assetsLost.length} setting GAGAL balik — cek \`${KEEP_BAK}\` & \`${KEEP_BAK_DIR}/\``
-  }
-  const parts = []
-  if (kept.length) parts.push(`apikey ×${kept.length}`)
-  if (assetsKept.length) parts.push(`thumbnail ×${assetsKept.length}`)
-  return parts.length ? `🔑 Setting dipertahankan: ${parts.join(' · ')}` : ''
+function savedLine(saved) {
+  return saved ? `🔐 ${saved} setting di-backup → jalankan .restore buat balikin` : ''
 }
 
 function card(emoji, title, lines) {
@@ -557,7 +392,9 @@ async function bootstrapRepo() {
   await git(['checkout', '-f', '-B', BRANCH, 'FETCH_HEAD'])
   try { await git(['branch', '--set-upstream-to', `origin/${BRANCH}`, BRANCH]) } catch {}
 
-  const { kept, lost, assetsKept, assetsLost } = await restoreKeep(keepState)
+  // Pemulihan sengaja gak otomatis di sini — biar update masuk bersih.
+  // Klien tinggal jalanin `.restore` bila mau balikin settingnya.
+  const saved = keepState.keeps.length + keepState.assets.length
 
   let pkgChanged = false
   try {
@@ -566,7 +403,7 @@ async function bootstrapRepo() {
   } catch {}
 
   const head = (await git(['log', '-1', '--oneline'])).out
-  return { head, pkgChanged, kept, lost, assetsKept, assetsLost }
+  return { head, pkgChanged, saved }
 }
 
 function parseGitHubRepo(url) {
@@ -661,10 +498,10 @@ async function apiSync() {
 
     // fs.cp recursive — murni Node, tanpa binary cp system.
     // config.js IKUT ketimpa versi GitHub (apikey-nya kosong) → simpen
-    // dulu nilai milik user, balikin sesudahnya (sama kayak jalur git).
+    // dulu nilai milik user ke backup (dipulihin lewat `.restore`).
     const keepState = await saveKeep()
     await fs.cp(src, process.cwd(), { recursive: true, force: true })
-    const { kept, lost, assetsKept, assetsLost } = await restoreKeep(keepState)
+    const saved = keepState.keeps.length + keepState.assets.length
 
     let pkgChanged = false
     try {
@@ -672,7 +509,7 @@ async function apiSync() {
       pkgChanged = !!pkgBefore && !pkgBefore.equals(pkgAfter)
     } catch {}
 
-    return { short, msg, pkgChanged, kept, lost, assetsKept, assetsLost }
+    return { short, msg, pkgChanged, saved }
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
   }
@@ -751,7 +588,7 @@ async function handler(ctx) {
       `🕒 ${nowWIB()}`
     ]))
     try {
-      const { short, msg, pkgChanged, kept, lost, assetsKept, assetsLost } = await apiSync()
+      const { short, msg, pkgChanged, saved } = await apiSync()
       const { installed, installErr } = await npmInstallMaybe(ctx, pkgChanged)
       await ctx.react(installErr ? '⚠️' : '✅')
       await replyRich(ctx, {
@@ -763,13 +600,13 @@ async function handler(ctx) {
 <div class="meta"><span class="hash">${hesc(short)}</span><span>${hesc(trunc(msg, 34))}</span></div>`,
         meta: [`⏱️ <b>${hesc(fmtDur(Date.now() - t0))}</b>`, `🕒 ${hesc(nowWIB())}`],
         notes: [
-          keepNote(kept, lost, assetsKept, assetsLost),
+          savedNote(saved),
           { t: '🌐 Server gak punya git — file disamain<br>langsung dari GitHub (tarball mode).' },
           { t: 'ℹ️ Daftar file berubah gak bisa<br>dideteksi tanpa git.', cls: 'warn' }
         ].filter(Boolean),
         stats: [
           { k: '📦 npm install', v: installed ? 'sukses' : installErr ? 'GAGAL' : 'lewati', cls: installed ? 'ok' : installErr ? 'bad' : 'dim' },
-          ...keepStats(kept, lost, assetsKept, assetsLost)
+          ...savedStats(saved)
         ],
         buttons: [{ t: '🔁 RESTART di panel', cls: 'blue' }]
       }, [
@@ -782,7 +619,7 @@ async function handler(ctx) {
         'ℹ️ Daftar file gak bisa dideteksi (tanpa git)',
         installed ? '📦 npm install *sukses*' : installErr ? '⚠️ npm install *gagal* (cek log)' : '📦 npm install *lewati*',
         '',
-        keepLine(kept, lost, assetsKept, assetsLost),
+        savedLine(saved),
         '🔁 *RESTART* bot di panel biar kode baru kebaca',
         '',
         `🕒 ${nowWIB()}`
@@ -844,7 +681,7 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
       return
     }
     const { installed, installErr } = await npmInstallMaybe(ctx, bootstrapped.pkgChanged)
-    const { kept, lost, assetsKept, assetsLost } = bootstrapped
+    const { saved } = bootstrapped
     await ctx.react(installErr ? '⚠️' : '✅')
     await replyRich(ctx, {
       icon: '⚙️',
@@ -855,13 +692,13 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
 <div class="meta"><span class="hash">${hesc(bootstrapped.head.split(' ')[0])}</span><span>${hesc(trunc(bootstrapped.head.split(' ').slice(1).join(' '), 40))}</span></div>`,
       meta: [`⏱️ <b>${hesc(fmtDur(Date.now() - t0))}</b>`, `🕒 ${hesc(nowWIB())}`],
       notes: [
-        keepNote(kept, lost, assetsKept, assetsLost),
+        savedNote(saved),
         { t: '💾 Config lama disimpan di<br><b>config.js.pre-git.bak</b>' },
         { t: '⚠️ Abis <b>RESTART</b>, jalur .updatesc<br>berikutnya normal (git pull).', cls: 'warn' }
       ].filter(Boolean),
       stats: [
         { k: '📦 npm install', v: installed ? 'sukses' : installErr ? 'GAGAL' : 'lewati', cls: installed ? 'ok' : installErr ? 'bad' : 'dim' },
-        ...keepStats(kept, lost, assetsKept, assetsLost),
+        ...savedStats(saved),
         { k: '📁 session/ & data/', v: 'aman utuh', cls: 'ok' }
       ].filter(Boolean),
       buttons: [{ t: '🔁 RESTART bot di panel', cls: 'blue' }]
@@ -873,7 +710,7 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
       '',
       '📥 Repo di-init otomatis + sync penuh',
       '💾 config.js lama → `config.js.pre-git.bak`',
-      keepLine(kept, lost, assetsKept, assetsLost),
+      savedLine(saved),
       installed ? '📦 npm install *sukses*' : installErr ? '⚠️ npm install *gagal* (cek log)' : '📦 npm install *lewati*',
       '',
       '🔁 *RESTART* bot di panel',
@@ -989,7 +826,8 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
   // ── Simpen nilai milik user (apikey dll) dulu ──
   // config.js lokal pasti beda dari GitHub (user ngisi apikey sendiri),
   // dan `pull --ff-only` bakal NOLAK kalau file tracked berubah lokal.
-  // Jadi: backup → balikin ke versi HEAD → pull → balikin nilainya.
+  // Jadi: backup → balikin ke versi HEAD → pull. Pemulihan dari backup
+  // dilakuin lewat `.restore` (fitur terpisah), biar update masuk bersih.
   let keepState = { keeps: [], assets: [] }
   let cfgReset = false
   try {
@@ -1002,10 +840,10 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
     }
     // Thumbnail punya user juga KE-TRACK — kalau beda dari HEAD,
     // `pull --ff-only` bakal NOLAK ("would be overwritten by merge").
-    // Balikin dulu ke versi HEAD; nilainya udah ke-backup di saveKeep()
-    // dan nanti dibalikin lagi lewat restoreKeep().
-    for (const { rel, pristine } of keepState.assets) {
-      if (pristine) continue // sama kayak HEAD → gak nahan pull
+    // Balikin dulu ke versi HEAD biar pull lancar; nilainya udah
+    // ke-backup di saveKeep() dan bisa dipulihin lewat `.restore`.
+    // (assets cuma berisi file yang beneran pernah diubah user)
+    for (const { rel } of keepState.assets) {
       try { await git(['checkout', 'HEAD', '--', rel], 30_000) } catch {}
     }
   } catch {}
@@ -1019,9 +857,8 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
     pullErr = err
   }
 
-  // Pull gagal → config.js tadi udah dibalikin ke versi HEAD, tapi nilai
-  // user belum tentu balik. Balikin sekarang juga biar gak ada yang hilang.
-  if (pullErr) await restoreKeep(keepState)
+  // Pull gagal → file lokal udah dibalikin ke versi HEAD, tapi gak ada
+  // yang hilang: semua setting user ada di backup, tinggal `.restore`.
 
   if (pullErr) {
     await ctx.react('⚠️')
@@ -1052,8 +889,8 @@ ${gitErrDetail(pullErr).map((l) => row(hesc(l))).join('')}`,
     return
   }
 
-  // ── Balikin nilai milik user ke config.js hasil update ──
-  const { kept, lost, assetsKept, assetsLost } = await restoreKeep(keepState)
+  // ── Setting user udah ke-backup; pemulihan lewat `.restore` ──
+  const saved = keepState.keeps.length + keepState.assets.length
 
   const newHead = (await git(['rev-parse', 'HEAD'])).out
   let commits = [] // { hash, subject, body }
@@ -1134,7 +971,7 @@ ${gitErrDetail(pullErr).map((l) => row(hesc(l))).join('')}`,
     ].filter(Boolean),
     stats: [
       { k: '📦 npm install', v: installed ? 'sukses' : installErr ? 'GAGAL' : 'lewati', cls: installed ? 'ok' : installErr ? 'bad' : 'dim' },
-      ...keepStats(kept, lost, assetsKept, assetsLost),
+      ...savedStats(saved),
       needRestart
         ? { k: '🔁 aksi', v: 'RESTART di panel', cls: 'bad' }
         : onlyPlugins
@@ -1142,7 +979,7 @@ ${gitErrDetail(pullErr).map((l) => row(hesc(l))).join('')}`,
           : { k: '✅ aksi', v: 'selesai', cls: 'ok' }
     ].filter(Boolean),
     notes: [
-      keepNote(kept, lost, assetsKept, assetsLost),
+      savedNote(saved),
       cfgReset ? { t: '⚙️ config.js sempat di-reset ke<br>versi GitHub sebelum update.' } : null,
       needRestart
         ? { t: '🔁 Ada file <b>core/lib/handlers</b> berubah —<br><b>RESTART bot di panel</b> biar kebaca.', cls: 'warn' }
@@ -1164,7 +1001,7 @@ ${gitErrDetail(pullErr).map((l) => row(hesc(l))).join('')}`,
     ...section('📝 *LAINNYA*', groups.other),
     ...fileSection(files),
     installed ? '📦 npm install *sukses*' : installErr ? '⚠️ npm install *gagal* (cek log)' : '📦 npm install *lewati*',
-    keepLine(kept, lost, assetsKept, assetsLost),
+    savedLine(saved),
     needRestart
       ? '🔁 *RESTART* diperlukan (core/lib/handlers)'
       : onlyPlugins
@@ -1179,7 +1016,6 @@ export { pluginConfig as config, handler }
 
 // buat pengujian (loader cuma baca `config` + `handler`)
 export const _internals = {
-  KEEP_FIELDS, KEEP_FILES, KEEP_BAK, KEEP_BAK_DIR,
-  findBlock, readKeep, writeKeep, gitBlobSha, assetPristine,
-  saveKeep, restoreKeep, keepStats, keepNote, keepLine, untgz
+  KEEP_FILES, KEEP_BAK, KEEP_BAK_DIR, readKeep, saveKeep,
+  savedStats, savedNote, savedLine, untgz
 }
