@@ -14,6 +14,7 @@ import { createInterface } from 'node:readline'
 import fs from 'node:fs'
 import config from './config.js'
 import { logger, clientLogger } from './core/logger.js'
+import { printBanner, printInfo } from './core/banner.js'
 import { setupQR } from './auth/qrHandler.js'
 import { setupPairing } from './auth/pairingHandler.js'
 import { setupConnection, markShutdown } from './auth/connectionManager.js'
@@ -176,10 +177,13 @@ const client = new WaClient(
 )
 
 async function main() {
+  // Banner console (ASCII art + kotak info) saat bot start.
+  printBanner()
   logger.info(`🚀 ${config.botName} starting...`)
 
   setupErrorHandler()
-  await loadFeatures()
+  const loadResult = await loadFeatures()
+  printInfo(loadResult)
 
   createMediaWsServer({
     port: Number(config.wsPort || 8090),
