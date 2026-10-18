@@ -149,6 +149,38 @@ function writeKeep(src, keeps) {
   return out
 }
 
+/** Baca nilai milik user dari config.js + backup file-nya. Balikin []. */
+async function saveKeep() {
+  try {
+    const src = await fs.readFile('config.js', 'utf8')
+    const keeps = readKeep(src)
+    if (keeps.length) await fs.writeFile(KEEP_BAK, src, 'utf8') // jaring pengaman
+    return keeps
+  } catch {
+    return []
+  }
+}
+
+/** Tulis balik nilai milik user ke config.js BARU. Balikin { kept, lost }. */
+async function restoreKeep(keeps) {
+  const kept = []
+  const lost = []
+  if (!keeps.length) return { kept, lost }
+  try {
+    const fresh = await fs.readFile('config.js', 'utf8')
+    await fs.writeFile('config.js', writeKeep(fresh, keeps), 'utf8')
+    // verifikasi beneran kebaca — jangan percaya tulis aja
+    const verify = readKeep(await fs.readFile('config.js', 'utf8'))
+    for (const k of keeps) {
+      const ok = verify.some((v) => v.block === k.block && v.key === k.key && v.value === k.value)
+      ;(ok ? kept : lost).push(`${k.block}.${k.key}`)
+    }
+  } catch {
+    for (const k of keeps) lost.push(`${k.block}.${k.key}`)
+  }
+  return { kept, lost }
+}
+
 function card(emoji, title, lines) {
   const out = [`╭─〔 ${emoji} \`${toSmallCaps(title)}\` 〕─⬣`]
   for (const line of lines) out.push(line === '' ? '│' : `│ ${line}`)
@@ -410,6 +442,9 @@ async function ensureOriginUrl() {
 async function bootstrapRepo() {
   let pkgBefore = null
   try { pkgBefore = await fs.readFile('package.json') } catch {}
+  // checkout -f bakal nimpa config.js versi lokal (apikey klien) → simpen
+  // dulu nilainya. (`config.js.pre-git.bak` tetap dibuat — salinan utuh.)
+  const keeps = await saveKeep()
   try { await fs.copyFile('config.js', 'config.js.pre-git.bak') } catch {}
 
   await git(['init'])
@@ -418,6 +453,8 @@ async function bootstrapRepo() {
   await git(['checkout', '-f', '-B', BRANCH, 'FETCH_HEAD'])
   try { await git(['branch', '--set-upstream-to', `origin/${BRANCH}`, BRANCH]) } catch {}
 
+  const { kept, lost } = await restoreKeep(keeps)
+
   let pkgChanged = false
   try {
     const pkgAfter = await fs.readFile('package.json')
@@ -425,7 +462,7 @@ async function bootstrapRepo() {
   } catch {}
 
   const head = (await git(['log', '-1', '--oneline'])).out
-  return { head, pkgChanged }
+  return { head, pkgChanged, kept, lost }
 }
 
 function parseGitHubRepo(url) {
@@ -518,8 +555,12 @@ async function apiSync() {
     const st = await fs.stat(src).catch(() => null)
     if (!entries[0] || !st?.isDirectory()) throw new Error('Struktur tarball gak dikenali')
 
-    // fs.cp recursive — murni Node, tanpa binary cp system
+    // fs.cp recursive — murni Node, tanpa binary cp system.
+    // config.js IKUT ketimpa versi GitHub (apikey-nya kosong) → simpen
+    // dulu nilai milik user, balikin sesudahnya (sama kayak jalur git).
+    const keeps = await saveKeep()
     await fs.cp(src, process.cwd(), { recursive: true, force: true })
+    const { kept, lost } = await restoreKeep(keeps)
 
     let pkgChanged = false
     try {
@@ -527,7 +568,7 @@ async function apiSync() {
       pkgChanged = !!pkgBefore && !pkgBefore.equals(pkgAfter)
     } catch {}
 
-    return { short, msg, pkgChanged }
+    return { short, msg, pkgChanged, kept, lost }
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
   }
@@ -606,7 +647,7 @@ async function handler(ctx) {
       `🕒 ${nowWIB()}`
     ]))
     try {
-      const { short, msg, pkgChanged } = await apiSync()
+      const { short, msg, pkgChanged, kept, lost } = await apiSync()
       const { installed, installErr } = await npmInstallMaybe(ctx, pkgChanged)
       await ctx.react(installErr ? '⚠️' : '✅')
       await replyRich(ctx, {
@@ -618,12 +659,22 @@ async function handler(ctx) {
 <div class="meta"><span class="hash">${hesc(short)}</span><span>${hesc(trunc(msg, 34))}</span></div>`,
         meta: [`⏱️ <b>${hesc(fmtDur(Date.now() - t0))}</b>`, `🕒 ${hesc(nowWIB())}`],
         notes: [
+          kept.length
+            ? { t: '🔑 apikey kamu disimpan dulu,<br>terus dibalikin ke config baru.' }
+            : lost.length
+              ? { t: `🔑 <b>${lost.length} nilai user gak kebalikin</b> —<br>nilai lamanya ada di <b>${hesc(KEEP_BAK)}</b>.`, cls: 'bad' }
+              : null,
           { t: '🌐 Server gak punya git — file disamain<br>langsung dari GitHub (tarball mode).' },
           { t: 'ℹ️ Daftar file berubah gak bisa<br>dideteksi tanpa git.', cls: 'warn' }
-        ],
+        ].filter(Boolean),
         stats: [
-          { k: '📦 npm install', v: installed ? 'sukses' : installErr ? 'GAGAL' : 'lewati', cls: installed ? 'ok' : installErr ? 'bad' : 'dim' }
-        ],
+          { k: '📦 npm install', v: installed ? 'sukses' : installErr ? 'GAGAL' : 'lewati', cls: installed ? 'ok' : installErr ? 'bad' : 'dim' },
+          kept.length
+            ? { k: '🔑 apikey', v: `${kept.length} dipertahankan`, cls: 'ok' }
+            : lost.length
+              ? { k: '🔑 apikey', v: `${lost.length} GAGAL balik`, cls: 'bad' }
+              : null
+        ].filter(Boolean),
         buttons: [{ t: '🔁 RESTART di panel', cls: 'blue' }]
       }, [
         '*UPDATE SELESAI* ✅ (API)',
@@ -635,6 +686,11 @@ async function handler(ctx) {
         'ℹ️ Daftar file gak bisa dideteksi (tanpa git)',
         installed ? '📦 npm install *sukses*' : installErr ? '⚠️ npm install *gagal* (cek log)' : '📦 npm install *lewati*',
         '',
+        kept.length
+          ? `🔑 apikey dipertahankan (${kept.join(', ')})`
+          : lost.length
+            ? `⚠️ apikey GAGAL balik — cek \`${KEEP_BAK}\``
+            : '',
         '🔁 *RESTART* bot di panel biar kode baru kebaca',
         '',
         `🕒 ${nowWIB()}`
@@ -696,6 +752,7 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
       return
     }
     const { installed, installErr } = await npmInstallMaybe(ctx, bootstrapped.pkgChanged)
+    const { kept, lost } = bootstrapped
     await ctx.react(installErr ? '⚠️' : '✅')
     await replyRich(ctx, {
       icon: '⚙️',
@@ -706,13 +763,23 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
 <div class="meta"><span class="hash">${hesc(bootstrapped.head.split(' ')[0])}</span><span>${hesc(trunc(bootstrapped.head.split(' ').slice(1).join(' '), 40))}</span></div>`,
       meta: [`⏱️ <b>${hesc(fmtDur(Date.now() - t0))}</b>`, `🕒 ${hesc(nowWIB())}`],
       notes: [
+        kept.length
+          ? { t: '🔑 apikey kamu disimpan dulu,<br>terus dibalikin ke config baru.' }
+          : lost.length
+            ? { t: `🔑 <b>${lost.length} nilai user gak kebalikin</b> —<br>nilai lamanya ada di <b>${hesc(KEEP_BAK)}</b>.`, cls: 'bad' }
+            : null,
         { t: '💾 Config lama disimpan di<br><b>config.js.pre-git.bak</b>' },
         { t: '⚠️ Abis <b>RESTART</b>, jalur .updatesc<br>berikutnya normal (git pull).', cls: 'warn' }
-      ],
+      ].filter(Boolean),
       stats: [
         { k: '📦 npm install', v: installed ? 'sukses' : installErr ? 'GAGAL' : 'lewati', cls: installed ? 'ok' : installErr ? 'bad' : 'dim' },
+        kept.length
+          ? { k: '🔑 apikey', v: `${kept.length} dipertahankan`, cls: 'ok' }
+          : lost.length
+            ? { k: '🔑 apikey', v: `${lost.length} GAGAL balik`, cls: 'bad' }
+            : null,
         { k: '📁 session/ & data/', v: 'aman utuh', cls: 'ok' }
-      ],
+      ].filter(Boolean),
       buttons: [{ t: '🔁 RESTART bot di panel', cls: 'blue' }]
     }, [
       '*SETUP REPO SELESAI* ✅',
@@ -722,6 +789,11 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
       '',
       '📥 Repo di-init otomatis + sync penuh',
       '💾 config.js lama → `config.js.pre-git.bak`',
+      kept.length
+        ? `🔑 apikey dipertahankan (${kept.join(', ')})`
+        : lost.length
+          ? `⚠️ apikey GAGAL balik — cek \`${KEEP_BAK}\``
+          : '',
       installed ? '📦 npm install *sukses*' : installErr ? '⚠️ npm install *gagal* (cek log)' : '📦 npm install *lewati*',
       '',
       '🔁 *RESTART* bot di panel',
@@ -841,11 +913,9 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
   let keeps = []
   let cfgReset = false
   try {
-    const srcNow = await fs.readFile('config.js', 'utf8')
-    keeps = readKeep(srcNow)
+    keeps = await saveKeep()                                  // baca + backup
     const dirty = (await git(['status', '--porcelain', '--', 'config.js'])).out
     if (dirty) {
-      await fs.writeFile(KEEP_BAK, srcNow, 'utf8')          // jaring pengaman
       const head = await git(['show', 'HEAD:config.js'])    // versi commit lokal
       await fs.writeFile('config.js', head.out + '\n', 'utf8')
       cfgReset = true
@@ -863,12 +933,7 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
 
   // Pull gagal → config.js tadi udah dibalikin ke versi HEAD, tapi nilai
   // user belum tentu balik. Balikin sekarang juga biar gak ada yang hilang.
-  if (pullErr && keeps.length) {
-    try {
-      const cur = await fs.readFile('config.js', 'utf8')
-      await fs.writeFile('config.js', writeKeep(cur, keeps), 'utf8')
-    } catch {}
-  }
+  if (pullErr) await restoreKeep(keeps)
 
   if (pullErr) {
     await ctx.react('⚠️')
@@ -900,21 +965,7 @@ ${gitErrDetail(pullErr).map((l) => row(hesc(l))).join('')}`,
   }
 
   // ── Balikin nilai milik user ke config.js hasil update ──
-  const kept = []
-  const lost = []
-  if (keeps.length) {
-    try {
-      const fresh = await fs.readFile('config.js', 'utf8')
-      await fs.writeFile('config.js', writeKeep(fresh, keeps), 'utf8')
-      const verify = readKeep(await fs.readFile('config.js', 'utf8'))
-      for (const k of keeps) {
-        const ok = verify.some((v) => v.block === k.block && v.key === k.key && v.value === k.value)
-        ;(ok ? kept : lost).push(`${k.block}.${k.key}`)
-      }
-    } catch {
-      for (const k of keeps) lost.push(`${k.block}.${k.key}`)
-    }
-  }
+  const { kept, lost } = await restoreKeep(keeps)
 
   const newHead = (await git(['rev-parse', 'HEAD'])).out
   let commits = [] // { hash, subject, body }
@@ -1050,4 +1101,4 @@ ${gitErrDetail(pullErr).map((l) => row(hesc(l))).join('')}`,
 export { pluginConfig as config, handler }
 
 // buat pengujian (loader cuma baca `config` + `handler`)
-export const _internals = { KEEP_FIELDS, KEEP_BAK, findBlock, readKeep, writeKeep }
+export const _internals = { KEEP_FIELDS, KEEP_BAK, findBlock, readKeep, writeKeep, saveKeep, restoreKeep, untgz }
