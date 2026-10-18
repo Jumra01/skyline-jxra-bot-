@@ -132,6 +132,29 @@ export default {
   },
 
   /* ════════════════════════════════════════════
+   *  AI CHAT (.bot) — chat AI yang INGET riwayat obrolan
+   *  Provider OpenAI-compatible. Yang GRATIS (tanpa kartu):
+   *    • gemini      → https://aistudio.google.com/apikey
+   *    • groq        → https://console.groq.com/keys
+   *    • openrouter  → https://openrouter.ai/keys   (model ":free")
+   *  Berbayar murah: deepseek → https://platform.deepseek.com
+   *  `apikey` SENGAJA DIKOSONGKAN — tiap orang isi punya sendiri.
+   *  Buat deploy panel, gak perlu edit config — pakai env AICHAT_API_KEY.
+   *  Persona/prompt: file `data/ai-persona.txt` atau command `.setpersona`.
+   * ════════════════════════════════════════════ */
+  aiChat: {
+    enabled: true,        // matiin total kalau lagi gak mau pakai
+    provider: 'gemini',   // gemini | groq | openrouter | deepseek | custom
+    apikey: '',           // kosong → cek env AICHAT_API_KEY
+    model: '',            // kosong → default provider (lihat PROVIDERS di plugin)
+    baseUrl: '',          // kosong → default provider
+    maxHistory: 20,       // jumlah pesan riwayat per user (user + assistant)
+    timeoutMs: 60_000,    // batas tunggu balasan AI (ms)
+    mentionTrigger: true, // balas otomatis kalau nomor bot di-tag (tanpa prefix)
+    systemPrompt: '',     // kosong → pakai data/ai-persona.txt / default
+  },
+
+  /* ════════════════════════════════════════════
    *  WORKER / WEBSOCKET (media)
    * ════════════════════════════════════════════ */
   wsWorkerUrl: 'wss://audio.jhx.my.id/wss/audio',

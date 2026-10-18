@@ -54,6 +54,11 @@ export function setBotNumber(jidOrNumber) {
   }
 }
 
+/** Nomor bot sendiri (digit), buat deteksi mention nomor bot di .bot. */
+export function getBotNumber() {
+  return botNumber
+}
+
 export function getStaffEntry(pnNumber, lidJid) {
   const n = normalizeNumber(pnNumber)
 

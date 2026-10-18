@@ -16,6 +16,7 @@ import { touchUser, incrementCommand, getUser, topUsers, isPremiumActive, getEme
 import { sendUsageCard, getNotifyGlobal } from '../lib/emeraldCard.js'
 import { sendTyping, markRead } from '../core/presence.js'
 import { getGlobal } from '../core/groupSettings.js'
+import { getMentionHandler } from '../core/mentionTrigger.js'
 import { reactTo } from '../core/react.js'
 
 const richHandlers = new Map()
@@ -194,7 +195,21 @@ export async function route(client, event) {
       break
     }
   }
-  if (!matchedPrefix) return
+
+  // [AI] Trigger mention: pesan TANPA prefix yang nge-tag nomor bot ditangani
+  // handler yang didaftarkan plugin (mis. plugins/ai/bot.js). Handler balikin
+  // `true` kalau dia nanganin (bot beneran di-tag), `false` kalau bukan.
+  if (!matchedPrefix) {
+    const onMention = getMentionHandler()
+    if (onMention) {
+      try {
+        if (await onMention(ctx)) return
+      } catch (err) {
+        logger.error({ err }, 'Mention handler gagal')
+      }
+    }
+    return
+  }
 
   const withoutPrefix = ctx.body.slice(matchedPrefix.length).trim()
   const [commandName, ...args] = withoutPrefix.split(/\s+/)
