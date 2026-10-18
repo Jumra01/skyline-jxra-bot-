@@ -148,16 +148,16 @@ export default {
    *  policy sendiri; bebas-sensor total cuma dijamin kalau model dijalankan
    *  sendiri (lokal).
    *  `apikey` SENGAJA DIKOSONGKAN — tiap orang isi punya sendiri.
-   *  CARA ISI KEY (tanpa nyentuh file yang di-commit):
-   *    • paling gampang: file `src/data/ai.json` (GITIGNORED):
-   *      { "provider": "aion", "model": "...", "apikey": "..." }
-   *    • atau env AICHAT_API_KEY (Pterodactyl: tab Startup).
+   *  `apikey` DITANAM (pilihan owner — repo ini emang publik & mau langsung
+   *  jalan tanpa setup). Tetap bisa ditimpa tanpa nyentuh file ini:
+   *    • env AICHAT_API_KEY (paling diutamakan)
+   *    • file `src/data/ai.json` (GITIGNORED) → { "apikey": "..." }
    *  Persona/prompt: file `data/ai-persona.txt` atau command `.setpersona`.
    * ════════════════════════════════════════════ */
   aiChat: {
     enabled: true,        // matiin total kalau lagi gak mau pakai
     provider: 'aion',     // aion | venice | gemini | groq | openrouter | deepseek | kilocode | ollama | custom
-    apikey: '',           // kosong → cek src/data/ai.json → env AICHAT_API_KEY
+    apikey: 'alv2_3ZgYP4bG9uvT4JpEYyxvt_NgkJM_-DlnFe0pb2r9rag', // Aion Labs (free tier 20K token/hari)
     model: 'aion-labs/aion-rp-llama-3.1-8b', // kosong → default provider (lihat PROVIDERS di plugin)
     baseUrl: '',          // kosong → default provider
     maxHistory: 20,       // jumlah pesan riwayat per user (user + assistant)

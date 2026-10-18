@@ -390,20 +390,21 @@ async function runChat(ctx, text) {
 }
 
 /* ══════════════════════ teks bantuan ══════════════════════ */
-function missingKeyMsg(conf) {
+function missingKeyMsg(conf, p = '.') {
   return (
     '⚠️ *API KEY AI BELUM DIISI*\n\n' +
     `Provider aktif: *${conf.provider}*${conf.model ? ` (${conf.model})` : ''}\n\n` +
+    `⚡ *Paling gampang:* kirim \`${p}setaikey <apikey>\` di sini.\n` +
+    '(key disimpan lokal, GAK ikut ke GitHub, langsung kepakai)\n\n' +
     'Ambil key GRATIS (tanpa kartu kredit):\n' +
     '> 🎭 *Aion Labs (uncensored)* — https://www.aionlabs.ai/app/api-keys/\n' +
     '> 🔹 Gemini — https://aistudio.google.com/apikey\n' +
     '> 🔹 Groq — https://console.groq.com/keys\n' +
-    '> 🔹 OpenRouter — https://openrouter.ai/keys\n' +
-    '> 🎭 Venice (tanpa sensor, butuh kredit) — https://venice.ai/settings/api\n\n' +
-    '*Cara isi (pilih salah satu):*\n' +
+    '> 🔹 OpenRouter — https://openrouter.ai/keys\n\n' +
+    '*Cara isi manual (pilih salah satu):*\n' +
     '> `src/data/ai.json` → `{ "apikey": "..." }` (gak ikut ke GitHub)\n' +
-    '> `config.js` → blok `aiChat.apikey`\n' +
-    '> atau set env `AICHAT_API_KEY`'
+    '> env `AICHAT_API_KEY` (Pterodactyl: tab *Startup*) — paling anti-hilang\n' +
+    '> `config.js` → blok `aiChat.apikey`'
   )
 }
 
@@ -420,6 +421,7 @@ function helpText(p, conf) {
     '\n*Cara pakai:*\n' +
     `> ${p}bot <pertanyaan>\n` +
     `> ${p}bot reset — hapus riwayat\n` +
+    `> ${p}setaikey — ganti API key AI (owner)\n` +
     (conf.mentionTrigger ? '> tag nomor aku langsung di grup\n\n' : '\n') +
     '*Contoh:*\n' +
     `> ${p}bot jelasin apa itu lubang hitam singkat`
@@ -441,7 +443,7 @@ async function handler(ctx) {
     return ctx.reply('🧹 Oke, riwayat obrolan kita udah aku lupain. Mulai dari awal lagi ya!')
   }
 
-  if (!conf.apikey) return ctx.reply(missingKeyMsg(conf))
+  if (!conf.apikey) return ctx.reply(missingKeyMsg(conf, p))
 
   await ctx.react('🕕')
   const r = await runChat(ctx, text)
