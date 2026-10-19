@@ -5,15 +5,14 @@
  * omniedit.js — Edit gambar dengan AI Omni Editor (backend skyline.web.id)
  *
  * Gambar sumber: balas/quote foto, foto caption command, atau URL.
- * Website & API key diatur di config.js → blok `omniedit`
- * (bisa di-override env OMNI_API_KEY / OMNI_WEBSITE).
+ * Website & API key ikut config.js → blok `skyline` (sama kayak fitur
+ * YouTube), bisa di-override env SKYLINE_API_KEY / SKYLINE_API_URL.
  */
 import axios from 'axios'
 import { downloadMediaMessage, resolveMediaPayload } from 'zapo-js'
-import config from '../../config.js'
+import { skylineCreds } from '../../scraper/SKYLINE.js'
 import { logger } from '../../core/logger.js'
 
-const DEFAULT_SITE = 'https://skyline.web.id'
 const MAX_IMAGE = 10 * 1024 * 1024
 
 const pluginConfig = {
@@ -34,12 +33,9 @@ const pluginConfig = {
   isEnabled: true,
 }
 
-/* ══════════════ ambil website + apikey ══════════════ */
+/* ══════════════ ambil website + apikey (satu sumber dgn YouTube) ══════════════ */
 function loadApi() {
-  const cfg = config.omniedit || {}
-  const website = String(process.env.OMNI_WEBSITE || cfg.website || DEFAULT_SITE).replace(/\/+$/, '')
-  const apikey = String(process.env.OMNI_API_KEY || cfg.apikey || '').trim()
-  return { website, apikey }
+  return skylineCreds()
 }
 
 /* ══════════════ helper ══════════════ */
@@ -128,8 +124,8 @@ async function handler(ctx) {
         'Fitur Omni Editor belum bisa dipakai karena API key belum diisi.\n\n' +
         `> Silahkan buat API key anda di *${website}*\n\n` +
         '*Cara isi:*\n' +
-        `> \`config.js\` → blok \`omniedit.apikey\`\n` +
-        `> atau set env \`OMNI_API_KEY\``
+        `> \`config.js\` → blok \`skyline.apikey\`\n` +
+        `> atau set env \`SKYLINE_API_KEY\``
     )
   }
 

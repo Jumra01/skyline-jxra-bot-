@@ -34,7 +34,6 @@ import { backupStatus, restoreFromBackup } from '../../lib/keepSettings.js'
 // load setelah `.updatesc` sampai bot di-restart.
 const KEEP_LABELS = {
   'skyline.apikey': 'API',
-  'omniedit.apikey': 'API',
   'spotify.clientId': 'Spotify ID',
   'spotify.clientSecret': 'Spotify Secret'
 }

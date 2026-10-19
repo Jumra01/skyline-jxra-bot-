@@ -4,11 +4,11 @@
  * Hargai sebagaimana u mau dihargai.
  * SKYLINE.js — Client API skyline.web.id (YouTube downloader + search).
  *
- * Kredensial SATU SUMBER dengan `.omniedit`:
- *   config.js → blok `skyline` (baru) atau `omniedit` (yang sudah ada)
+ * Kredensial SATU SUMBER untuk `.play`/`.yta`/`.ytv`/`.ytsearch` DAN `.omniedit`:
+ *   config.js → blok `skyline` (website + apikey)
  *   Override env (deploy panel):
  *     SKYLINE_API_KEY / SKYLINE_API_URL
- *     fallback lama: OMNI_API_KEY / OMNI_WEBSITE
+ *     (env lama OMNI_API_KEY / OMNI_WEBSITE masih diterima)
  *
  * Endpoint yang dipakai (docs skyline.web.id):
  *   GET /api/tools/yt-search?q=...&limit=...
@@ -50,23 +50,16 @@ export class SkylineApiError extends Error {
 
 /* ══════════════ kredensial ══════════════ */
 export function skylineCreds() {
-  const primary = config.skyline || {};
-  const omni = config.omniedit || {};
+  const conf = config.skyline || {};
+  // `OMNI_*` = nama env lama sebelum blok config digabung ke `skyline`.
+  // Tetap diterima biar deployment panel yang sudah terlanjur set gak putus.
   const website = String(
-    process.env.SKYLINE_API_URL ||
-      primary.website ||
-      omni.website ||
-      process.env.OMNI_WEBSITE ||
-      DEFAULT_SITE
+    process.env.SKYLINE_API_URL || conf.website || process.env.OMNI_WEBSITE || DEFAULT_SITE
   )
     .trim()
     .replace(/\/+$/, '');
   const apikey = String(
-    process.env.SKYLINE_API_KEY ||
-      primary.apikey ||
-      omni.apikey ||
-      process.env.OMNI_API_KEY ||
-      ''
+    process.env.SKYLINE_API_KEY || conf.apikey || process.env.OMNI_API_KEY || ''
   ).trim();
   return { website, apikey };
 }
@@ -406,7 +399,7 @@ export function keyHint(ctx) {
     'Fitur YouTube butuh API key skyline.web.id.\n\n' +
     `> Buat key gratis di *${website}* (menu Dashboard)\n\n` +
     '*Cara isi:*\n' +
-    `> \`config.js\` → blok \`skyline.apikey\` (atau \`omniedit.apikey\`)\n` +
+    `> \`config.js\` → blok \`skyline.apikey\`\n` +
     `> atau env \`SKYLINE_API_KEY\`\n\n` +
     `Sementara ini ${p}play / ${p}yta / ${p}ytv / ${p}ytsearch masih pakai sumber cadangan (kualitas lebih rendah).`
   );
