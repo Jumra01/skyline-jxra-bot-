@@ -48,6 +48,15 @@ const MAX_TRACKED_USERS = 300 // batas jumlah user yang disimpan di disk
 const MAX_CHARS = 4000        // potong pesan biar prompt gak meledak
 const HISTORY_IN_PROMPT = 16  // pesan terakhir yang ditempel kalau mulai dari nol
 
+// Sesi anonim Gemini (cookie) umurnya pendek — kalau dipakai setelah nganggur,
+// Google balikin balasan yang gak bisa di-parse → dulu tiap begitu buang 1
+// request + nulis WARN. Sekarang: sesi yang kelewat tua dilewati duluan, dan
+// kalau sesi tetap gagal beberapa kali beruntun, sesi dimatiin sementara.
+const SESSION_FAIL_LIMIT = 3            // gagal beruntun sebelum sesi dimatiin
+const SESSION_SKIP_MS = 10 * 60_000     // lama sesi dimatiin saat itu
+let sessionFailStreak = 0
+let sessionSkipUntil = 0
+
 const pluginConfig = {
   name: 'bot',
   alias: ['aichat', 'ngobrol', 'chatai'],
@@ -77,12 +86,13 @@ function cfg() {
     replyTrigger: c.replyTrigger !== false,
     remember: c.remember !== false,
     rememberEvery: Math.max(0, Math.min(50, Number(c.rememberEvery ?? 8) || 0)),
+    sessionTtlMin: Math.max(0, Math.min(720, c.sessionTtlMin === 0 ? 0 : (Number(c.sessionTtlMin) || 20))),
     systemPrompt: String(c.systemPrompt || '').trim(),
   }
 }
 
 /* ══════════════════════ riwayat (memori) ══════════════════════ */
-const store = new Map() // jid -> { at, msgs: [{ role, content }], session, sinceExtract }
+const store = new Map() // jid -> { at, msgs, session, sessionAt, sinceExtract }
 let saveTimer = null
 
 function loadStore() {
@@ -94,6 +104,7 @@ function loadStore() {
         at: Number(v.at) || 0,
         msgs: v.msgs.slice(-100),
         session: typeof v.session === 'string' ? v.session : null,
+        sessionAt: Number(v.sessionAt) || 0,
         sinceExtract: Math.max(0, Number(v.sinceExtract) || 0),
       })
     }
@@ -115,6 +126,7 @@ function saveStore() {
           at: v.at,
           msgs: v.msgs.slice(-100),
           session: v.session || null,
+          sessionAt: Number(v.sessionAt) || 0,
           sinceExtract: Math.max(0, Number(v.sinceExtract) || 0),
         }
       }
@@ -134,7 +146,7 @@ function historyKey(ctx) {
 
 function getHistory(key, max) {
   let h = store.get(key)
-  if (!h) { h = { at: Date.now(), msgs: [], session: null, sinceExtract: 0 }; store.set(key, h) }
+  if (!h) { h = { at: Date.now(), msgs: [], session: null, sessionAt: 0, sinceExtract: 0 }; store.set(key, h) }
   if (h.msgs.length > max) h.msgs = h.msgs.slice(-max)
   return h
 }
@@ -386,19 +398,41 @@ async function runChat(ctx, text) {
   // Kalau belum/gagal, riwayat teks ditempel biar obrolan tetap nyambung.
   const withHistory = flatten(h.msgs, pesan)
 
+  // Sesi tua (cookie Gemini umurnya pendek) atau sesi yang lagi dimatiin karena
+  // sering gagal → skip duluan, langsung pakai riwayat teks. Hemat 1 request
+  // gagal & log gak berisik.
+  if (h.session && conf.sessionTtlMin > 0 && h.sessionAt && Date.now() - h.sessionAt > conf.sessionTtlMin * 60_000) {
+    logger.debug({ umurMenit: Math.round((Date.now() - h.sessionAt) / 60_000) }, '[AIChat] sesi Gemini udah tua — dilewati, lanjut tanpa sesi')
+    h.session = null
+    h.sessionAt = 0
+  }
+  if (h.session && Date.now() < sessionSkipUntil) {
+    h.session = null
+    h.sessionAt = 0
+  }
+
+  const usedSession = Boolean(h.session)
   let res
   try {
     res = await geminiChat({
-      message: h.session ? pesan : withHistory,
+      message: usedSession ? pesan : withHistory,
       instruction,
       session: h.session,
       timeoutMs: conf.timeoutMs,
     })
+    if (usedSession) sessionFailStreak = 0
   } catch (err) {
-    // session lama basi/rusak → ulang SEKALI dari awal (tanpa session)
+    // sesi lama basi/rusak → ulang SEKALI dari awal (tanpa sesi)
     if (h.session) {
-      logger.warn({ err: String(err?.message || err).slice(0, 140) }, '[AIChat] session lama gagal — ulang tanpa session')
       h.session = null
+      h.sessionAt = 0
+      sessionFailStreak += 1
+      if (sessionFailStreak >= SESSION_FAIL_LIMIT) {
+        sessionSkipUntil = Date.now() + SESSION_SKIP_MS
+        logger.warn({ gagalBeruntun: sessionFailStreak, matiSelamaMenit: SESSION_SKIP_MS / 60_000 }, '[AIChat] sesi Gemini sering gagal — sesi dimatiin sementara (auto-nyala lagi)')
+      } else {
+        logger.warn({ err: String(err?.message || err).slice(0, 140) }, '[AIChat] sesi Gemini kadaluwarsa — lanjut tanpa sesi (obrolan tetap nyambung dari riwayat)')
+      }
       try {
         res = await geminiChat({ message: withHistory, instruction, timeoutMs: conf.timeoutMs })
       } catch (err2) {
@@ -416,7 +450,7 @@ async function runChat(ctx, text) {
   h.msgs.push({ role: 'user', content: pesan })
   h.msgs.push({ role: 'assistant', content: answer.slice(0, MAX_CHARS) })
   if (h.msgs.length > conf.maxHistory) h.msgs = h.msgs.slice(-conf.maxHistory)
-  if (res?.session) h.session = res.session
+  if (res?.session) { h.session = res.session; h.sessionAt = Date.now() }
   h.sinceExtract = Math.max(0, Number(h.sinceExtract) || 0) + 1
   saveStore()
   addUsage(1)
@@ -647,4 +681,9 @@ export const _internals = {
   usageToday, addUsage, USAGE_FILE, STORE_FILE, buildSystem, userProfile, nowWIB,
   isBotMentioned, mentionedJids, quotedParticipant, stripMention, flatten,
   resetHistory, store, llmRemember, parseFactsJson, faktaText, helpText,
+  sessionGuard: {
+    reset: () => { sessionFailStreak = 0; sessionSkipUntil = 0 },
+    state: () => ({ sessionFailStreak, sessionSkipUntil }),
+    skip: (ms) => { sessionSkipUntil = Date.now() + ms },
+  },
 }

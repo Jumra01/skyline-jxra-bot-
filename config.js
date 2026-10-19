@@ -157,6 +157,7 @@ export default {
     replyTrigger: true,   // balas juga kalau pesan bot DIBALES (quote/swipe-reply)
     remember: true,       // nyatet fakta penting tentang user (memori jangka panjang)
     rememberEvery: 8,     // tiap N pesan, rapihin fakta pakai AI (0 = cuma pola instan)
+    sessionTtlMin: 20,    // sesi Gemini dianggap basi setelah N menit nganggur (0 = selalu coba)
     systemPrompt: '',     // kosong → pakai data/ai-persona.txt / default (Bella)
   },
 
