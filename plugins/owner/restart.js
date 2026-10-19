@@ -4,7 +4,7 @@
  * Hargai sebagaimana u mau dihargai.
  * restart.js — Matikan & nyalakan ulang bot (owner).
  *
- * Alur sama kayak skyline-md: react → balas info box → tunggu 2 detik →
+ * Alur: react → balas info box → tunggu 2 detik →
  * spawn proses baru (detached) → matiin proses lama.
  *
  * Yang beda dari versi aslinya (semua gak kelihatan dari chat, tapi
@@ -12,14 +12,14 @@
  *   • `node sky.js` (entry repo ini), bukan `index.js`.
  *   • spawn DICEK dulu lewat event 'spawn'/'error' — `spawn` gagal itu
  *     ASYNC, try/catch biasa gak nangkep. Kalau gagal → batal restart,
- *     bot tetap hidup. (Versi skyline-md: spawn gagal = bot mati selamanya.)
+ *     bot tetap hidup (spawn gagal = batal restart, bukan mati permanen).
  *   • restarter nunggu proses lama beneran mati (poll kill(pid,0)) sebelum
  *     spawn, biar gak dobel instance kalau shutdown lambat.
  *   • bunuh wrapper `node --watch` lama (kondisi `npm run dev`) — kalau
  *     gak, watcher-nya idel terus dan kamu punya 2 bot nyala.
  *     `process.exit(0)` polos juga gak nge-restart di `node --watch`.
  *   • shutdown via SIGINT dulu biar sky.js disconnect WA + stopHotReload
- *     rapi, baru exit(0). (skyline-md: `process.exit(0)` langsung.)
+ *     rapi, baru exit(0) — bukan exit langsung tanpa shutdown.
  *
  * Repo root dihitung dari lokasi file ini — jalan di mana pun cwd.
  */

@@ -133,7 +133,7 @@ export function addReward(jid, { gold = 0, xp = 0, gems = 0, emerald = 0 } = {})
 
 /* ---------- [UPDATE] EMERALD 🟩 — saldo command ---------- */
 
-/** Batas saldo emerald dari config (default 64 ala stack Minecraft). */
+/** Batas maksimal saldo emerald dari config (default 64). */
 function emeraldMax() {
   return Math.max(1, Number(config.emerald?.max) || 64)
 }

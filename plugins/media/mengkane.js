@@ -4,7 +4,7 @@
  * Hargai sebagaimana u mau dihargai.
  * mengkane.js — Koleksi audio "mengkane" (.mengkane1 - .mengkane54).
  *
- * Diambil dari skyline-md (plugins/media/mengkane.js). Sumber audio dibagi 2 repo:
+ * Sumber audio dibagi 2 repo:
  *   • nomor 1-24  → github.com/hyuura/Rest-Sound      → folder `HyuuraKane/`
  *   • nomor 25-54 → github.com/aisyah-rest/mangkane   → folder `Mangkanenya/`
  * (nama file di repo selalu `mangkaneN.mp3`, makanya command `mengkane` dipetakan

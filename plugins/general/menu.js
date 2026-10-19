@@ -2,7 +2,7 @@
  * © skyline-JXRA
  * Hapus credit gak bikin u jago dumbass. 
  * Hargai sebagaimana u mau dihargai.
- * menu.js — Menu ala skyline-md: greeting + box bot/user info + daftar menu,
+ * menu.js — Menu utama: greeting + box bot/user info + daftar menu,
  * list kategori single_select + tombol nativeFlow (quick_reply/cta_url).
  */
 import fs from 'node:fs'
@@ -55,7 +55,7 @@ const CATEGORY_ORDER = [
   'ai', 'tools', 'game', 'rpg', 'interactive', 'owner', 'other'
 ]
 
-/* ═══════════ Text transform ala skyline-md ═══════════ */
+/* ═══════════ Text transform (small-caps & mono-bold) ═══════════ */
 
 const SMALL_CAPS = {
   a: 'ᴀ', b: 'ʙ', c: 'ᴄ', d: 'ᴅ', e: 'ᴇ', f: 'ꜰ', g: 'ɢ', h: 'ʜ',
@@ -361,7 +361,7 @@ function baseMediaFields(media) {
 
 /**
  * Upload thumb ke CDN WhatsApp → descriptor header interactive message
- * (ala skyline-md: media nempel di atas body pesan).
+ * (media nempel di atas body pesan).
  *
  * Foto: auto rasio & orientasi (EXIF rotate), resize max 1024px tanpa crop 1:1.
  * Video/GIF: auto-detect codec — mp4 h264 yang udah aman diupload mentah,
@@ -456,7 +456,7 @@ async function sendHome(ctx) {
     extraButtons.push({ url: config.reactChannel.dedicatedChannelUrl, text: '📱 Channel' })
   }
 
-  // Header media (ala skyline-md) — foto ATAU video auto-detect.
+  // Header media — foto ATAU video auto-detect.
   // JANGAN fallback ke kartu externalAdReply: bikin pesan hilang di WA biasa.
   const headerImage = await uploadHeaderMedia(ctx.client, findThumb(THUMB_MENU))
 
@@ -518,7 +518,7 @@ const pluginConfig = {
   name: "menu",
   alias: ['help', 'cmd'],
   category: "general",
-  description: "Menu ala skyline-md: box info + daftar menu, list kategori + tombol",
+  description: "Menu: box info + daftar menu, list kategori + tombol",
   usage: ".menu",
   example: ".menu",
   isOwner: false,

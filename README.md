@@ -211,7 +211,7 @@ tanpa pairing ulang.
 File `.js` di dalam `plugins/` (subfolder mana pun) dimuat otomatis saat start.
 Loader mendukung dua format:
 
-### Format utama (gaya skyline-md)
+### Format utama plugin
 
 ```js
 const pluginConfig = {

@@ -37,7 +37,7 @@ const COLORS = {
 }
 
 const TEMPLATES = {
-  fiony: { bg: '#E91E63', text: '#FFFFFF', font: 'script', label: 'Pink manis ala Fiony' },
+  fiony: { bg: '#E91E63', text: '#FFFFFF', font: 'script', label: 'Pink manis' },
   midnight: { bg: '#0D1B2A', text: '#E0E1DD', font: 'bold', label: 'Biru malam' },
   ocean: { bg: '#0077B6', text: '#FFFFFF', font: 'sistem', label: 'Biru laut' },
   sunset: { bg: '#FF6B35', text: '#FFF3E0', font: 'bold', label: 'Jingga senja' },

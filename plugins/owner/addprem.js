@@ -3,7 +3,7 @@
  * Hapus credit gak bikin u jago dumbass. 
  * Hargai sebagaimana u mau dihargai.
  * addprem.js — Kelola user PREMIUM (table premiumdb, expiry di database).
- * UX ala skyline-md: balas pesan / tag / nomor, durasi = hari (default 30).
+ * UX: balas pesan / tag / nomor, durasi = hari (default 30).
  * .addprem <nomor/@tag/balas pesan> [hari] | .delprem | .listprem | .cekprem
  */
 import {

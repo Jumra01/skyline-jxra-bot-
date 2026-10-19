@@ -20,7 +20,7 @@ const pluginConfig = {
   name: "iqc",
   alias: ['iphonequote', 'quotechat'],
   category: "media",
-  description: "Bikin gambar iPhone Quote Chat (long-press context menu ala iOS)",
+  description: "Bikin gambar iPhone Quote Chat (long-press menu iOS)",
   usage: ".iqc",
   example: ".iqc",
   isOwner: false,

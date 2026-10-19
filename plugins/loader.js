@@ -31,7 +31,7 @@ async function walk(dirPath) {
   return files
 }
 
-// [UPDATE] Format skyline-md: export { pluginConfig as config, handler }.
+// [UPDATE] Format plugin baru: export { pluginConfig as config, handler }.
 // Dinormalisasi ke shape internal route() (owner/admin/tags/aliases/cooldown ms).
 function fromSkyline(mod) {
   const c = mod.config

@@ -2,7 +2,7 @@
  * © skyline-JXRA
  * Hapus credit gak bikin u jago dumbass.
  * Hargai sebagaimana u mau dihargai.
- * replyStyle.js — Varian gaya reply bot (port .setreply dari skyline-md).
+ * replyStyle.js — Varian gaya reply pesan bot (.setreply): v1 BASIC s/d v7.
  * Persist di src/data/replyStyle.json (fallback config.reply.variant).
  * Dikirim oleh core/context.js tiap ctx.reply() DAN global hook di
  * buildContext (semua pesan teks bot kena varian aktif); diatur via .setreply.

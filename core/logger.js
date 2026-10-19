@@ -47,7 +47,7 @@ function fmtContext(ctx) {
   return parts.join(' ')
 }
 
-// Terima urutan apa saja: (msg, ctx) ala library atau (ctx, msg) ala plugin kita.
+// Terima dua urutan argumen: (msg, ctx) atau (ctx, msg).
 function normalize(args) {
   let message = ''
   let context = null

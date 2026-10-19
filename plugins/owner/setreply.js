@@ -2,7 +2,7 @@
  * © skyline-JXRA
  * Hapus credit gak bikin u jago dumbass.
  * Hargai sebagaimana u mau dihargai.
- * setreply.js — Atur gaya reply bot (port dari skyline-md).
+ * setreply.js — Atur gaya reply bot (.setreply): v1–v7.
  *
  * Pakai:
  *   .setreply          → daftar varian via list (ada ceklis varian aktif)
@@ -77,7 +77,7 @@ const pluginConfig = {
   name: "setreply",
   alias: ['replyvariant', 'replystyle'],
   category: "owner",
-  description: "Atur gaya reply bot (v1-v7, ala skyline-md)",
+  description: "Atur gaya reply bot (v1-v7)",
   usage: ".setreply",
   example: ".setreply",
   isOwner: true,

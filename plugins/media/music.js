@@ -4,7 +4,7 @@
  * Hargai sebagaimana u mau dihargai.
  * music.js — Koleksi musik siap kirim (.music1 - .music140).
  *
- * Diambil dari skyline-md (plugins/media/music.js), sumber audio:
+ * Sumber audio:
  *   github.com/Rez4-3yz/Music-rd → folder `music/`
  * Audio dikirim sebagai file (bukan voice note), tanpa biaya emerald.
  */
