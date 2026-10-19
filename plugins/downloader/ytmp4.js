@@ -8,6 +8,13 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import { onRichReply } from '../../handlers/messageHandler.js';
+import {
+  ytInfo as skylineInfo,
+  downloadVideo as skylineVideo,
+  isConfigured as skylineReady
+} from '../../scraper/SKYLINE.js';
+import { logger } from '../../core/logger.js';
+import { uploadThumbHeader } from '../../lib/ytUi.js';
 
 const SESSIONS = (globalThis.JH_YTV_SESSIONS ??= new Map());
 const PER_PAGE = 2;
@@ -21,6 +28,14 @@ const QUALITY_TIERS = [
 ];
 
 const LINE = '━━━━━━━━━━━━━━━━━━━━';
+
+/** Rapikan judul jadi nama file yang aman. */
+const safeName = (s, fallback = 'video') =>
+  String(s || '')
+    .replace(/[\\/:*?"<>|\r\n\t]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80) || fallback;
 
 function fetchInfo(url) {
   return new Promise((resolve, reject) => {
@@ -130,6 +145,24 @@ async function downloadAndSend(ctx, idx) {
   if (!tier) return ctx.reply('Pilihan gak valid.');
 
   await ctx.react('⏳');
+
+  // Jalur utama: Skyline API (skyline.web.id) kalau API key diisi.
+  if (skylineReady()) {
+    try {
+      const video = await skylineVideo(sess.url, tier.height, { info: sess.skyline });
+      await ctx.client.message.send(ctx.chat, {
+        type: 'video',
+        media: video.buffer,
+        mimetype: video.mimetype,
+        fileName: `${safeName(video.title || sess.title)}.${video.ext}`
+      });
+      await ctx.react('✅');
+      return;
+    } catch (err) {
+      logger.warn(`ytv: Skyline gagal (${err?.message || err}) — fallback yt-dlp`);
+    }
+  }
+
   let filePath;
   try {
     filePath = await downloadYT(sess.url, tier.height);
@@ -147,7 +180,7 @@ async function sendPage(ctx, page) {
   const sess = SESSIONS.get(ctx.sender);
   if (!sess) return ctx.reply('Sesi habis. Ketik *.ytv <url>* lagi.');
 
-  const { tiers, title, duration } = sess;
+  const { tiers, title, duration, durationText } = sess;
   const totalPages = Math.ceil(tiers.length / PER_PAGE);
   page = Math.max(0, Math.min(page, totalPages - 1));
 
@@ -156,7 +189,7 @@ async function sendPage(ctx, page) {
 
   let text = `✦ ──『 🎬 YT VIDEO 』── ⚝\n\n`;
   text += `🎞 Judul : *${title}*\n`;
-  text += `⏱ Durasi : ${fmtDuration(duration)}\n`;
+  text += `⏱ Durasi : ${durationText || fmtDuration(duration)}\n`;
   text += `📄 Page  : ${page + 1}/${totalPages}\n\n`;
   text += LINE + '\n';
 
@@ -168,30 +201,18 @@ async function sendPage(ctx, page) {
   text += `Tap tombol angka buat\nlangsung download kualitasnya 🎬`;
 
   const buttons = items.map((t, i) => ({
-    name: 'quick_reply',
-    buttonParamsJson: JSON.stringify({
-      display_text: String(start + i + 1),
-      id: `ytv:${ctx.sender}:pick:${start + i}`
-    })
+    text: String(start + i + 1),
+    id: `ytv:${ctx.sender}:pick:${start + i}`
   }));
 
   if (page > 0) {
-    buttons.push({
-      name: 'quick_reply',
-      buttonParamsJson: JSON.stringify({
-        display_text: '◀ Prev',
-        id: `ytv:${ctx.sender}:prev:${page - 1}`
-      })
-    });
+    buttons.push({ text: '◀ Prev', id: `ytv:${ctx.sender}:prev:${page - 1}` });
   }
   if (page < totalPages - 1) {
-    buttons.push({
-      name: 'quick_reply',
-      buttonParamsJson: JSON.stringify({
-        display_text: 'Next ▶',
-        id: `ytv:${ctx.sender}:next:${page + 1}`
-      })
-    });
+    buttons.push({ text: 'Next ▶', id: `ytv:${ctx.sender}:next:${page + 1}` });
+  }
+  if (/^https?:\/\//i.test(sess.url || '')) {
+    buttons.push({ text: '▶ Buka YouTube', url: sess.url });
   }
 
   items.forEach((t, i) => {
@@ -210,12 +231,14 @@ async function sendPage(ctx, page) {
     });
   }
 
-  await ctx.client.message.send(ctx.chat, {
-    interactiveMessage: {
-      body: { text },
-      footer: { text: '🎬 skyline-JXRA • YouTube Downloader' },
-      nativeFlowMessage: { buttons, messageVersion: 1 }
-    }
+  // Tombol standar (viewOnce wrapper + node bot) + header thumbnail video.
+  const headerImage = await uploadThumbHeader(ctx.client, sess.thumbnail);
+
+  await ctx.replyButtons({
+    text,
+    footer: '🎬 skyline-JXRA • YouTube Downloader',
+    buttons,
+    headerImage
   });
 }
 
@@ -244,6 +267,33 @@ async function handler(ctx) {
     }
 
     await ctx.react('⏳');
+
+    // Jalur utama: Skyline API (skyline.web.id) kalau API key diisi.
+    if (skylineReady()) {
+      try {
+        const info = await skylineInfo(url);
+        const tiers = info.qualities.length
+          ? info.qualities.map((q) => ({ height: q.height, label: q.label }))
+          : [{ height: null, label: 'Best (auto)' }];
+
+        SESSIONS.set(ctx.sender, {
+          url,
+          title: info.title || 'Tanpa judul',
+          duration: info.seconds || null,
+          durationText: info.duration,
+          thumbnail: info.thumbnail,
+          tiers,
+          skyline: info
+        });
+
+        await sendPage(ctx, 0);
+        await ctx.react('✅');
+        return;
+      } catch (err) {
+        logger.warn(`ytv: info Skyline gagal (${err?.message || err}) — fallback yt-dlp`);
+      }
+    }
+
     try {
       const info = await fetchInfo(url);
       const tiers = detectAvailableTiers(info.formats);
@@ -252,6 +302,7 @@ async function handler(ctx) {
         url,
         title: info.title || 'Tanpa judul',
         duration: info.duration,
+        thumbnail: info.thumbnail,
         tiers
       });
 

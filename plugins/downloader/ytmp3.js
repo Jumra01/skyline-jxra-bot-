@@ -7,6 +7,8 @@
 
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import { downloadAudio as skylineAudio, isConfigured as skylineReady } from '../../scraper/SKYLINE.js';
+import { logger } from '../../core/logger.js';
 
 function getInfo(url) {
   return new Promise((resolve, reject) => {
@@ -67,6 +69,40 @@ function downloadAudio(url) {
   });
 }
 
+/** Kirim audio hasil Skyline API (kalau key diisi). */
+async function sendViaSkyline(ctx, url) {
+  const audio = await skylineAudio(url);
+  const info = audio.info || {};
+  const title = String(audio.title || info.title || 'YouTube Audio').replace(/[\\/:*?"<>|]/g, '');
+
+  const caption =
+    `*${title}*\n\n` +
+    `*Duration:* ${info.duration || '-'}\n` +
+    `*Link:* ${url}\n\n` +
+    `> Via Skyline API 🎧`;
+
+  if (audio.thumbnail) {
+    try {
+      const thumbRes = await fetch(audio.thumbnail);
+      if (thumbRes.ok) {
+        const thumbBuf = Buffer.from(await thumbRes.arrayBuffer());
+        await ctx.client.message.send(ctx.chat, {
+          type: 'image', media: thumbBuf, mimetype: 'image/jpeg', caption
+        });
+      }
+    } catch {
+      /* thumbnail opsional */
+    }
+  }
+
+  await ctx.client.message.send(ctx.chat, {
+    type: 'audio',
+    media: audio.buffer,
+    mimetype: audio.mimetype,
+    fileName: `${title}.${audio.ext}`
+  });
+}
+
 const pluginConfig = {
   name: "yta",
   alias: ['ytmp3', 'ytaudio'],
@@ -95,6 +131,17 @@ async function handler(ctx) {
     await ctx.react('⏳');
 
     try {
+      // Jalur utama: Skyline API (skyline.web.id) kalau API key diisi.
+      if (skylineReady()) {
+        try {
+          await sendViaSkyline(ctx, url);
+          await ctx.react('✅');
+          return;
+        } catch (err) {
+          logger.warn(`yta: Skyline gagal (${err?.message || err}) — fallback yt-dlp`);
+        }
+      }
+
       const info = await getInfo(url);
       const title = (info.title || 'YouTube Audio').replace(/[\\/:*?"<>|]/g, '');
       const caption =

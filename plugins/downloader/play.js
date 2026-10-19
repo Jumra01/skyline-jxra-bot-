@@ -6,14 +6,21 @@
  */
 import { jhydl } from '../../scraper/YT-DL.js';
 import { downloadBestAudio } from '../../scraper/YTDLP.js';
+import {
+  ytSearch as skylineSearch,
+  downloadAudio as skylineAudio,
+  isConfigured as skylineReady
+} from '../../scraper/SKYLINE.js';
 import { onRichReply } from '../../handlers/messageHandler.js';
 import { logger } from '../../core/logger.js';
+import { uploadThumbHeader } from '../../lib/ytUi.js';
 
 const SESSIONS = (globalThis.JH_PLAY_SESSIONS ??= new Map());
 const PER_PAGE = 2;
 
-// Cuma sekali di-log biar terminal gak banjir kalau yt-dlp memang gak ada.
+// Cuma sekali di-log biar terminal gak banjir kalau sumber cadangan dipakai.
 let ytdlpWarned = false;
+let skylineWarned = false;
 
 /** Rapikan judul jadi nama file yang aman. */
 const safeName = (s, fallback = 'audio') =>
@@ -26,7 +33,7 @@ const cut = (s, n) => {
 
 const LINE = '━━━━━━━━━━━━━━━━━━━━';
 
-async function ytSearch(query) {
+async function legacySearch(query) {
   const res = await fetch('https://api.jhx.my.id/yt-search', {
     method: 'POST',
     headers: {
@@ -45,12 +52,45 @@ async function ytSearch(query) {
 }
 
 /**
+ * Cari lagu: Skyline API dulu (kalau key diisi), cadangan ke API lama.
+ * @returns {Promise<Array>} hasil dengan field { url, title, artist, duration }
+ */
+async function searchSongs(query) {
+  if (skylineReady()) {
+    try {
+      const results = await skylineSearch(query, 8);
+      if (results.length) return results;
+    } catch (err) {
+      if (!skylineWarned) {
+        skylineWarned = true;
+        logger.warn(`play: search Skyline gagal (${err?.message || err}) — pakai API cadangan`);
+      }
+    }
+  }
+  return legacySearch(query);
+}
+
+/**
  * Ambil audio dari YouTube.
- *  1. yt-dlp  → audio asli (m4a/AAC 128kbps, treble sampai ~16 kHz), tanpa transcode.
- *  2. cadangan → sumber lama (savenow), kualitas lebih rendah tapi selalu ada.
- * yt-dlp gagal / gak terpasang = bukan error buat user, langsung pindah ke cadangan.
+ *  1. Skyline API (skyline.web.id) → MP3 siap pakai, kalau API key diisi.
+ *  2. yt-dlp  → audio asli (m4a/AAC 128kbps) kalau binary-nya ada.
+ *  3. cadangan → sumber lama (savenow), kualitas lebih rendah tapi selalu ada.
+ * Gagal di satu jalur = bukan error buat user, langsung pindah jalur berikutnya.
  */
 async function fetchAudio(v) {
+  if (skylineReady()) {
+    try {
+      const res = await skylineAudio(v.url);
+      logger.info(`play: audio via Skyline API (${res.ext}, ${(res.buffer.length / 1048576).toFixed(1)}MB)`);
+      return { ...res, title: v.title || res.title };
+    } catch (err) {
+      if (!skylineWarned) {
+        skylineWarned = true;
+        logger.warn(`play: audio Skyline gagal (${err?.message || err}) — pakai sumber cadangan`);
+      }
+    }
+  }
+
   try {
     const res = await downloadBestAudio(v.url);
     logger.info(`play: audio via yt-dlp (${res.ext}, ${(res.buffer.length / 1048576).toFixed(1)}MB)`);
@@ -124,30 +164,15 @@ async function sendPage(ctx, page) {
   text += `Tap tombol angka di bawah\nbuat langsung putar lagunya 🎶`;
 
   const buttons = items.map((v, i) => ({
-    name: 'quick_reply',
-    buttonParamsJson: JSON.stringify({
-      display_text: String(start + i + 1),
-      id: `jhplay:${ctx.sender}:pick:${start + i}`
-    })
+    text: String(start + i + 1),
+    id: `jhplay:${ctx.sender}:pick:${start + i}`
   }));
 
   if (page > 0) {
-    buttons.push({
-      name: 'quick_reply',
-      buttonParamsJson: JSON.stringify({
-        display_text: '◀ Prev',
-        id: `jhplay:${ctx.sender}:prev:${page - 1}`
-      })
-    });
+    buttons.push({ text: '◀ Prev', id: `jhplay:${ctx.sender}:prev:${page - 1}` });
   }
   if (page < totalPages - 1) {
-    buttons.push({
-      name: 'quick_reply',
-      buttonParamsJson: JSON.stringify({
-        display_text: 'Next ▶',
-        id: `jhplay:${ctx.sender}:next:${page + 1}`
-      })
-    });
+    buttons.push({ text: 'Next ▶', id: `jhplay:${ctx.sender}:next:${page + 1}` });
   }
 
   items.forEach((v, i) => {
@@ -166,15 +191,15 @@ async function sendPage(ctx, page) {
     });
   }
 
-  await ctx.client.message.send(ctx.chat, {
-    interactiveMessage: {
-      body: { text },
-      footer: { text: '🎧 skyline-JXRA • Music Player' },
-      nativeFlowMessage: {
-        buttons,
-        messageVersion: 1
-      }
-    }
+  // Tombol lewat builder standar (viewOnce wrapper + node bot buat private
+  // chat) + header thumbnail hasil pertama — gaya paling reliable di WA.
+  const headerImage = await uploadThumbHeader(ctx.client, items[0]?.thumbnail);
+
+  await ctx.replyButtons({
+    text,
+    footer: '🎧 skyline-JXRA • Music Player',
+    buttons,
+    headerImage
   });
 }
 
@@ -204,13 +229,14 @@ async function handler(ctx) {
       return ctx.reply(
         '✦ ──『 🎧 SKYLINE MUSIC 』── ⚝\n\n' +
         'Masukkan judul lagu yang\nmau lo cari & putar 🎶\n\n' +
-        '*Contoh:*\n.play Bercinta Lewat Kata'
+        '*Contoh:*\n.play Bercinta Lewat Kata' +
+        (skylineReady() ? '' : '\n\n> 💡 Isi API key skyline.web.id di config\n> biar kualitas audio lebih bagus.')
       );
     }
 
     await ctx.react('⏳');
     try {
-      const results = (await ytSearch(query)).slice(0, 8);
+      const results = (await searchSongs(query)).slice(0, 8);
       SESSIONS.set(ctx.sender, { query, results });
       await sendPage(ctx, 0);
       await ctx.react('✅');

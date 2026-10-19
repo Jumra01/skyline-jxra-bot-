@@ -12,8 +12,8 @@
  *
  * Pakai:
  *   .restore              → lihat isi backup + pilihan tombol
- *   .restore all          → balikin apikey + thumbnail sekaligus
- *   .restore apikey       → balikin nilai di config.js doang
+ *   .restore all          → balikin API + thumbnail sekaligus
+ *   .restore api          → balikin API di config.js doang
  *   .restore thumb        → balikin thumbnail doang
  *
  * Thumbnail yang isinya cuma default (user belum pernah ganti) sengaja
@@ -23,10 +23,10 @@
  * yang gagal tetap disimpan buat dicoba ulang. `.updatesc` berikutnya
  * bikin backup baru lagi dari nilai yang ada sekarang.
  *
- * Catatan: balikin apikey di config.js butuh RESTART biar kebaca bot.
+ * Catatan: balikin API di config.js butuh RESTART biar kebaca bot.
  */
 import { onRichReply } from '../../handlers/messageHandler.js'
-import { backupStatus, restoreFromBackup } from '../../lib/keepSettings.js'
+import { backupStatus, restoreFromBackup, uniqueKeepLabels } from '../../lib/keepSettings.js'
 
 const SC_MAP = {
   a: 'ᴀ', b: 'ʙ', c: 'ᴄ', d: 'ᴅ', e: 'ᴇ', f: 'ꜰ', g: 'ɢ', h: 'ʜ', i: 'ɪ',
@@ -50,10 +50,10 @@ async function backupText() {
   const baris = []
 
   if (st.config.length) {
-    baris.push('🔑 *APIKEY / NILAI CONFIG*')
-    for (const n of st.config) baris.push(`  ◦ \`${n}\``)
+    baris.push('🔑 *API*')
+    for (const n of uniqueKeepLabels(st.config)) baris.push(`  ◦ \`${n}\``)
   } else {
-    baris.push('🔑 *APIKEY / NILAI CONFIG*')
+    baris.push('🔑 *API*')
     baris.push('  ◦ belum ada')
   }
 
@@ -74,7 +74,8 @@ async function backupText() {
 
 function ensureHandlers() {
   onRichReply('restore:all', async (ctx) => act(ctx, 'all'))
-  onRichReply('restore:config', async (ctx) => act(ctx, 'apikey'))
+  onRichReply('restore:api', async (ctx) => act(ctx, 'apikey'))
+  onRichReply('restore:config', async (ctx) => act(ctx, 'apikey')) // tombol lama
   onRichReply('restore:thumb', async (ctx) => act(ctx, 'thumb'))
 }
 
@@ -90,14 +91,26 @@ async function act(ctx, which) {
   const gagal = r.lost.length + r.assetsLost.length
   const bersih = (r.cleanedConfig ? 1 : 0) + r.cleanedAssets.length
 
-  const lines = ['', '🔑 *APIKEY / NILAI CONFIG*', r.kept.length ? r.kept.map((k) => `  ✅ \`${k}\``).join('\n') : '  — (gak dipulihkan)', '', '🖼️ *THUMBNAIL*', r.assetsKept.length ? r.assetsKept.map((f) => `  ✅ \`${f.split('/').pop()}\``).join('\n') : '  — (gak dipulihkan)']
+  const apiLabels = uniqueKeepLabels(r.kept)
+  const apiGagal = uniqueKeepLabels(r.lost)
+  const lines = [
+    '',
+    '🔑 *API*',
+    apiLabels.length ? apiLabels.map((k) => `  ✅ \`${k}\``).join('\n') : '  — (gak dipulihkan)',
+    ...(apiGagal.length ? apiGagal.map((k) => `  ⚠️ \`${k}\` gagal`) : []),
+    '',
+    '🖼️ *THUMBNAIL*',
+    r.assetsKept.length
+      ? r.assetsKept.map((f) => `  ✅ \`${f.split('/').pop()}\``).join('\n')
+      : '  — (gak dipulihkan)'
+  ]
 
   if (bersih) lines.push('', `🗑️ *${bersih} file backup dihapus* (udah kebalik)`)
   if (gagal) lines.push('', `⚠️ *${gagal} gagal dipulihkan* — backup-nya TETAP disimpan`, '   buat dicoba ulang nanti.')
-  if (total) lines.push('', '♻️ Jalankan *.restart* biar apikey di config kebaca bot.')
+  if (total) lines.push('', '♻️ Jalankan *.restart* biar API di config kebaca bot.')
 
   await ctx.reply(card(total ? (gagal ? '⚠️' : '✅') : '📭', total ? 'PULIHAN SELESAI' : 'GAK ADA YANG DIPULIHKAN', [
-    `Mode: *${which === 'all' ? 'SEMUA' : which.toUpperCase()}*`,
+    `Mode: *${which === 'all' ? 'SEMUA' : which === 'apikey' ? 'API' : 'THUMBNAIL'}*`,
     ...lines,
     '',
     total || gagal
@@ -112,9 +125,9 @@ const pluginConfig = {
   name: 'restore',
   alias: ['pulih', 'balikin', 'restoreset'],
   category: 'owner',
-  description: 'Balikin setting & apikey dari backup tanpa mengembalikan kode',
-  usage: '.restore [all|apikey|thumb]',
-  example: '.restore\n.restore apikey',
+  description: 'Balikin API & thumbnail dari backup tanpa mengembalikan kode',
+  usage: '.restore [all|api|thumb]',
+  example: '.restore\n.restore api',
   isOwner: true,
   isPremium: false,
   isGroup: false,
@@ -130,8 +143,8 @@ async function handler(ctx) {
   try {
     const arg = String(ctx.args?.[0] || '').toLowerCase()
 
-    if (['all', 'apikey', 'config', 'thumb', 'thumbnail'].includes(arg)) {
-      await act(ctx, arg === 'config' ? 'apikey' : arg === 'thumbnail' ? 'thumb' : arg)
+    if (['all', 'api', 'apikey', 'config', 'thumb', 'thumbnail'].includes(arg)) {
+      await act(ctx, arg === 'api' || arg === 'apikey' || arg === 'config' ? 'apikey' : arg === 'thumbnail' ? 'thumb' : arg)
       return
     }
 
@@ -151,7 +164,7 @@ async function handler(ctx) {
     ensureHandlers()
     await ctx.replyButtons({
       text: card('🔐', 'PULIH SETTING', [
-        'Setting & apikey kamu yang tersimpan',
+        'API & thumbnail kamu yang tersimpan',
         'sebelum kena update.',
         '',
         ...baris,
@@ -160,8 +173,8 @@ async function handler(ctx) {
       ]),
       footer: 'skyline-JXRA',
       buttons: [
-        { id: 'restore:all', text: '🔑 Pulihkan semua' },
-        { id: 'restore:config', text: '🔑 apikey doang' },
+        { id: 'restore:all', text: '🔐 Pulihkan semua' },
+        { id: 'restore:api', text: '🔑 Pulihkan API' },
         { id: 'restore:thumb', text: '🖼️ Thumbnail doang' }
       ]
     })

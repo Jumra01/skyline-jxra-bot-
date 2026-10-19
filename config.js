@@ -118,11 +118,29 @@ export default {
   },
 
   /* ════════════════════════════════════════════
+   *  SKYLINE API (satu key buat semua fitur skyline.web.id)
+   *  Dipakai: `.play` `.yta` `.ytv` `.ytsearch` (YouTube) + `.omniedit`
+   *  `apikey` SENGAJA DIKOSONGKAN — tiap orang isi punya mereka
+   *  sendiri, dibuat gratis di skyline.web.id (Dashboard → API Key).
+   *  Kalau kosong: fitur YouTube otomatis pakai sumber cadangan
+   *  (kualitas lebih rendah), `.omniedit` nolak & nyuruh bikin key.
+   *  Buat deploy panel, gak perlu edit config — pakai env:
+   *    SKYLINE_API_KEY / SKYLINE_API_URL
+   *    (fallback lama: OMNI_API_KEY / OMNI_WEBSITE)
+   * ════════════════════════════════════════════ */
+  skyline: {
+    website: 'https://skyline.web.id',
+    apikey: '',          // kosong → otomatis pakai `omniedit.apikey` di bawah
+  },
+
+  /* ════════════════════════════════════════════
    *  OMNI EDITOR (edit gambar AI)
    *  Backend skyline.web.id — dipakai plugins/ai/omniedit.js (.omniedit)
    *  `apikey` SENGAJA DIKOSONGKAN — tiap orang isi punya mereka
    *  sendiri, dibuat di skyline.web.id. Kalau kosong, `.omniedit`
    *  nolak & nyuruh bikin key dulu.
+   *  Catatan: key ini juga dipakai fitur YouTube kalau
+   *  `skyline.apikey` di atas dibiarkan kosong.
    *  Buat deploy panel, gak perlu edit config — pakai env:
    *    OMNI_API_KEY / OMNI_WEBSITE
    * ════════════════════════════════════════════ */

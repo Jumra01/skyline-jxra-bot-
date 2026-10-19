@@ -7,12 +7,36 @@
 
 import { onRichReply } from '../../handlers/messageHandler.js';
 import { searchYouTube } from '../../scraper/YT-Search.js';
+import { ytSearch as skylineSearch, isConfigured as skylineReady } from '../../scraper/SKYLINE.js';
+import { logger } from '../../core/logger.js';
+import { uploadThumbHeader } from '../../lib/ytUi.js';
 import { handler as ytvFeature } from './ytmp4.js';
 import { handler as ytaFeature } from './ytmp3.js';
 
 const SESSIONS = (globalThis.JH_YTSEARCH_SESSIONS ??= new Map());
 const PER_PAGE = 2;
 const LINE = '━━━━━━━━━━━━━━━━━━━━';
+
+let skylineWarned = false;
+
+/**
+ * Cari video: Skyline API dulu (kalau key diisi), cadangan ke scraper YouTube.
+ * @returns {Promise<Array>} hasil dengan field { url, title, channel, duration, views, thumbnail }
+ */
+async function searchVideos(query, limit = 10) {
+  if (skylineReady()) {
+    try {
+      const results = await skylineSearch(query, limit);
+      if (results.length) return results.slice(0, limit);
+    } catch (err) {
+      if (!skylineWarned) {
+        skylineWarned = true;
+        logger.warn(`ytsearch: Skyline gagal (${err?.message || err}) — pakai scraper cadangan`);
+      }
+    }
+  }
+  return searchYouTube(query, limit);
+}
 
 const cut = (s, n) => {
   s = String(s || '').replace(/\s+/g, ' ').trim();
@@ -31,9 +55,13 @@ async function showFormatButtons(ctx, video) {
   });
 
   const buttons = [
-    { name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: '🎬 Video', id: videoId }) },
-    { name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: '🎵 Audio', id: audioId }) }
+    { text: '🎬 Video', id: videoId },
+    { text: '🎵 Audio', id: audioId }
   ];
+  // Tombol CTA (paling sering dipakai bot lain): buka video aslinya di YouTube.
+  if (/^https?:\/\//i.test(video.url || '')) {
+    buttons.push({ text: '▶ Buka YouTube', url: video.url });
+  }
 
   const text =
     `✦ ──『 🎯 DIPILIH 』── ⚝\n\n` +
@@ -42,12 +70,13 @@ async function showFormatButtons(ctx, video) {
     `⏱ ${video.duration}  •  👁 ${video.views}\n\n` +
     `Mau didownload bentuk apa?`;
 
-  await ctx.client.message.send(ctx.chat, {
-    interactiveMessage: {
-      body: { text },
-      footer: { text: '🎬🎵 skyline-JXRA • Pilih Format' },
-      nativeFlowMessage: { buttons, messageVersion: 1 }
-    }
+  const headerImage = await uploadThumbHeader(ctx.client, video.thumbnail);
+
+  await ctx.replyButtons({
+    text,
+    footer: '🎬🎵 skyline-JXRA • Pilih Format',
+    buttons,
+    headerImage
   });
 }
 
@@ -85,30 +114,15 @@ async function sendPage(ctx, page) {
   text += `Tap tombol angka buat pilih,\nlanjut milih Video/Audio 🎬🎵`;
 
   const buttons = items.map((v, i) => ({
-    name: 'quick_reply',
-    buttonParamsJson: JSON.stringify({
-      display_text: String(start + i + 1),
-      id: `ytsearch:${ctx.sender}:pick:${start + i}`
-    })
+    text: String(start + i + 1),
+    id: `ytsearch:${ctx.sender}:pick:${start + i}`
   }));
 
   if (page > 0) {
-    buttons.push({
-      name: 'quick_reply',
-      buttonParamsJson: JSON.stringify({
-        display_text: '◀ Prev',
-        id: `ytsearch:${ctx.sender}:prev:${page - 1}`
-      })
-    });
+    buttons.push({ text: '◀ Prev', id: `ytsearch:${ctx.sender}:prev:${page - 1}` });
   }
   if (page < totalPages - 1) {
-    buttons.push({
-      name: 'quick_reply',
-      buttonParamsJson: JSON.stringify({
-        display_text: 'Next ▶',
-        id: `ytsearch:${ctx.sender}:next:${page + 1}`
-      })
-    });
+    buttons.push({ text: 'Next ▶', id: `ytsearch:${ctx.sender}:next:${page + 1}` });
   }
 
   items.forEach((v, i) => {
@@ -127,12 +141,13 @@ async function sendPage(ctx, page) {
     });
   }
 
-  await ctx.client.message.send(ctx.chat, {
-    interactiveMessage: {
-      body: { text },
-      footer: { text: '🔎 skyline-JXRA • YouTube Search' },
-      nativeFlowMessage: { buttons, messageVersion: 1 }
-    }
+  const headerImage = await uploadThumbHeader(ctx.client, items[0]?.thumbnail);
+
+  await ctx.replyButtons({
+    text,
+    footer: '🔎 skyline-JXRA • YouTube Search',
+    buttons,
+    headerImage
   });
 }
 
@@ -162,7 +177,7 @@ async function handler(ctx) {
 
     await ctx.react('⏳');
     try {
-      const results = await searchYouTube(query, 10);
+      const results = await searchVideos(query, 10);
       if (!results.length) {
         await ctx.react('❎');
         return ctx.reply('Gak nemu hasil buat pencarian itu.');
