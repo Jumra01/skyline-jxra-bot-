@@ -4,7 +4,7 @@
  * Hargai sebagaimana u mau dihargai.
  * bot.js — Chat AI yang INGET riwayat obrolan (.bot / tag nomor bot / bales pesan).
  *
- * OTAK: **Gemini web** lewat `lib/geminiWeb.js` (pola auto-ai skyline-md).
+ * OTAK: **Gemini web** lewat `lib/geminiWeb.js` — tanpa API key & tanpa kredit.
  *   • TANPA API key & tanpa kredit — cukup internet.
  *   • Multi-turn asli: percakapan nyambung lewat `session` (resumeArray+cookie)
  *     yang disimpan per user di `data/ai-chat.json`.
@@ -13,6 +13,10 @@
  *
  * PERSONA: default **Bella Clarissa (Bell409)** — lihat `lib/aiPersona.js`.
  *   Ganti kapan saja tanpa restart: `.setpersona` (file `data/ai-persona.txt`).
+ *
+ * AUTO AI (`.autoai`): nyalain/matiin + pilih karakter per grup
+ *   (lihat `lib/autoai.js` + `plugins/group/autoai.js`). Kalau grup di-set,
+ *   tag/bales di grup itu pakai persona+mode grup; kalau dimatiin → bot diem.
  *
  * MEMORI:
  *   • Jangka pendek — session Gemini + riwayat teks (`data/ai-chat.json`).
@@ -39,6 +43,7 @@ import { setMentionHandler } from '../../core/mentionTrigger.js'
 import { resolveLidToPn } from '../../core/lid.js'
 import { readPersona, personaIsCustom } from '../../lib/aiPersona.js'
 import { geminiChat } from '../../lib/geminiWeb.js'
+import { resolveAutoAI } from '../../lib/autoai.js'
 import { extractFacts, remember, factsFor, formatBlock, forget, stats as memStats } from '../../lib/aiMemory.js'
 
 const DATA_DIR = './data'
@@ -236,7 +241,7 @@ function nowWIB() {
   }
 }
 
-function buildSystem(ctx, persona, botName, memory = '') {
+function buildSystem(ctx, persona, botName, memory = '', mode = 'onlychat') {
   const u = userProfile(ctx)
   const self = botName || config.botName || 'bot ini'
   const mem = memory
@@ -260,7 +265,10 @@ Aturan identitas (jangan dilanggar):
   pakai data di atas (nama + peran), jangan ngarang nama lain.
 - Sapa dia dengan namanya sesekali biar kerasa personal.
 - Kalau dia nanya jam/hari/tanggal, jawab pakai baris *Waktu* di atas (jangan ngarang).
-- Balas pakai bahasa yang dia pakai (Indonesia → Indonesia, Inggris → Inggris).`
+- Balas pakai bahasa yang dia pakai (Indonesia → Indonesia, Inggris → Inggris).
+${mode === 'assistant'
+  ? '- Mode: ASISTEN — kalau ditanya hal serius (penjelasan, hitung, materi, saran) jawab lebih rapi & informatif; tetap ramah, boleh menyapa namanya.'
+  : '- Mode: OBROLAN SANTAI — jawab singkat & santai seperti chat biasa, jangan sok menggurui.'}`
 }
 
 /* ══════════════════════ memori jangka panjang ══════════════════════ */
@@ -374,7 +382,7 @@ function gagal(err, conf) {
   return { ok: false, limit: le, reply: le ? limitMsg() : humanError(err) }
 }
 
-async function runChat(ctx, text) {
+async function runChat(ctx, text, opts = {}) {
   const conf = cfg()
   if (!conf.enabled) return { ok: false, reply: '❌ Fitur AI chat lagi nonaktif (config.aiChat.enabled).' }
 
@@ -392,8 +400,8 @@ async function runChat(ctx, text) {
       if (r.added || r.updated) logger.debug({ key, pola: pola.map((f) => f.k) }, '[AIChat] fakta dicatat')
     }
   }
-  const system = conf.systemPrompt || readPersona()
-  const instruction = buildSystem(ctx, system, null, conf.remember ? formatBlock(key) : '')
+  const system = opts.persona || conf.systemPrompt || readPersona()
+  const instruction = buildSystem(ctx, system, null, conf.remember ? formatBlock(key) : '', opts.mode || 'onlychat')
   // Kalau udah ada session, Gemini inget sendiri konteksnya (cukup kirim pesan baru).
   // Kalau belum/gagal, riwayat teks ditempel biar obrolan tetap nyambung.
   const withHistory = flatten(h.msgs, pesan)
@@ -483,6 +491,7 @@ function helpText(p, conf) {
     `> ${p}bot reset — hapus riwayat${conf.remember ? ' + catatan' : ''}, mulai dari awal\n` +
     (conf.mentionTrigger ? '> tag nomor aku langsung (tanpa prefix)\n' : '') +
     (conf.mentionTrigger && conf.replyTrigger ? '> atau BALES/quote pesan-ku\n' : '') +
+    `> ${p}autoai on/off — atur Auto AI per grup (admin)\n` +
     '\n*Contoh:*\n' +
     `> ${p}bot jelasin apa itu lubang hitam singkat`
   )
@@ -539,8 +548,10 @@ async function handler(ctx) {
     }
   }
 
+  const ai = resolveAutoAI(ctx.chat)
+  const opts = ai.enabled ? { persona: ai.instruction, mode: ai.mode } : { persona: readPersona(), mode: 'onlychat' }
   await ctx.react('🕕')
-  const r = await runChat(ctx, text)
+  const r = await runChat(ctx, text, opts)
   await ctx.react(r.ok ? '✅' : r.limit ? '🚦' : '❎')
   return ctx.reply(r.reply)
 }
@@ -645,6 +656,10 @@ async function onMention(ctx) {
   if (!conf.enabled || !conf.mentionTrigger) return false
   if (!(await isBotMentioned(ctx, conf))) return false
 
+  // Auto AI per-chat (`.autoai`): kalau dimatiin di sini → diem aja.
+  const ai = resolveAutoAI(ctx.chat)
+  if (!ai.enabled) return true
+
   const num = getBotNumber()
   const text = stripMention(ctx.body, num)
   if (!text) {
@@ -665,7 +680,7 @@ async function onMention(ctx) {
   }
 
   await ctx.react('🕕')
-  const r = await runChat(ctx, text)
+  const r = await runChat(ctx, text, { persona: ai.instruction, mode: ai.mode })
   await ctx.react(r.ok ? '✅' : r.limit ? '🚦' : '❎')
   await ctx.reply(r.reply)
   return true

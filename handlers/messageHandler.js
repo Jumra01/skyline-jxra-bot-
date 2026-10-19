@@ -186,8 +186,6 @@ export async function route(client, event) {
   const desc = await describeMessage(client, ctx.chat, event.message)
   logger.info(`💬 ${who} [${where}] ${desc}`)
 
-  if (!ctx.body) return
-
   let matchedPrefix = ''
   for (const prefix of config.prefixes) {
     if (ctx.body.startsWith(prefix)) {
@@ -199,12 +197,12 @@ export async function route(client, event) {
   // [AI] Trigger mention: pesan TANPA prefix yang nge-tag nomor bot ditangani
   // handler yang didaftarkan plugin (mis. plugins/ai/bot.js). Handler balikin
   // `true` kalau dia nanganin (bot beneran di-tag), `false` kalau bukan.
+  // Dijalankan SEBELUM cek `ctx.body` kosong: biar tag tanpa teks / bales
+  // gambar-stiker tanpa caption tetap ditangani (handler yang kasih sapaan).
   if (!matchedPrefix) {
     const onMention = getMentionHandler()
     if (onMention) {
-      // Indikator "typing…" juga di jalur tag (tanpa prefix) — dulu cuma jalur
-      // command, jadi pas bot di-tag dia diem 3-6 detik tanpa jejak = kerasa mati.
-      if (config.typingPresence) void sendTyping(client, ctx.chat)
+      if (ctx.body && config.typingPresence) void sendTyping(client, ctx.chat)
       try {
         if (await onMention(ctx)) return
       } catch (err) {
@@ -213,6 +211,8 @@ export async function route(client, event) {
     }
     return
   }
+
+  if (!ctx.body) return
 
   const withoutPrefix = ctx.body.slice(matchedPrefix.length).trim()
   const [commandName, ...args] = withoutPrefix.split(/\s+/)
