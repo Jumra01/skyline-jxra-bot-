@@ -5,10 +5,19 @@
  * play.js — Putar lagu kesukaanmu dengan ini.
  */
 import { jhydl } from '../../scraper/YT-DL.js';
+import { downloadBestAudio } from '../../scraper/YTDLP.js';
 import { onRichReply } from '../../handlers/messageHandler.js';
+import { logger } from '../../core/logger.js';
 
 const SESSIONS = (globalThis.JH_PLAY_SESSIONS ??= new Map());
 const PER_PAGE = 2;
+
+// Cuma sekali di-log biar terminal gak banjir kalau yt-dlp memang gak ada.
+let ytdlpWarned = false;
+
+/** Rapikan judul jadi nama file yang aman. */
+const safeName = (s, fallback = 'audio') =>
+  (String(s || '').replace(/[\\/:*?"<>|\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || fallback);
 
 const cut = (s, n) => {
   s = String(s || '').replace(/\s+/g, ' ').trim();
@@ -35,6 +44,38 @@ async function ytSearch(query) {
   return json.data;
 }
 
+/**
+ * Ambil audio dari YouTube.
+ *  1. yt-dlp  → audio asli (m4a/AAC 128kbps, treble sampai ~16 kHz), tanpa transcode.
+ *  2. cadangan → sumber lama (savenow), kualitas lebih rendah tapi selalu ada.
+ * yt-dlp gagal / gak terpasang = bukan error buat user, langsung pindah ke cadangan.
+ */
+async function fetchAudio(v) {
+  try {
+    const res = await downloadBestAudio(v.url);
+    logger.info(`play: audio via yt-dlp (${res.ext}, ${(res.buffer.length / 1048576).toFixed(1)}MB)`);
+    return { ...res, title: v.title };
+  } catch (err) {
+    if (!ytdlpWarned) {
+      ytdlpWarned = true;
+      logger.warn(`play: yt-dlp gagal (${err?.message || err}) — pakai sumber cadangan, kualitas lebih rendah`);
+    }
+  }
+
+  const data = await jhydl.download(v.url, 'mp3');
+  if (!data || data.error) throw new Error(data?.error || 'Gagal unduh audio.');
+
+  const fr = await fetch(data.download_url);
+  if (!fr.ok) throw new Error('Gagal ambil audio: ' + fr.status);
+
+  return {
+    buffer: Buffer.from(await fr.arrayBuffer()),
+    ext: 'mp3',
+    mimetype: 'audio/mpeg',
+    title: data.title || v.title
+  };
+}
+
 async function downloadAndSend(ctx, idx) {
   const sess = SESSIONS.get(ctx.sender);
   if (!sess) return ctx.reply('Sesi habis. Ketik *.play <judul>* lagi.');
@@ -43,18 +84,13 @@ async function downloadAndSend(ctx, idx) {
 
   await ctx.react('⏳');
   try {
-    const data = await jhydl.download(v.url, 'mp3');
-    if (!data || data.error) throw new Error(data?.error || 'Gagal unduh audio.');
-
-    const fr = await fetch(data.download_url);
-    if (!fr.ok) throw new Error('Gagal ambil audio: ' + fr.status);
-    const buf = Buffer.from(await fr.arrayBuffer());
+    const audio = await fetchAudio(v);
 
     await ctx.client.message.send(ctx.chat, {
       type: 'audio',
-      media: buf,
-      mimetype: 'audio/mpeg',
-      fileName: (data.title || v.title) + '.mp3'
+      media: audio.buffer,
+      mimetype: audio.mimetype,
+      fileName: `${safeName(audio.title)}.${audio.ext}`
     });
     await ctx.react('🎧');
   } catch (e) {
