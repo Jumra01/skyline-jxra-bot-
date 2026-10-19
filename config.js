@@ -213,7 +213,9 @@ export default {
    *  PRESENCE
    * ════════════════════════════════════════════ */
   autoRead: false,
-  typingPresence: false,
+  // Indikator "typing…" (bot kelihatan sedang mengetik) — bikin bot kerasa
+  // hidup, penting buat fitur yang mikir lama (AI `.bot` 3-6 detik).
+  typingPresence: true,
 
   /* ════════════════════════════════════════════
    *  HOT RELOAD

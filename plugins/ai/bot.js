@@ -38,7 +38,7 @@ const STORE_FILE = `${DATA_DIR}/ai-chat.json`   // riwayat + session per nomor
 const USAGE_FILE = `${DATA_DIR}/ai-usage.json`  // penghitung pemakaian harian
 const MAX_TRACKED_USERS = 300 // batas jumlah user yang disimpan di disk
 const MAX_CHARS = 4000        // potong pesan biar prompt gak meledak
-const HISTORY_IN_PROMPT = 10  // pesan terakhir yang ditempel kalau mulai dari nol
+const HISTORY_IN_PROMPT = 16  // pesan terakhir yang ditempel kalau mulai dari nol
 
 const pluginConfig = {
   name: 'bot',
@@ -191,6 +191,20 @@ function userProfile(ctx) {
   }
 }
 
+/** Waktu sekarang (WIB) — biar AI gak "mati" soal jam/hari/tanggal. */
+function nowWIB() {
+  try {
+    const t = new Intl.DateTimeFormat('id-ID', {
+      timeZone: 'Asia/Jakarta',
+      weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+      hour: '2-digit', minute: '2-digit',
+    }).format(new Date())
+    return `${t} WIB`
+  } catch {
+    return `${new Date().toISOString()} UTC`
+  }
+}
+
 function buildSystem(ctx, persona, botName) {
   const u = userProfile(ctx)
   const self = botName || config.botName || 'bot ini'
@@ -202,6 +216,7 @@ Kamu sekarang sedang mengobrol dengan SATU orang berikut:
   • Nomor : ${u.number}
   • Peran : ${u.role}
   • Ruang : ${ctx.isGroup ? 'grup WhatsApp' : 'chat pribadi'}
+  • Waktu : ${nowWIB()}
 
 Aturan identitas (jangan dilanggar):
 - Nama di atas adalah nama ORANG YANG MENGAJAKMU NGOMONG — BUKAN namamu.
@@ -210,6 +225,7 @@ Aturan identitas (jangan dilanggar):
 - Kalau dia tanya "siapa aku / siapa nama saya / kamu tau aku siapa", jawab
   pakai data di atas (nama + peran), jangan ngarang nama lain.
 - Sapa dia dengan namanya sesekali biar kerasa personal.
+- Kalau dia nanya jam/hari/tanggal, jawab pakai baris *Waktu* di atas (jangan ngarang).
 - Balas pakai bahasa yang dia pakai (Indonesia → Indonesia, Inggris → Inggris).`
 }
 
@@ -488,7 +504,7 @@ export { pluginConfig as config, handler }
 // Buat pengujian internal (loader cuma baca `config` + `handler`).
 export const _internals = {
   cfg, runChat, humanError, isLimitErr, limitMsg,
-  usageToday, addUsage, USAGE_FILE, STORE_FILE, buildSystem, userProfile,
+  usageToday, addUsage, USAGE_FILE, STORE_FILE, buildSystem, userProfile, nowWIB,
   isBotMentioned, mentionedJids, quotedParticipant, stripMention, flatten,
   resetHistory, store,
 }

@@ -202,6 +202,9 @@ export async function route(client, event) {
   if (!matchedPrefix) {
     const onMention = getMentionHandler()
     if (onMention) {
+      // Indikator "typing…" juga di jalur tag (tanpa prefix) — dulu cuma jalur
+      // command, jadi pas bot di-tag dia diem 3-6 detik tanpa jejak = kerasa mati.
+      if (config.typingPresence) void sendTyping(client, ctx.chat)
       try {
         if (await onMention(ctx)) return
       } catch (err) {
