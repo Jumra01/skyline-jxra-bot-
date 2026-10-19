@@ -144,7 +144,9 @@ async function sendPage(ctx, page) {
 
 const pluginConfig = {
   name: "play",
-  alias: ['ytplay', 'playyt', 'music'],
+  // alias `music` dipindah ke koleksi musik (plugins/media/music.js) sesuai
+  // skyline-md — di sini cukup `.play` / `.ytplay` / `.playyt`.
+  alias: ['ytplay', 'playyt'],
   category: "downloader",
   description: "Search YouTube audio, pilih lewat button",
   usage: ".play",
