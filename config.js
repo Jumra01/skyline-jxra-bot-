@@ -140,6 +140,11 @@ export default {
    *      ramah, tinggal update `lib/geminiWeb.js`.
    *  PERSONA: file `data/ai-persona.txt` atau command `.setpersona`.
    *  Default: Bella Clarissa (Bell409) — lihat `lib/aiPersona.js`.
+   *  MEMORI JANGKA PANJANG (`remember`): catatan fakta penting tentang user
+   *  (`data/ai-memory.json` — file kecil, otomatis di-prune: maks 25 fakta/user,
+   *  500 user terakhir). Pola kalimat ditangkap INSTAN tanpa panggilan AI;
+   *  `rememberEvery` = tiap berapa pesan AI dipakai ngerapihin fakta (jalan di
+   *  belakang layar, gak nambah delay balasan; 0 = matiin yang ini juga).
    *  AUTO-BALAS (tanpa prefix): `mentionTrigger` = bot di-tag/di-@ nomornya,
    *  `replyTrigger` = pesan bot DIBALES (quote/swipe-reply) → dua-duanya
    *  dianggap ngajak ngobrol. Matiin salah satu kalau berisik di grup.
@@ -150,6 +155,8 @@ export default {
     timeoutMs: 60_000,    // batas tunggu balasan AI (ms)
     mentionTrigger: true, // balas otomatis kalau nomor bot di-tag (tanpa prefix)
     replyTrigger: true,   // balas juga kalau pesan bot DIBALES (quote/swipe-reply)
+    remember: true,       // nyatet fakta penting tentang user (memori jangka panjang)
+    rememberEvery: 8,     // tiap N pesan, rapihin fakta pakai AI (0 = cuma pola instan)
     systemPrompt: '',     // kosong → pakai data/ai-persona.txt / default (Bella)
   },
 

@@ -14,6 +14,13 @@
  * PERSONA: default **Bella Clarissa (Bell409)** — lihat `lib/aiPersona.js`.
  *   Ganti kapan saja tanpa restart: `.setpersona` (file `data/ai-persona.txt`).
  *
+ * MEMORI:
+ *   • Jangka pendek — session Gemini + riwayat teks (`data/ai-chat.json`).
+ *   • Jangka panjang — fakta penting tentang user (`lib/aiMemory.js` →
+ *     `data/ai-memory.json`): pola kalimat ditangkap INSTAN (0 panggilan AI),
+ *     sisanya diekstrak AI tiap `rememberEvery` pesan di belakang layar.
+ *     Lihat/hapus: `.bot fakta`, `.bot inget <hal>`, `.bot reset`.
+ *
  * Trigger:
  *   • command  → `.bot <pertanyaan>` (+ `.bot reset` buat hapus riwayat)
  *   • mention  → tag nomor bot (tanpa prefix), kalau mentionTrigger aktif
@@ -32,6 +39,7 @@ import { setMentionHandler } from '../../core/mentionTrigger.js'
 import { resolveLidToPn } from '../../core/lid.js'
 import { readPersona, personaIsCustom } from '../../lib/aiPersona.js'
 import { geminiChat } from '../../lib/geminiWeb.js'
+import { extractFacts, remember, factsFor, formatBlock, forget, stats as memStats } from '../../lib/aiMemory.js'
 
 const DATA_DIR = './data'
 const STORE_FILE = `${DATA_DIR}/ai-chat.json`   // riwayat + session per nomor
@@ -67,12 +75,14 @@ function cfg() {
     timeoutMs: Math.max(5000, Number(c.timeoutMs) || 60_000),
     mentionTrigger: c.mentionTrigger !== false,
     replyTrigger: c.replyTrigger !== false,
+    remember: c.remember !== false,
+    rememberEvery: Math.max(0, Math.min(50, Number(c.rememberEvery ?? 8) || 0)),
     systemPrompt: String(c.systemPrompt || '').trim(),
   }
 }
 
 /* ══════════════════════ riwayat (memori) ══════════════════════ */
-const store = new Map() // jid -> { at, msgs: [{ role, content }], session }
+const store = new Map() // jid -> { at, msgs: [{ role, content }], session, sinceExtract }
 let saveTimer = null
 
 function loadStore() {
@@ -84,6 +94,7 @@ function loadStore() {
         at: Number(v.at) || 0,
         msgs: v.msgs.slice(-100),
         session: typeof v.session === 'string' ? v.session : null,
+        sinceExtract: Math.max(0, Number(v.sinceExtract) || 0),
       })
     }
   } catch { /* belum ada / rusak → mulai kosong */ }
@@ -99,7 +110,14 @@ function saveStore() {
         .sort((a, b) => (b[1].at || 0) - (a[1].at || 0))
         .slice(0, MAX_TRACKED_USERS)
       const obj = {}
-      for (const [k, v] of top) obj[k] = { at: v.at, msgs: v.msgs.slice(-100), session: v.session || null }
+      for (const [k, v] of top) {
+        obj[k] = {
+          at: v.at,
+          msgs: v.msgs.slice(-100),
+          session: v.session || null,
+          sinceExtract: Math.max(0, Number(v.sinceExtract) || 0),
+        }
+      }
       const tmp = `${STORE_FILE}.tmp`
       fs.writeFileSync(tmp, JSON.stringify(obj))
       fs.renameSync(tmp, STORE_FILE)
@@ -116,7 +134,7 @@ function historyKey(ctx) {
 
 function getHistory(key, max) {
   let h = store.get(key)
-  if (!h) { h = { at: Date.now(), msgs: [], session: null }; store.set(key, h) }
+  if (!h) { h = { at: Date.now(), msgs: [], session: null, sinceExtract: 0 }; store.set(key, h) }
   if (h.msgs.length > max) h.msgs = h.msgs.slice(-max)
   return h
 }
@@ -124,6 +142,7 @@ function getHistory(key, max) {
 function resetHistory(key) {
   store.delete(key)
   saveStore()
+  return forget(key) // sekalian lupakan fakta tentang dia
 }
 
 /** Riwayat teks → ditempel ke prompt saat mulai percakapan baru (tanpa session). */
@@ -205,9 +224,12 @@ function nowWIB() {
   }
 }
 
-function buildSystem(ctx, persona, botName) {
+function buildSystem(ctx, persona, botName, memory = '') {
   const u = userProfile(ctx)
   const self = botName || config.botName || 'bot ini'
+  const mem = memory
+    ? `\n\n${memory}\nFakta di atas itu BENAR — kamu udah tau dari obrolan sebelumnya. JANGAN\nbilang "gak tau" / "mana aku tau" / "kamu belum pernah bilang" soal hal yang\nudah tercatat di situ; pakai & sebut sewajarnya. Tapi jangan mengarang fakta\nlain di luar itu, dan jangan sebut kata "catatan".`
+    : ''
   return `${persona}
 
 [KONTEKS LAWAN BICARA — WAJIB DIBACA SEBELUM BALAS]
@@ -216,7 +238,7 @@ Kamu sekarang sedang mengobrol dengan SATU orang berikut:
   • Nomor : ${u.number}
   • Peran : ${u.role}
   • Ruang : ${ctx.isGroup ? 'grup WhatsApp' : 'chat pribadi'}
-  • Waktu : ${nowWIB()}
+  • Waktu : ${nowWIB()}${mem}
 
 Aturan identitas (jangan dilanggar):
 - Nama di atas adalah nama ORANG YANG MENGAJAKMU NGOMONG — BUKAN namamu.
@@ -227,6 +249,67 @@ Aturan identitas (jangan dilanggar):
 - Sapa dia dengan namanya sesekali biar kerasa personal.
 - Kalau dia nanya jam/hari/tanggal, jawab pakai baris *Waktu* di atas (jangan ngarang).
 - Balas pakai bahasa yang dia pakai (Indonesia → Indonesia, Inggris → Inggris).`
+}
+
+/* ══════════════════════ memori jangka panjang ══════════════════════ */
+const EXTRACT_KEYS = 'nama|suka|gak suka|umur|tinggal|kerja|sekolah|ultah|punya|hobi|catatan'
+
+/** Baca JSON array fakta dari balasan AI (tahan teks nyasar di sekelilingnya). */
+function parseFactsJson(text) {
+  const m = String(text || '').match(/\[[\s\S]*\]/)
+  if (!m) return []
+  try {
+    const arr = JSON.parse(m[0])
+    if (!Array.isArray(arr)) return []
+    return arr
+      .filter((x) => x && typeof x.v === 'string' && x.v.trim().length >= 2)
+      .slice(0, 5)
+      .map((x) => ({
+        k: (typeof x.k === 'string' ? x.k.trim().toLowerCase() : 'catatan').slice(0, 20) || 'catatan',
+        v: x.v.trim().slice(0, 160),
+      }))
+  } catch {
+    return []
+  }
+}
+
+const extracting = new Set()
+
+/**
+ * Ekstraksi fakta pakai AI — jalan DI BELAKANG LAYAR (gak nungguin balasan user),
+ * cuma tiap `rememberEvery` pesan, dan cuma 1 proses per user sekaligus.
+ * Ini yang nangkep fakta yang gak ketangkep pola kalimat.
+ */
+async function llmRemember(ctx, conf, key, msgs) {
+  if (extracting.has(key)) return
+  extracting.add(key)
+  try {
+    const convo = msgs
+      .slice(-8)
+      .map((m) => `${m.role === 'assistant' ? 'Kamu' : 'User'}: ${String(m.content || '').slice(0, 300)}`)
+      .join('\n')
+    const prompt =
+      'Ambil FAKTA PENTING tentang USER (bukan tentang AI/asisten) dari percakapan ini.\n' +
+      `Jawab HANYA JSON array (tanpa penjelasan), maksimal 5 item, format: [{"k":"${EXTRACT_KEYS}","v":"..."}]\n` +
+      'Fakta yang layak: identitas, kegemaran, pekerjaan/sekolah, tanggal penting, kondisi, kebiasaan, janji.\n' +
+      'JANGAN ambil hal yang cuma sekali/umum (mis. "user bertanya apa itu lubang hitam").\n' +
+      'Kalau tidak ada yang layak, jawab [].\n\n' +
+      `Percakapan:\n${convo}`
+    const res = await geminiChat({
+      message: prompt,
+      instruction: 'Kamu alat ekstraksi fakta. Balas HANYA JSON array valid, tanpa teks lain.',
+      timeoutMs: Math.min(conf.timeoutMs, 45_000),
+    })
+    const found = parseFactsJson(res?.text)
+    if (found.length) {
+      const r = remember(key, found)
+      logger.debug({ added: r.added, updated: r.updated }, '[AIChat] memori AI diperbarui')
+    }
+  } catch (err) {
+    logger.debug({ err: String(err?.message || err).slice(0, 120) }, '[AIChat] ekstraksi memori AI dilewati')
+  } finally {
+    extracting.delete(key)
+  }
 }
 
 /* ══════════════════════ error ramah ══════════════════════ */
@@ -288,8 +371,17 @@ async function runChat(ctx, text) {
   h.at = Date.now()
 
   const pesan = String(text).slice(0, MAX_CHARS)
+  // Memori jangka panjang: pola kalimat dulu (instan, gratis) — biar fakta yang
+  // baru disebut LANGSUNG kepakai di balasan ini juga, bukan nunggu nanti.
+  if (conf.remember) {
+    const pola = extractFacts(pesan)
+    if (pola.length) {
+      const r = remember(key, pola)
+      if (r.added || r.updated) logger.debug({ key, pola: pola.map((f) => f.k) }, '[AIChat] fakta dicatat')
+    }
+  }
   const system = conf.systemPrompt || readPersona()
-  const instruction = buildSystem(ctx, system)
+  const instruction = buildSystem(ctx, system, null, conf.remember ? formatBlock(key) : '')
   // Kalau udah ada session, Gemini inget sendiri konteksnya (cukup kirim pesan baru).
   // Kalau belum/gagal, riwayat teks ditempel biar obrolan tetap nyambung.
   const withHistory = flatten(h.msgs, pesan)
@@ -325,8 +417,16 @@ async function runChat(ctx, text) {
   h.msgs.push({ role: 'assistant', content: answer.slice(0, MAX_CHARS) })
   if (h.msgs.length > conf.maxHistory) h.msgs = h.msgs.slice(-conf.maxHistory)
   if (res?.session) h.session = res.session
+  h.sinceExtract = Math.max(0, Number(h.sinceExtract) || 0) + 1
   saveStore()
   addUsage(1)
+
+  // Cadangan: ekstraksi fakta pakai AI tiap `rememberEvery` pesan — di belakang
+  // layar (gak nambah delay balasan), cuma 1 proses per user sekaligus.
+  if (conf.remember && conf.rememberEvery > 0 && h.sinceExtract >= conf.rememberEvery) {
+    h.sinceExtract = 0
+    void llmRemember(ctx, conf, key, h.msgs)
+  }
 
   return { ok: true, reply: answer.slice(0, MAX_CHARS) }
 }
@@ -334,19 +434,42 @@ async function runChat(ctx, text) {
 /* ══════════════════════ teks bantuan ══════════════════════ */
 function helpText(p, conf) {
   const persona = personaIsCustom() ? 'custom (`data/ai-persona.txt`)' : 'Bella Clarissa (default)'
+  const mem = conf.remember ? 'Aku juga *nyatet hal penting* tentang kamu (nama, kesukaan, dll) biar gak lupa.\n' : ''
   return (
     '🤖 *AI CHAT — Gemini*\n\n' +
     `Otak: *Gemini* (lewat web, tanpa API key)\n` +
     `Persona: ${persona}\n` +
     `Aku inget riwayat obrolan kita (maks ${conf.maxHistory} pesan).\n` +
+    mem +
     `Pemakaian hari ini: *${nfmt(usageToday())}* balasan\n\n` +
     '*Cara pakai:*\n' +
     `> ${p}bot <pertanyaan>\n` +
-    `> ${p}bot reset — hapus riwayat, mulai dari awal\n` +
+    (conf.remember ? `> ${p}bot fakta — lihat catatan tentang kamu\n` : '') +
+    (conf.remember ? `> ${p}bot inget <hal penting> — suruh aku nyatet\n` : '') +
+    `> ${p}bot reset — hapus riwayat${conf.remember ? ' + catatan' : ''}, mulai dari awal\n` +
     (conf.mentionTrigger ? '> tag nomor aku langsung (tanpa prefix)\n' : '') +
     (conf.mentionTrigger && conf.replyTrigger ? '> atau BALES/quote pesan-ku\n' : '') +
     '\n*Contoh:*\n' +
     `> ${p}bot jelasin apa itu lubang hitam singkat`
+  )
+}
+
+/** Kartu daftar fakta yang dicatat tentang user. */
+function faktaText(key, p) {
+  const facts = factsFor(key)
+  if (!facts.length) {
+    return (
+      '🧠 *CATATAN TENTANG KAMU*\n\n' +
+      'Masih kosong — aku belum nangkep hal penting apa pun.\n' +
+      `> Kasih tau aja, mis. \`${p}bot inget aku suka kopi hitam\``
+    )
+  }
+  const lines = facts.map((f, i) => `${i + 1}. *${f.k}*: ${f.v}`)
+  return (
+    '🧠 *CATATAN TENTANG KAMU*\n\n' +
+    `${lines.join('\n')}\n\n` +
+    `_Yang ini kesimpan permanen (gak kehapus walau obrolan panjang)._\n` +
+    `> Hapus semua: \`${p}bot reset\``
   )
 }
 
@@ -362,7 +485,24 @@ async function handler(ctx) {
 
   if (/^(reset|clear|hapus|lupakan|forget)$/i.test(text)) {
     resetHistory(historyKey(ctx))
-    return ctx.reply('🧹 Oke, riwayat obrolan kita udah aku lupain. Mulai dari awal lagi ya!')
+    return ctx.reply(
+      '🧹 Oke, riwayat obrolan kita udah aku lupain' +
+      (conf.remember ? ' — termasuk catatan tentang kamu' : '') +
+      '. Mulai dari awal lagi ya!'
+    )
+  }
+
+  if (conf.remember && /^(fakta|memori|ingatan|catatan)$/i.test(text)) {
+    return ctx.reply(faktaText(historyKey(ctx), p))
+  }
+
+  if (conf.remember) {
+    const m = text.match(/^(?:inget|ingat|catat|catet|note)\s+([\s\S]{2,200})$/i)
+    if (m) {
+      const v = m[1].trim()
+      remember(historyKey(ctx), { k: 'catatan', v })
+      return ctx.reply(`🧠 Siap, aku catet: *${v}*\n> Lihat semua catatan: \`${p}bot fakta\``)
+    }
   }
 
   await ctx.react('🕕')
@@ -506,5 +646,5 @@ export const _internals = {
   cfg, runChat, humanError, isLimitErr, limitMsg,
   usageToday, addUsage, USAGE_FILE, STORE_FILE, buildSystem, userProfile, nowWIB,
   isBotMentioned, mentionedJids, quotedParticipant, stripMention, flatten,
-  resetHistory, store,
+  resetHistory, store, llmRemember, parseFactsJson, faktaText, helpText,
 }
