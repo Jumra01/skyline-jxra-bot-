@@ -7,7 +7,7 @@
  *   TANPA browser. puppeteer dihapus dari project (hemat ±652 MB disk,
  *   wajib buat panel Pterodactyl 1 GB).
  *   Kredensial dibaca dari env SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET
- *   (fallback: config.spotify.clientId / clientSecret).
+ *   (fallback: config.api.spotify.clientId / clientSecret).
  *   Download (JHSpotDL / JHSDown) tetap pakai axios — gak butuh browser.
  */
 
@@ -22,8 +22,8 @@ const SEARCH_URL = 'https://api.spotify.com/v1/search';
 
 /* ── Kredensial app Spotify (env menang, config cuma fallback) ────────── */
 function getCreds() {
-  const id = String(process.env.SPOTIFY_CLIENT_ID || config.spotify?.clientId || '').trim();
-  const secret = String(process.env.SPOTIFY_CLIENT_SECRET || config.spotify?.clientSecret || '').trim();
+  const id = String(process.env.SPOTIFY_CLIENT_ID || config.api?.spotify?.clientId || '').trim();
+  const secret = String(process.env.SPOTIFY_CLIENT_SECRET || config.api?.spotify?.clientSecret || '').trim();
   return { id, secret };
 }
 

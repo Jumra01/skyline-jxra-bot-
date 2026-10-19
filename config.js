@@ -8,7 +8,7 @@
  *
  *   Owner / staff  → `owner.numbers` (format 628xxx)
  *   Prefix         → `mainPrefix` + `prefixes`
- *   API skyline    → `skyline.apikey` (atau env SKYLINE_API_KEY)
+ *   Kredensial API → `api.skyline.apikey` (atau env SKYLINE_API_KEY)
  *   Gaya balasan   → `reply.variant` (atau .setreply)
  *   Premium        → database, atur via .addprem / .premlist
  */
@@ -66,23 +66,25 @@ export default {
     maxVideoSeconds: 10,
   },
 
-  /* ── SPOTIFY (opsional) ────────────────────────────────── */
-  // Search by judul butuh app kredensial (gratis) dari
-  // developer.spotify.com/dashboard. Jangan tulis rahasia di sini —
-  // pakai env SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET.
-  // Kosong = search mati, `.spotify <link>` tetap jalan.
-  spotify: {
-    clientId: '',
-    clientSecret: '',
-  },
-
-  /* ── SKYLINE API ───────────────────────────────────────── */
-  // Satu key buat `.play` `.yta` `.ytv` `.ytsearch` + `.omniedit`.
-  // Dikosongkan di repo — tiap user isi key sendiri dari skyline.web.id.
-  // Bisa juga lewat env: SKYLINE_API_KEY / SKYLINE_API_URL.
-  skyline: {
-    website: 'https://skyline.web.id',
-    apikey: '',
+  /* ── API (kredensial layanan luar) ─────────────────────── */
+  // Semua kredensial API dikumpulin di sini biar rapi & gampang dicari.
+  // Dikosongkan di repo — tiap user isi sendiri. Override lewat env:
+  //   skyline → SKYLINE_API_KEY / SKYLINE_API_URL
+  //   spotify → SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET
+  // Kosong = fitur terkait mati/fallback, fitur lain tetap jalan.
+  api: {
+    // Satu key buat `.play` `.yta` `.ytv` `.ytsearch` + `.omniedit`.
+    skyline: {
+      website: 'https://skyline.web.id',
+      apikey: '',
+    },
+    // Search Spotify by judul butuh app gratis dari
+    // developer.spotify.com/dashboard. `.spotify <link>` tetap jalan
+    // walau kredensial ini kosong.
+    spotify: {
+      clientId: '',
+      clientSecret: '',
+    },
   },
 
   /* ── AI CHAT (.bot) ────────────────────────────────────── */

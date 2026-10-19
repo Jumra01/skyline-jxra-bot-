@@ -5,7 +5,7 @@
  * SKYLINE.js — Client API skyline.web.id (YouTube downloader + search).
  *
  * Kredensial SATU SUMBER untuk `.play`/`.yta`/`.ytv`/`.ytsearch` DAN `.omniedit`:
- *   config.js → blok `skyline` (website + apikey)
+ *   config.js → blok `api.skyline` (website + apikey)
  *   Override env (deploy panel):
  *     SKYLINE_API_KEY / SKYLINE_API_URL
  *     (env lama OMNI_API_KEY / OMNI_WEBSITE masih diterima)
@@ -50,8 +50,8 @@ export class SkylineApiError extends Error {
 
 /* ══════════════ kredensial ══════════════ */
 export function skylineCreds() {
-  const conf = config.skyline || {};
-  // `OMNI_*` = nama env lama sebelum blok config digabung ke `skyline`.
+  const conf = config.api?.skyline || {};
+  // `OMNI_*` = nama env lama sebelum blok config digabung ke `api.skyline`.
   // Tetap diterima biar deployment panel yang sudah terlanjur set gak putus.
   const website = String(
     process.env.SKYLINE_API_URL || conf.website || process.env.OMNI_WEBSITE || DEFAULT_SITE
@@ -399,7 +399,7 @@ export function keyHint(ctx) {
     'Fitur YouTube butuh API key skyline.web.id.\n\n' +
     `> Buat key gratis di *${website}* (menu Dashboard)\n\n` +
     '*Cara isi:*\n' +
-    `> \`config.js\` → blok \`skyline.apikey\`\n` +
+    `> \`config.js\` → blok \`api.skyline.apikey\`\n` +
     `> atau env \`SKYLINE_API_KEY\`\n\n` +
     `Sementara ini ${p}play / ${p}yta / ${p}ytv / ${p}ytsearch masih pakai sumber cadangan (kualitas lebih rendah).`
   );
