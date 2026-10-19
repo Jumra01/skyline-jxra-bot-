@@ -41,6 +41,7 @@ import { getBotNumber } from '../../core/staff.js'
 import { getUser } from '../../core/database.js'
 import { setMentionHandler } from '../../core/mentionTrigger.js'
 import { resolveLidToPn } from '../../core/lid.js'
+import { unwrapMessage } from '../../core/context.js'
 import { readPersona, personaIsCustom } from '../../lib/aiPersona.js'
 import { geminiChat } from '../../lib/geminiWeb.js'
 import { resolveAutoAI } from '../../lib/autoai.js'
@@ -524,14 +525,31 @@ function diagText(ctx, p) {
         `Hasil    : ${s.result || '-'}`,
       ]
     : ['(belum ada pesan tanpa prefix sejak bot nyala)']
+  const raw = s?.raw
+    ? [
+        `key.remoteJid  : ${raw0(s.raw.key.remoteJid)}`,
+        `key.participant: ${raw0(s.raw.key.participant)}${s.raw.key.participantAlt ? `  (alt: ${s.raw.key.participantAlt})` : ''}`,
+        `remoteJidAlt   : ${raw0(s.raw.key.remoteJidAlt)}`,
+        `fromMe         : ${s.raw.key.fromMe}`,
+        `ctx.mentioned  : ${raw0(s.raw.mentionedJid.join(', '))}`,
+        `ctx.quotePart. : ${raw0(s.raw.quoteParticipant)}`,
+      ]
+    : ['(belum ada)']
 
   return (
     '🔎 *ᴅɪᴀɢ ᴀɪ*\n\n' +
     `╭┈┈⬡「 🤖 ʙᴏᴛ 」\n${bot.map((l) => `┃ ${l}`).join('\n')}\n╰┈┈┈┈┈┈┈┈⬡\n\n` +
     `╭┈┈⬡「 📨 ᴘᴇsᴀɴ ᴛᴇʀᴀᴋʜɪʀ 」\n${last.map((l) => `┃ ${l}`).join('\n')}\n╰┈┈┈┈┈┈┈┈⬡\n\n` +
+    `╭┈┈⬡「 🧪 ᴘᴀʏʟᴏᴀᴅ ᴍᴇɴᴛᴀʜ 」\n${raw.map((l) => `┃ ${l}`).join('\n')}\n╰┈┈┈┈┈┈┈┈⬡\n\n` +
     `> Tag / bales pesanku, lalu jalankan \`${p}bot diag\` lagi.\n` +
-    '> Kalau *Kedeteksi: TIDAK*, JID tag/quote gak cocok sama identitas bot di atas.'
+    '> Kalau *Kedeteksi: TIDAK*, bandingkan JID di blok PAYLOAD MENTAH dengan identitas bot di atas.'
   )
+}
+
+/** '-' kalau kosong, biar baris diag gak nanggung. */
+function raw0(v) {
+  const s = String(v ?? '').trim()
+  return s || '-'
 }
 
 /** Kartu daftar fakta yang dicatat tentang user. */
@@ -600,11 +618,16 @@ async function handler(ctx) {
 
 /* ══════════════════════ trigger mention nomor bot ══════════════════════ */
 const INVISIBLE_RE = /[\u200b-\u200f\u2060-\u2069\ufeff]/g
-let botLidCache // { num, lid } — hasil resolve LID bot (kalau perlu)
+let botLidCache // { num, lid } — LID bot (kalau credentials.meLid kosong)
 
-/** Angka murni dari jid — buang `@server` DAN suffix device (`:12`). */
-function digits(s) {
-  return String(s || '').split('@')[0].split(':')[0].replace(/\D/g, '')
+/** Buang suffix device (`:12`) dari jid — `628x:12@s.whatsapp.net` → `628x@s.whatsapp.net`. */
+function normJid(j) {
+  return String(j || '').replace(/:\d+@/, '@')
+}
+
+/** User (angka) dari jid, device-insensitive. */
+function jidUser(j) {
+  return normJid(j).split('@')[0]
 }
 
 /**
@@ -625,39 +648,24 @@ function withTimeout(promise, ms, fallback = null) {
 function botIdentity(ctx) {
   let cred = null
   try { cred = ctx?.client?.auth?.getCurrentCredentials?.() ?? null } catch { /* ignore */ }
-  const num = getBotNumber() || digits(cred?.meJid) || null
-  const meJid = cred?.meJid ?? null
-  const meLid = cred?.meLid ?? null
-  const userId = ctx?.client?.user?.id ?? ctx?.client?.user?.lid ?? null
-  const jids = [
+  const user = ctx?.client?.user ?? {}
+  const num = getBotNumber() || jidUser(cred?.meJid) || jidUser(user.id) || null
+  const meJid = normJid(cred?.meJid) || null
+  const meLid = normJid(cred?.meLid) || normJid(user.lid) || null
+  const userId = normJid(user.id) || null
+  const jids = [...new Set([
     num ? `${num}@s.whatsapp.net` : null,
     meJid,
     meLid,
     userId,
-  ].filter(Boolean)
-  return { num, meJid, meLid, jids }
+  ].filter(Boolean))]
+  return { num, meJid, meLid, userId, jids }
 }
 
-async function botLid(ctx) {
-  const { num, meLid } = botIdentity(ctx)
-  if (meLid) return meLid // paling cepat & akurat — dari credentials, tanpa network
-  if (!num) return null
-  // cache cuma kalau ketemu — kalau gagal, biar bisa dicoba lagi kapan-kapan
-  if (botLidCache?.num === num && botLidCache.lid) return botLidCache.lid
-  try {
-    const rows = await withTimeout(ctx.client?.profile?.getLidsByPhoneNumbers?.([num]), 3000, null)
-    const lid = (rows ?? [])[0]?.lidJid ?? (rows ?? [])[0]?.lid ?? null
-    if (lid) botLidCache = { num, lid }
-    return lid
-  } catch {
-    return null
-  }
-}
-
-/** Kumpulin mentionedJid dari SEMUA jenis pesan (teks, caption gambar/video, dll). */
+/** Kumpulin mentionedJid dari SEMUA jenis pesan (teks, caption, bungkus ephemeral/view-once). */
 function mentionedJids(ctx) {
   const out = new Set(Array.isArray(ctx?.mentioned) ? ctx.mentioned : [])
-  const msg = ctx?.event?.message || {}
+  const msg = unwrapMessage(ctx?.event?.message) || {}
   for (const v of Object.values(msg)) {
     const list = v?.contextInfo?.mentionedJid
     if (Array.isArray(list)) for (const j of list) out.add(j)
@@ -667,7 +675,7 @@ function mentionedJids(ctx) {
 
 /** Pengirim pesan yang di-quote (swipe-reply) — buat deteksi "bales pesan bot". */
 function quotedParticipant(ctx) {
-  const msg = ctx?.event?.message || {}
+  const msg = unwrapMessage(ctx?.event?.message) || {}
   for (const v of Object.values(msg)) {
     const c = v?.contextInfo
     if (!c) continue
@@ -677,27 +685,60 @@ function quotedParticipant(ctx) {
   return null
 }
 
-/** `jid` ini bot sendiri? (cocok lewat nomor, jid, LID, atau LID→PN) */
+/**
+ * LID bot sendiri (kalau `credentials.meLid` kosong) — dibalik dari nomor bot
+ * via `getLidsByPhoneNumbers`. Di-cache cuma kalau ketemu.
+ */
+async function botLid(ctx) {
+  const { num, meLid } = botIdentity(ctx)
+  if (meLid) return meLid
+  if (!num) return null
+  if (botLidCache?.num === num && botLidCache.lid) return botLidCache.lid
+  try {
+    const rows = await withTimeout(ctx.client?.profile?.getLidsByPhoneNumbers?.([num]), 3000, null)
+    const lid = normJid((rows ?? [])[0]?.lidJid ?? (rows ?? [])[0]?.lid ?? null)
+    if (lid) botLidCache = { num, lid }
+    return lid
+  } catch {
+    return null
+  }
+}
+
+/**
+ * `jid` ini bot sendiri? Dibanding device-insensitive (buang `:12`) atas:
+ * nomor bot, PN/LID dari credentials, `client.user.id`; kalau identitasnya
+ * belum ketemu, LID dipetakan ke PN lewat participant grup / LID bot.
+ */
 async function isBotJid(ctx, jid) {
   if (!jid) return false
+  const j = normJid(jid)
+  if (!j) return false
   const { num, jids } = botIdentity(ctx)
-  if (num && digits(jid) === num) return true
-  if (jids.includes(jid)) return true
-  // jid boleh bawa suffix device (`:12`) — bandingkan angka murninya
-  const jn = digits(jid)
-  if (jn && jids.some((j) => {
-    const isPn = j.endsWith('@s.whatsapp.net') || !j.includes('@')
-    return isPn && digits(j) === jn
-  })) return true
-  const lid = await botLid(ctx)
-  if (lid && jid === lid) return true
-  if (String(jid).endsWith('@lid')) {
-    // resolver network: dibatasi biar gak gantung → bot tetap jawab
-    const pn = await withTimeout(resolveLidToPn(ctx.client, ctx.chat, jid), 3000, null)
-    if (pn) {
-      if (num && digits(pn) === num) return true
-      if (jids.includes(pn)) return true
+
+  if (num && jidUser(j) === num) return true
+  if (jids.includes(j)) return true
+  if (jids.some((x) => jidUser(x) === jidUser(j))) return true
+
+  // LID yang belum cocok (mis. `meLid` kosong) → petakan via participant grup
+  if (!j.endsWith('@s.whatsapp.net')) {
+    const pn = await withTimeout(resolveLidToPn(ctx.client, ctx.chat, j), 3000, null)
+    if (pn && normJid(pn) !== j) {
+      if (num && jidUser(pn) === num) return true
+      if (jids.includes(normJid(pn))) return true
+      if (jids.some((x) => jidUser(x) === jidUser(pn))) return true
     }
+    // terakhir: bandingkan sama LID bot sendiri (hasil balik dari nomor bot)
+    const lid = await botLid(ctx)
+    if (lid && jidUser(lid) === jidUser(j)) return true
+  }
+  return false
+}
+
+/** Ada balesan/quote? (stanzaId di contextInfo — setelah bungkus dilepas) */
+function hasQuoted(ctx) {
+  const msg = unwrapMessage(ctx?.event?.message) || {}
+  for (const v of Object.values(msg)) {
+    if (v?.contextInfo?.stanzaId) return true
   }
   return false
 }
@@ -713,7 +754,11 @@ async function isBotMentioned(ctx, conf) {
   }
   const body = String(ctx.body || '').replace(INVISIBLE_RE, '')
   if (num && new RegExp(`@${num}(?![0-9])`).test(body)) return true
-  if (conf?.replyTrigger !== false && (await isBotJid(ctx, quotedParticipant(ctx)))) return true
+  if (conf?.replyTrigger !== false) {
+    if (await isBotJid(ctx, quotedParticipant(ctx))) return true
+    // Chat pribadi: lawan bicaranya cuma bot → tiap balesan = balesan pesan bot
+    if (!ctx.isGroup && hasQuoted(ctx)) return true
+  }
   return false
 }
 
@@ -728,6 +773,12 @@ let lastSeen = null
 
 function snapshot(ctx, conf) {
   const id = botIdentity(ctx)
+  const key = ctx?.event?.key ?? {}
+  const ci = (() => {
+    const msg = unwrapMessage(ctx?.event?.message) || {}
+    for (const v of Object.values(msg)) if (v?.contextInfo) return v.contextInfo
+    return {}
+  })()
   return {
     at: new Date().toISOString(),
     chat: ctx.chat,
@@ -737,7 +788,19 @@ function snapshot(ctx, conf) {
     body: String(ctx.body || '').slice(0, 160),
     mentioned: mentionedJids(ctx),
     quoted: quotedParticipant(ctx),
-    bot: { num: id.num, meJid: id.meJid, meLid: id.meLid, jids: id.jids },
+    bot: { num: id.num, meJid: id.meJid, meLid: id.meLid, userId: id.userId, jids: id.jids },
+    raw: {
+      key: {
+        remoteJid: key.remoteJid ?? null,
+        fromMe: key.fromMe ?? null,
+        participant: key.participant ?? null,
+        participantAlt: key.participantAlt ?? null,
+        remoteJidAlt: key.remoteJidAlt ?? null,
+      },
+      mentionedJid: Array.isArray(ci.mentionedJid) ? ci.mentionedJid : [],
+      quoteParticipant: ci.participant ?? null,
+      quoteStanzaId: ci.stanzaId ?? null,
+    },
     flags: {
       enabled: conf.enabled,
       mentionTrigger: conf.mentionTrigger !== false,
@@ -802,8 +865,8 @@ export { pluginConfig as config, handler }
 export const _internals = {
   cfg, runChat, humanError, isLimitErr, limitMsg,
   usageToday, addUsage, USAGE_FILE, STORE_FILE, buildSystem, userProfile, nowWIB,
-  isBotMentioned, mentionedJids, quotedParticipant, stripMention, flatten,
-  botIdentity, isBotJid, withTimeout, diagText, getLastSeen: () => lastSeen,
+  isBotMentioned, mentionedJids, quotedParticipant, hasQuoted, stripMention, flatten,
+  botIdentity, isBotJid, withTimeout, diagText, getLastSeen: () => lastSeen, normJid, jidUser,
   resetHistory, store, llmRemember, parseFactsJson, faktaText, helpText,
   sessionGuard: {
     reset: () => { sessionFailStreak = 0; sessionSkipUntil = 0 },

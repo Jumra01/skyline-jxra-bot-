@@ -10,13 +10,38 @@ import { getReplyStyle, sendReplyVariant, sendBasicReply, isStyling } from './re
 import { logger } from './logger.js'
 import { getStaffEntry, setBotNumber } from './staff.js'
 
+/** Envelope pesan yang isinya dibungkus lagi (disappearing/view-once/dsb). */
+const WRAPPER_KEYS = [
+  'ephemeralMessage',
+  'viewOnceMessage',
+  'viewOnceMessageV2',
+  'viewOnceMessageV2Extension',
+  'documentWithCaptionMessage',
+  'deviceSentMessage',
+]
+
+/** Lepas bungkus pesan (`ephemeralMessage`/`viewOnceMessage`/…) → isi sebenarnya. */
+export function unwrapMessage(message) {
+  let msg = message
+  for (let i = 0; i < 6 && msg; i++) {
+    let inner = null
+    for (const k of WRAPPER_KEYS) {
+      if (msg[k]?.message) { inner = msg[k].message; break }
+    }
+    if (!inner) break
+    msg = inner
+  }
+  return msg
+}
+
 function extractText(message) {
-  if (!message) return undefined
+  const m = unwrapMessage(message)
+  if (!m) return undefined
   return (
-    message.conversation ??
-    message.extendedTextMessage?.text ??
-    message.imageMessage?.caption ??
-    message.videoMessage?.caption ??
+    m.conversation ??
+    m.extendedTextMessage?.text ??
+    m.imageMessage?.caption ??
+    m.videoMessage?.caption ??
     undefined
   )
 }

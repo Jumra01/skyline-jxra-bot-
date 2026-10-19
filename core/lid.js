@@ -13,6 +13,16 @@
 const isPn = (j) => typeof j === 'string' && j.endsWith('@s.whatsapp.net')
 const isLid = (j) => typeof j === 'string' && j.endsWith('@lid')
 
+// Identitas dibanding device-insensitive: `628x:12@s.whatsapp.net` ≡ `628x@s.whatsapp.net`.
+const jidUser = (j) => String(j ?? '').replace(/:\d+@/, '@').split('@')[0]
+const sameUser = (a, b) => Boolean(a) && Boolean(b) && jidUser(a) === jidUser(b)
+// Participant bisa bawa PN sebagai jid penuh atau nomor polos (`phoneNumber`).
+const asPn = (v) => {
+  if (typeof v !== 'string' || !v) return null
+  if (v.endsWith('@s.whatsapp.net')) return v
+  return /^\d{6,}$/.test(v) ? `${v}@s.whatsapp.net` : null
+}
+
 // [FIX DELAY] Cache metadata grup 60 detik — queryGroupMetadata = panggilan network,
 // sebelumnya diulang tiap resolve tag/balasan (.addprem/.delprem) → delay kelihatan.
 const META_TTL = 60_000
@@ -33,24 +43,28 @@ export { getMetaCached as getGroupMetaCached }
 export async function resolveLidToPn(client, groupJid, jid) {
   if (!isLid(jid)) return jid
 
+  const want = jidUser(jid)
   try {
     const meta = await getMetaCached(client, groupJid)
     const parts = meta.participants ?? []
 
     // 1) Participant bawa dua bentuk identitas → map langsung
+    //    (zapo: `jid` + `lid` / `phoneNumber`; bentuk lain dijaga kompatibel)
     for (const p of parts) {
       if (typeof p === 'string') continue
-      const lids = [p.jid, p.lid, p.lidJid, p.jidAlt, p.participantJid].filter(isLid)
-      const pns = [p.jid, p.phoneJid, p.pnJid, p.jidAlt, p.participantJid].filter(isPn)
-      if (lids.includes(jid) && pns.length) return pns[0]
+      const lids = [p.jid, p.lid, p.lidJid, p.jidAlt, p.participantJid, p.id].filter(isLid)
+      const pns = [asPn(p.phoneNumber), p.jid, p.phoneJid, p.pnJid, p.jidAlt, p.participantJid].filter(isPn)
+      if (pns.length && lids.some((l) => sameUser(l, jid) || jidUser(l) === want)) return pns[0]
     }
 
     // 2) Grup PN-addressed → resolve balik via getLidsByPhoneNumbers
-    const pns = parts.map((p) => (typeof p === 'string' ? p : p.jid)).filter(isPn)
+    const pns = parts
+      .map((p) => (typeof p === 'string' ? p : (asPn(p.phoneNumber) ?? p.jid)))
+      .filter(isPn)
     if (pns.length) {
-      const rows = await client.profile.getLidsByPhoneNumbers(pns.map((j) => j.split('@')[0]))
+      const rows = await client.profile.getLidsByPhoneNumbers(pns.map((j) => jidUser(j)))
       for (const r of rows) {
-        if (r?.lidJid === jid) return r.phoneJid ?? r.queriedJid ?? jid
+        if (sameUser(r?.lidJid, jid) || sameUser(r?.lid, jid)) return asPn(r?.phoneJid) ?? asPn(r?.queriedJid) ?? jid
       }
     }
   } catch { /* biarkan apa adanya */ }
