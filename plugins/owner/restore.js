@@ -26,7 +26,20 @@
  * Catatan: balikin API di config.js butuh RESTART biar kebaca bot.
  */
 import { onRichReply } from '../../handlers/messageHandler.js'
-import { backupStatus, restoreFromBackup, uniqueKeepLabels } from '../../lib/keepSettings.js'
+import { backupStatus, restoreFromBackup } from '../../lib/keepSettings.js'
+
+// Label tampilan — SENGAJA lokal (bukan export baru dari lib/keepSettings.js):
+// hot reload cuma re-import `plugins/`, sedangkan `lib/` masih versi lama di
+// module cache. Kalau plugin import nama export BARU dari lib, plugin gagal
+// load setelah `.updatesc` sampai bot di-restart.
+const KEEP_LABELS = {
+  'skyline.apikey': 'API',
+  'omniedit.apikey': 'API',
+  'spotify.clientId': 'Spotify ID',
+  'spotify.clientSecret': 'Spotify Secret'
+}
+const labelOf = (name) => KEEP_LABELS[name] || name
+const uniqueLabels = (names) => [...new Set((names || []).map(labelOf))]
 
 const SC_MAP = {
   a: 'ᴀ', b: 'ʙ', c: 'ᴄ', d: 'ᴅ', e: 'ᴇ', f: 'ꜰ', g: 'ɢ', h: 'ʜ', i: 'ɪ',
@@ -51,7 +64,7 @@ async function backupText() {
 
   if (st.config.length) {
     baris.push('🔑 *API*')
-    for (const n of uniqueKeepLabels(st.config)) baris.push(`  ◦ \`${n}\``)
+    for (const n of uniqueLabels(st.config)) baris.push(`  ◦ \`${n}\``)
   } else {
     baris.push('🔑 *API*')
     baris.push('  ◦ belum ada')
@@ -91,8 +104,8 @@ async function act(ctx, which) {
   const gagal = r.lost.length + r.assetsLost.length
   const bersih = (r.cleanedConfig ? 1 : 0) + r.cleanedAssets.length
 
-  const apiLabels = uniqueKeepLabels(r.kept)
-  const apiGagal = uniqueKeepLabels(r.lost)
+  const apiLabels = uniqueLabels(r.kept)
+  const apiGagal = uniqueLabels(r.lost)
   const lines = [
     '',
     '🔑 *API*',
