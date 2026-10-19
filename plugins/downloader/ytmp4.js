@@ -14,7 +14,8 @@ import {
   isConfigured as skylineReady
 } from '../../scraper/SKYLINE.js';
 import { logger } from '../../core/logger.js';
-import { uploadThumbHeader } from '../../lib/ytUi.js';
+import { uploadThumbHeader, fetchJpegThumbnail } from '../../lib/ytUi.js';
+import { getCollectionCover } from '../../lib/musicCover.js';
 
 const SESSIONS = (globalThis.JH_YTV_SESSIONS ??= new Map());
 const PER_PAGE = 2;
@@ -121,7 +122,7 @@ export function downloadYT(url, height) {
   });
 }
 
-async function sendVideo(ctx, filePath) {
+async function sendVideo(ctx, filePath, jpegThumbnail) {
   const { size } = fs.statSync(filePath);
   const sizeMB = size / 1024 / 1024;
   const fileName = filePath.split('/').pop();
@@ -129,11 +130,13 @@ async function sendVideo(ctx, filePath) {
 
   if (sizeMB > 100) {
     await ctx.client.message.send(ctx.chat, {
-      type: 'document', media: buffer, mimetype: 'video/mp4', fileName
+      type: 'document', media: buffer, mimetype: 'video/mp4', fileName,
+      ...(jpegThumbnail ? { jpegThumbnail } : {})
     });
   } else {
     await ctx.client.message.send(ctx.chat, {
-      type: 'video', media: buffer, mimetype: 'video/mp4'
+      type: 'video', media: buffer, mimetype: 'video/mp4',
+      ...(jpegThumbnail ? { jpegThumbnail } : {})
     });
   }
 }
@@ -146,6 +149,16 @@ async function downloadAndSend(ctx, idx) {
 
   await ctx.react('⏳');
 
+  // Thumbnail kecil buat preview bubble video (tanpa ini WhatsApp sering
+  // nampilin kotak hitam sebelum video diplay).
+  let jpegThumbnail = await fetchJpegThumbnail(sess.thumbnail, {
+    width: 320,
+    videoId: sess.videoId
+  });
+  // Thumbnail gagal diambil (mis. CDN diblokir) → pakai cover default bot,
+  // jangan biarkan preview video hitam.
+  if (!jpegThumbnail) jpegThumbnail = await getCollectionCover(320);
+
   // Jalur utama: Skyline API (skyline.web.id) kalau API key diisi.
   if (skylineReady()) {
     try {
@@ -154,7 +167,8 @@ async function downloadAndSend(ctx, idx) {
         type: 'video',
         media: video.buffer,
         mimetype: video.mimetype,
-        fileName: `${safeName(video.title || sess.title)}.${video.ext}`
+        fileName: `${safeName(video.title || sess.title)}.${video.ext}`,
+        ...(jpegThumbnail ? { jpegThumbnail } : {})
       });
       await ctx.react('✅');
       return;
@@ -166,7 +180,7 @@ async function downloadAndSend(ctx, idx) {
   let filePath;
   try {
     filePath = await downloadYT(sess.url, tier.height);
-    await sendVideo(ctx, filePath);
+    await sendVideo(ctx, filePath, jpegThumbnail);
     await ctx.react('✅');
   } catch (e) {
     await ctx.react('❎');
@@ -232,7 +246,9 @@ async function sendPage(ctx, page) {
   }
 
   // Tombol standar (viewOnce wrapper + node bot) + header thumbnail video.
-  const headerImage = await uploadThumbHeader(ctx.client, sess.thumbnail);
+  const headerImage = await uploadThumbHeader(ctx.client, sess.thumbnail, {
+    videoId: sess.videoId
+  });
 
   await ctx.replyButtons({
     text,
@@ -279,6 +295,7 @@ async function handler(ctx) {
         SESSIONS.set(ctx.sender, {
           url,
           title: info.title || 'Tanpa judul',
+          videoId: info.videoId,
           duration: info.seconds || null,
           durationText: info.duration,
           thumbnail: info.thumbnail,
@@ -301,6 +318,7 @@ async function handler(ctx) {
       SESSIONS.set(ctx.sender, {
         url,
         title: info.title || 'Tanpa judul',
+        videoId: info.id,
         duration: info.duration,
         thumbnail: info.thumbnail,
         tiers

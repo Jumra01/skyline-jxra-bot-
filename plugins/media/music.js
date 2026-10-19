@@ -9,6 +9,8 @@
  * Audio dikirim sebagai file (bukan voice note), tanpa biaya emerald.
  */
 import axios from 'axios'
+import { embedAudioCover } from '../../lib/audioCover.js'
+import { getCollectionCover } from '../../lib/musicCover.js'
 
 const MIN = 1
 const MAX = 140
@@ -47,9 +49,15 @@ async function sendAudio(ctx, url, fileName) {
     throw err
   }
   const rawMessage = ctx.event?.message ?? ctx.event
+
+  // Tanam cover default biar gak jadi kotak hitam di WhatsApp.
+  const buffer = Buffer.from(res.data)
+  const cover = await getCollectionCover()
+  const embedded = await embedAudioCover(buffer, 'audio/mpeg', cover)
+
   await ctx.client.message.send(
     ctx.chat,
-    { type: 'audio', media: Buffer.from(res.data), mimetype: 'audio/mpeg', ptt: false, fileName },
+    { type: 'audio', media: embedded.buffer, mimetype: 'audio/mpeg', ptt: false, fileName },
     rawMessage ? { quote: rawMessage } : undefined
   )
 }

@@ -70,7 +70,9 @@ async function showFormatButtons(ctx, video) {
     `⏱ ${video.duration}  •  👁 ${video.views}\n\n` +
     `Mau didownload bentuk apa?`;
 
-  const headerImage = await uploadThumbHeader(ctx.client, video.thumbnail);
+  const headerImage = await uploadThumbHeader(ctx.client, video.thumbnail, {
+    videoId: video.videoId
+  });
 
   await ctx.replyButtons({
     text,
@@ -141,7 +143,9 @@ async function sendPage(ctx, page) {
     });
   }
 
-  const headerImage = await uploadThumbHeader(ctx.client, items[0]?.thumbnail);
+  const headerImage = await uploadThumbHeader(ctx.client, items[0]?.thumbnail, {
+    videoId: items[0]?.videoId
+  });
 
   await ctx.replyButtons({
     text,

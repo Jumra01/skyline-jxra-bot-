@@ -9,6 +9,24 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import { downloadAudio as skylineAudio, isConfigured as skylineReady } from '../../scraper/SKYLINE.js';
 import { logger } from '../../core/logger.js';
+import { fetchThumbBuffer } from '../../lib/ytUi.js';
+import { embedAudioCover } from '../../lib/audioCover.js';
+import { getCollectionCover } from '../../lib/musicCover.js';
+
+/** Kirim foto thumbnail; gagal kirim foto jangan bikin audio batal. */
+async function sendCover(ctx, cover, caption) {
+  if (!cover) return;
+  try {
+    await ctx.client.message.send(ctx.chat, {
+      type: 'image',
+      media: cover.buffer,
+      mimetype: 'image/jpeg',
+      caption
+    });
+  } catch (err) {
+    logger.warn(`yta: foto thumbnail gagal dikirim (${err?.message || err})`);
+  }
+}
 
 function getInfo(url) {
   return new Promise((resolve, reject) => {
@@ -81,23 +99,23 @@ async function sendViaSkyline(ctx, url) {
     `*Link:* ${url}\n\n` +
     `> Via Skyline API 🎧`;
 
-  if (audio.thumbnail) {
-    try {
-      const thumbRes = await fetch(audio.thumbnail);
-      if (thumbRes.ok) {
-        const thumbBuf = Buffer.from(await thumbRes.arrayBuffer());
-        await ctx.client.message.send(ctx.chat, {
-          type: 'image', media: thumbBuf, mimetype: 'image/jpeg', caption
-        });
-      }
-    } catch {
-      /* thumbnail opsional */
-    }
+  let cover = await fetchThumbBuffer(audio.thumbnail, {
+    width: 640,
+    videoId: info.videoId
+  });
+  if (!cover) {
+    const fallback = await getCollectionCover(640);
+    if (fallback) cover = { buffer: fallback, width: 640, height: 640, source: 'local' };
   }
+
+  await sendCover(ctx, cover, caption);
+
+  // Tanam cover ke file audio biar player WhatsApp gak nampilin kotak hitam.
+  const embedded = await embedAudioCover(audio.buffer, audio.mimetype, cover?.buffer);
 
   await ctx.client.message.send(ctx.chat, {
     type: 'audio',
-    media: audio.buffer,
+    media: embedded.buffer,
     mimetype: audio.mimetype,
     fileName: `${title}.${audio.ext}`
   });
@@ -152,23 +170,23 @@ async function handler(ctx) {
         `*Link:* ${url}\n\n` +
         `> Downloading audio...`;
 
-      if (info.thumbnail) {
-        try {
-          const thumbRes = await fetch(info.thumbnail);
-          if (thumbRes.ok) {
-            const thumbBuf = Buffer.from(await thumbRes.arrayBuffer());
-            await ctx.client.message.send(ctx.chat, {
-              type: 'image', media: thumbBuf, mimetype: 'image/jpeg', caption
-            });
-          }
-        } catch {
-        }
+      let cover = await fetchThumbBuffer(info.thumbnail, {
+        width: 640,
+        videoId: info.id
+      });
+      if (!cover) {
+        const fallback = await getCollectionCover(640);
+        if (fallback) cover = { buffer: fallback, width: 640, height: 640, source: 'local' };
       }
+
+      await sendCover(ctx, cover, caption);
 
       filePath = await downloadAudio(url);
       const stats = fs.statSync(filePath);
       const sizeMB = stats.size / 1024 / 1024;
-      const buffer = fs.readFileSync(filePath);
+      const rawBuffer = fs.readFileSync(filePath);
+      const embedded = await embedAudioCover(rawBuffer, 'audio/mpeg', cover?.buffer);
+      const buffer = embedded.buffer;
 
       if (sizeMB > 100) {
         await ctx.client.message.send(ctx.chat, {

@@ -94,7 +94,12 @@ async function thumb300() {
     const buf = await getThumbBuffer()
     if (!buf) return null
     const sharp = (await import('sharp')).default
-    return await sharp(buf).resize(300, 300, { fit: 'cover' }).jpeg({ quality: 70 }).toBuffer()
+    // flatten: PNG/WebP transparan kalau langsung di-JPEG = hitam.
+    return await sharp(buf)
+      .flatten({ background: '#ffffff' })
+      .resize(300, 300, { fit: 'cover' })
+      .jpeg({ quality: 70 })
+      .toBuffer()
   } catch {
     return null
   }
@@ -146,6 +151,7 @@ async function fetchOgPreview(url) {
           const sharp = (await import('sharp')).default
           thumbnail = await sharp(raw)
             .rotate()
+            .flatten({ background: '#ffffff' })
             .resize(360, 360, { fit: 'inside', withoutEnlargement: true })
             .jpeg({ quality: 65 })
             .toBuffer()
@@ -196,6 +202,7 @@ async function loadV4Thumb() {
     const sharp = (await import('sharp')).default
     const buf = await sharp(fs.readFileSync(p))
       .rotate()
+      .flatten({ background: '#ffffff' })
       .resize(360, 360, { fit: 'inside', withoutEnlargement: true })
       .jpeg({ quality: 65 })
       .toBuffer()

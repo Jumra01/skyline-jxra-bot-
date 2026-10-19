@@ -161,7 +161,12 @@ async function loadThumbBuffer(card) {
     }
     if (raw) {
       const sharp = (await import('sharp')).default
-      raw = await sharp(raw).resize(400, 400, { fit: 'cover' }).jpeg({ quality: 70 }).toBuffer()
+      // flatten: thumbnail transparan (PNG/WebP) kalau di-JPEG langsung = hitam.
+      raw = await sharp(raw)
+        .flatten({ background: '#ffffff' })
+        .resize(400, 400, { fit: 'cover' })
+        .jpeg({ quality: 70 })
+        .toBuffer()
     } else {
       raw = await placeholderThumb()
     }

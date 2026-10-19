@@ -263,7 +263,7 @@ export async function ytSearch(query, limit = 12) {
   if (!q) return [];
 
   const n = Math.max(1, Math.min(20, Number(limit) || 12));
-  const { json } = await request('search', '/api/tools/yt-search', { q, limit: String(n) }, { timeout: 30000 });
+  const { json, website } = await request('search', '/api/tools/yt-search', { q, limit: String(n) }, { timeout: 30000 });
 
   const list = json?.result || json?.data?.result || json?.data || [];
   if (!Array.isArray(list)) return [];
@@ -281,7 +281,8 @@ export async function ytSearch(query, limit = 12) {
         duration: v.duration || '-:--',
         seconds: Number(v.seconds || 0) || 0,
         views: v.views || '-',
-        thumbnail: v.thumbnail || null,
+        // Bisa jadi URL relatif dari API → jadikan absolut biar bisa di-fetch.
+        thumbnail: absUrl(website, v.thumbnail) || null,
         live: !!v.live
       };
     });
@@ -315,7 +316,7 @@ export async function ytInfo(url) {
   return {
     videoId: r.video_id || r.videoId || '',
     title: r.title || 'YouTube',
-    thumbnail: r.thumbnail || null,
+    thumbnail: absUrl(website, r.thumbnail) || null,
     duration: r.duration || '-:--',
     seconds: Number(r.seconds || 0) || 0,
     qualities,

@@ -13,7 +13,9 @@ import {
 } from '../../scraper/SKYLINE.js';
 import { onRichReply } from '../../handlers/messageHandler.js';
 import { logger } from '../../core/logger.js';
-import { uploadThumbHeader } from '../../lib/ytUi.js';
+import { uploadThumbHeader, fetchThumbBuffer, youtubeVideoId } from '../../lib/ytUi.js';
+import { embedAudioCover } from '../../lib/audioCover.js';
+import { getCollectionCover } from '../../lib/musicCover.js';
 
 const SESSIONS = (globalThis.JH_PLAY_SESSIONS ??= new Map());
 const PER_PAGE = 2;
@@ -126,9 +128,47 @@ async function downloadAndSend(ctx, idx) {
   try {
     const audio = await fetchAudio(v);
 
+    // Thumbnail: dipakai buat cover file audio (biar gak kotak hitam) +
+    // dikirim sebagai foto caption kalau cover gagal ditanam.
+    const videoId = v.videoId || youtubeVideoId(v.url);
+    let cover = await fetchThumbBuffer(v.thumbnail || audio.thumbnail, {
+      width: 640,
+      videoId
+    });
+    // Jaringan panel ngeblok semua sumber gambar? Pakai cover default bot,
+    // jangan biarkan audio tampil hitam.
+    if (!cover) {
+      const fallback = await getCollectionCover(640);
+      if (fallback) cover = { buffer: fallback, width: 640, height: 640, source: 'local' };
+    }
+
+    // Tanam cover TANPA re-encode (ffmpeg -c copy). Gagal = file asli.
+    const embedded = await embedAudioCover(audio.buffer, audio.mimetype, cover?.buffer);
+
+    // Foto caption selalu dikirim: jaminan thumbnail kelihatan di semua
+    // client WhatsApp, termasuk yang gak baca cover di dalam file audio.
+    if (cover) {
+      try {
+        await ctx.client.message.send(ctx.chat, {
+          type: 'image',
+          media: cover.buffer,
+          mimetype: 'image/jpeg',
+          caption:
+            `*${audio.title}*\n\n` +
+            `⏱ ${v.duration || audio.duration || '-:--'}\n` +
+            `👤 ${v.channel || v.artist || '-'}\n` +
+            (v.url ? `🔗 ${v.url}\n` : '') +
+            `\n> 🎧 skyline-JXRA • Music Player`
+        });
+      } catch (err) {
+        // Foto cuma bonus — jangan sampai audio gagal terkirim.
+        logger.warn(`play: foto thumbnail gagal dikirim (${err?.message || err})`);
+      }
+    }
+
     await ctx.client.message.send(ctx.chat, {
       type: 'audio',
-      media: audio.buffer,
+      media: embedded.buffer,
       mimetype: audio.mimetype,
       fileName: `${safeName(audio.title)}.${audio.ext}`
     });
@@ -193,7 +233,10 @@ async function sendPage(ctx, page) {
 
   // Tombol lewat builder standar (viewOnce wrapper + node bot buat private
   // chat) + header thumbnail hasil pertama — gaya paling reliable di WA.
-  const headerImage = await uploadThumbHeader(ctx.client, items[0]?.thumbnail);
+  const first = items[0];
+  const headerImage = await uploadThumbHeader(ctx.client, first?.thumbnail, {
+    videoId: first?.videoId || youtubeVideoId(first?.url)
+  });
 
   await ctx.replyButtons({
     text,
