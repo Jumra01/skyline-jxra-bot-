@@ -2,29 +2,27 @@
  * © skyline-JXRA
  * Hapus credit gak bikin u jago dumbass.
  * Hargai sebagaimana u mau dihargai.
- * bot.js — Chat AI (Aion Labs) yang INGET riwayat obrolan (.bot / tag nomor bot).
+ * bot.js — Chat AI yang INGET riwayat obrolan (.bot / tag nomor bot / bales pesan).
  *
- * PROVIDER: **Aion Labs** (https://api.aionlabs.ai/v1, OpenAI-compatible).
- *   Model default `aion-labs/aion-rp-llama-3.1-8b` = "completely uncensored",
- *   jago roleplay/ngobrol. Free tier: 15 req/menit · 20.000 token/hari.
+ * OTAK: **Gemini web** lewat `lib/geminiWeb.js` (pola auto-ai skyline-md).
+ *   • TANPA API key & tanpa kredit — cukup internet.
+ *   • Multi-turn asli: percakapan nyambung lewat `session` (resumeArray+cookie)
+ *     yang disimpan per user di `data/ai-chat.json`.
+ *   • Kalau session basi/rusak → otomatis ulang dari awal (riwayat teks
+ *     ditempel ke prompt biar konteks gak hilang).
  *
- * Semua pengaturan ada di config.js → blok `aiChat` (model/apikey/dll).
- * Key bisa ditimpa TANPA nyentuh config (prioritas paling tinggi dulu):
- *   env AICHAT_API_KEY  >  src/data/ai.json  >  config.aiChat
- * (file `src/data/ai.json` GITIGNORED — isi manual kalau perlu)
+ * PERSONA: default **Bella Clarissa (Bell409)** — lihat `lib/aiPersona.js`.
+ *   Ganti kapan saja tanpa restart: `.setpersona` (file `data/ai-persona.txt`).
  *
  * Trigger:
  *   • command  → `.bot <pertanyaan>` (+ `.bot reset` buat hapus riwayat)
- *   • mention  → tag nomor bot di grup (tanpa prefix), kalau mentionTrigger aktif
- *   • reply    → BALES (quote) pesan bot, kalau replyTrigger aktif
+ *   • mention  → tag nomor bot (tanpa prefix), kalau mentionTrigger aktif
+ *   • reply    → BALES/quote pesan bot, kalau replyTrigger aktif
  *
- * Persona/prompt: file `data/ai-persona.txt` (ganti via `.setpersona`).
- * Riwayat: disimpan di `data/ai-chat.json` (per nomor), dibatasi maxHistory.
- * Kuota  : `data/ai-usage.json` (penghitung token harian, peringatan kalau habis).
+ * Semua pengaturan di config.js → blok `aiChat` (enabled/maxHistory/dll).
+ * Pemakaian harian dicatat di `data/ai-usage.json` (buat info di `.bot`).
  */
-import axios from 'axios'
 import fs from 'node:fs'
-import { fileURLToPath } from 'node:url'
 import config from '../../config.js'
 import { logger } from '../../core/logger.js'
 import { checkCooldown, checkFlood } from '../../core/cooldown.js'
@@ -32,46 +30,22 @@ import { getBotNumber } from '../../core/staff.js'
 import { getUser } from '../../core/database.js'
 import { setMentionHandler } from '../../core/mentionTrigger.js'
 import { resolveLidToPn } from '../../core/lid.js'
-import { readPersona } from '../../lib/aiPersona.js'
+import { readPersona, personaIsCustom } from '../../lib/aiPersona.js'
+import { geminiChat } from '../../lib/geminiWeb.js'
 
 const DATA_DIR = './data'
-const STORE_FILE = `${DATA_DIR}/ai-chat.json`
-// Override runtime (GITIGNORED, biar apikey gak ikut ke GitHub):
-//   src/data/ai.json → { "provider": "...", "apikey": "...", "model": "...", "baseUrl": "..." }
-// Dibaca LIVE tiap balasan → ganti apikey/model gak perlu restart.
-// Path di-resolve relatif ke file ini (aman walau cwd bukan root repo).
-// `AICHAT_OVERRIDE_FILE` cuma buat pengujian (arahin ke file lain / file kosong).
-const OVERRIDE_FILE = process.env.AICHAT_OVERRIDE_FILE
-  ? String(process.env.AICHAT_OVERRIDE_FILE)
-  : fileURLToPath(new URL('../../src/data/ai.json', import.meta.url))
-const MAX_TRACKED_USERS = 300   // batas jumlah user yang disimpan di disk
-const MAX_CHARS = 4000          // potong pesan biar prompt gak meledak
-// Penghitung token harian (biar bisa KASIH PERINGATAN sebelum kuota provider habis).
-// Disimpan di data/ai-usage.json (gitignored), reset otomatis ganti hari (UTC).
-const USAGE_FILE = `${DATA_DIR}/ai-usage.json`
-const DEFAULT_DAILY_TOKENS = 20_000 // free tier Aion = 20K token/hari
-const WARN_RATIO = 0.9              // ≥90% kuota → tempel peringatan di balasan
-
-// ── Aion Labs (satu-satunya provider fitur ini) ──
-// https://api.aionlabs.ai/v1 (OpenAI-compatible). Free tier: 15 RPM, 20K token/hari.
-// Ambil key GRATIS (tanpa kartu): https://www.aionlabs.ai/app/api-keys/
-const AION = {
-  name: 'aion',
-  baseUrl: 'https://api.aionlabs.ai/v1',
-  // aion-3.5 = model andalan (is_moderated: false → tanpa filter), paling
-  // pinter ngikutin instruksi & paling akurat ngenalin siapa lawan bicaranya.
-  // CATATAN PENTING: aion-rp-llama-3.1-8b (yang dulu dipakai) itu model RP —
-  // dia nganggep obrolan sebagai fiksi, jadi sering GAK ngenalin nama user
-  // (ngaruh jadi karakter sendiri). Jangan dibalikin ke rp kalau gak perlu.
-  model: 'aion-labs/aion-3.5', // alternatif: aion-labs/aion-2.0 (juga nyambung)
-}
+const STORE_FILE = `${DATA_DIR}/ai-chat.json`   // riwayat + session per nomor
+const USAGE_FILE = `${DATA_DIR}/ai-usage.json`  // penghitung pemakaian harian
+const MAX_TRACKED_USERS = 300 // batas jumlah user yang disimpan di disk
+const MAX_CHARS = 4000        // potong pesan biar prompt gak meledak
+const HISTORY_IN_PROMPT = 10  // pesan terakhir yang ditempel kalau mulai dari nol
 
 const pluginConfig = {
   name: 'bot',
   alias: ['aichat', 'ngobrol', 'chatai'],
   category: 'ai',
-  description: 'Chat AI Aion Labs (uncensored) — inget riwayat obrolan',
-  usage: '.bot <pertanyaan>  |  .bot reset  |  tag nomor bot di grup',
+  description: 'Chat AI Gemini (persona Bella) — inget riwayat obrolan',
+  usage: '.bot <pertanyaan>  |  .bot reset  |  tag/bales pesan bot',
   example: '.bot jelasin apa itu lubang hitam singkat',
   isOwner: false,
   isPremium: false,
@@ -85,24 +59,11 @@ const pluginConfig = {
 }
 
 /* ══════════════════════ config ══════════════════════ */
-function overrides() {
-  try {
-    const o = JSON.parse(fs.readFileSync(OVERRIDE_FILE, 'utf8'))
-    return o && typeof o === 'object' ? o : {}
-  } catch { return {} }
-}
-
 function cfg() {
   const c = config.aiChat || {}
-  const o = overrides() // prioritas: env > src/data/ai.json > config.js
   return {
     enabled: c.enabled !== false,
-    provider: AION.name, // fokus Aion Labs
-    baseUrl: String(o.baseUrl || c.baseUrl || AION.baseUrl).replace(/\/+$/, ''),
-    model: String(o.model || c.model || AION.model).trim(),
-    apikey: String(process.env.AICHAT_API_KEY || o.apikey || c.apikey || '').trim(),
     maxHistory: Math.max(2, Math.min(100, Number(c.maxHistory) || 20)),
-    dailyTokenLimit: Math.max(0, Number(c.dailyTokenLimit ?? DEFAULT_DAILY_TOKENS) || 0),
     timeoutMs: Math.max(5000, Number(c.timeoutMs) || 60_000),
     mentionTrigger: c.mentionTrigger !== false,
     replyTrigger: c.replyTrigger !== false,
@@ -111,14 +72,19 @@ function cfg() {
 }
 
 /* ══════════════════════ riwayat (memori) ══════════════════════ */
-const store = new Map() // jid -> { at, msgs: [{ role, content }] }
+const store = new Map() // jid -> { at, msgs: [{ role, content }], session }
 let saveTimer = null
 
 function loadStore() {
   try {
     const raw = JSON.parse(fs.readFileSync(STORE_FILE, 'utf8'))
     for (const [k, v] of Object.entries(raw || {})) {
-      if (Array.isArray(v?.msgs)) store.set(k, { at: Number(v.at) || 0, msgs: v.msgs.slice(-100) })
+      if (!Array.isArray(v?.msgs)) continue
+      store.set(k, {
+        at: Number(v.at) || 0,
+        msgs: v.msgs.slice(-100),
+        session: typeof v.session === 'string' ? v.session : null,
+      })
     }
   } catch { /* belum ada / rusak → mulai kosong */ }
 }
@@ -133,7 +99,7 @@ function saveStore() {
         .sort((a, b) => (b[1].at || 0) - (a[1].at || 0))
         .slice(0, MAX_TRACKED_USERS)
       const obj = {}
-      for (const [k, v] of top) obj[k] = { at: v.at, msgs: v.msgs.slice(-100) }
+      for (const [k, v] of top) obj[k] = { at: v.at, msgs: v.msgs.slice(-100), session: v.session || null }
       const tmp = `${STORE_FILE}.tmp`
       fs.writeFileSync(tmp, JSON.stringify(obj))
       fs.renameSync(tmp, STORE_FILE)
@@ -150,7 +116,7 @@ function historyKey(ctx) {
 
 function getHistory(key, max) {
   let h = store.get(key)
-  if (!h) { h = { at: Date.now(), msgs: [] }; store.set(key, h) }
+  if (!h) { h = { at: Date.now(), msgs: [], session: null }; store.set(key, h) }
   if (h.msgs.length > max) h.msgs = h.msgs.slice(-max)
   return h
 }
@@ -160,13 +126,26 @@ function resetHistory(key) {
   saveStore()
 }
 
-/* ══════════════════════ kuota token harian ══════════════════════ */
-// Perkiraan pemakaian token provider per hari (dari `usage` yang dibalikin API).
-// Dipakai buat: (1) nolak duluan kalau kuota udah abis, (2) ngingetin kalau mepet.
+/** Riwayat teks → ditempel ke prompt saat mulai percakapan baru (tanpa session). */
+function flatten(msgs, pesan) {
+  const lines = (Array.isArray(msgs) ? msgs : [])
+    .slice(-HISTORY_IN_PROMPT)
+    .map((m) => {
+      const isi = String(m?.content || '').trim()
+      if (!isi) return ''
+      return `${m?.role === 'assistant' ? 'Kamu' : 'User'}: ${isi}`
+    })
+    .filter(Boolean)
+  if (!lines.length) return pesan
+  return `Riwayat obrolan kita sejauh ini:\n${lines.join('\n')}\n\nPesan user sekarang:\n${pesan}`
+}
+
+/* ══════════════════════ pemakaian harian ══════════════════════ */
 function todayUTC() {
   return new Date().toISOString().slice(0, 10) // YYYY-MM-DD
 }
 
+/** Jumlah balasan AI hari ini (buat info di `.bot`). */
 function usageToday() {
   try {
     const u = JSON.parse(fs.readFileSync(USAGE_FILE, 'utf8'))
@@ -175,10 +154,10 @@ function usageToday() {
   return 0
 }
 
-function addUsage(tokens) {
-  const n = Math.max(0, Number(tokens) || 0)
-  if (!n) return usageToday()
-  const total = usageToday() + n
+function addUsage(n = 1) {
+  const add = Math.max(0, Number(n) || 0)
+  if (!add) return usageToday()
+  const total = usageToday() + add
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true })
     const tmp = `${USAGE_FILE}.tmp`
@@ -188,6 +167,10 @@ function addUsage(tokens) {
     logger.warn({ err: String(err?.message || err) }, '[AIChat] gagal simpan usage')
   }
   return total
+}
+
+function nfmt(n) {
+  return Number(n || 0).toLocaleString('id-ID')
 }
 
 /* ══════════════════════ prompt & profil ══════════════════════ */
@@ -222,194 +205,131 @@ Kamu sekarang sedang mengobrol dengan SATU orang berikut:
 
 Aturan identitas (jangan dilanggar):
 - Nama di atas adalah nama ORANG YANG MENGAJAKMU NGOMONG — BUKAN namamu.
-- NAMAMU sendiri: "${self}". Kalau ditanya "kamu siapa", jawab itu.
+- Nama AKUN bot ini "${self}". Tapi soal siapa dirimu & gaya bicara, tetap
+  ikuti persona di atas (jangan menyebut diri sebagai AI/bot).
 - Kalau dia tanya "siapa aku / siapa nama saya / kamu tau aku siapa", jawab
   pakai data di atas (nama + peran), jangan ngarang nama lain.
 - Sapa dia dengan namanya sesekali biar kerasa personal.
 - Balas pakai bahasa yang dia pakai (Indonesia → Indonesia, Inggris → Inggris).`
 }
 
-/* ══════════════════════ panggil API ══════════════════════ */
-function parseErr(data) {
-  if (!data) return ''
-  try {
-    const obj = typeof data === 'string' ? JSON.parse(data) : data
-    const e = obj?.error
-    return String(
-      (e && (e.message || e.status)) || e || obj?.message || obj?.detail || ''
-    ).trim()
-  } catch {
-    return String(data).slice(0, 200)
-  }
-}
-
-async function askModel(conf, system, messages) {
-  // Model Aion rata-rata "reasoning" — jawaban final ada di `message.content`,
-  // tapi kalau max_tokens kekecilan, token kepakai buat mikir & content KOSONG.
-  // Jadi: coba normal dulu, kalau kosong ulang sekali dengan budget lebih gede.
-  for (const budget of [1024, 3072]) {
-    const res = await axios.post(
-      `${conf.baseUrl}/chat/completions`,
-      {
-        model: conf.model,
-        messages: [{ role: 'system', content: system }, ...messages],
-        temperature: 0.8,
-        max_tokens: budget,
-      },
-      {
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${conf.apikey}` },
-        timeout: conf.timeoutMs,
-        validateStatus: () => true,
-      }
-    )
-    if (res.status < 200 || res.status >= 300) {
-      const err = new Error(parseErr(res.data) || `HTTP ${res.status}`)
-      err.status = res.status
-      throw err
-    }
-    const msg = res.data?.choices?.[0]?.message || {}
-    const content = typeof msg.content === 'string' ? msg.content.trim() : ''
-    const tokens = Number(res.data?.usage?.total_tokens) || 0
-    if (content) return { content, tokens }
-    // content kosong → cuma sisa reasoning kehabisan token, coba lagi lebih lega
-    logger.debug({ model: conf.model, budget, reasoning: String(msg.reasoning || '').length }, '[AIChat] content kosong, ulang dengan token lebih besar')
-    if (budget === 3072) return { content: '', tokens }
-  }
-  return { content: '', tokens: 0 }
-}
-
-function nfmt(n) {
-  return Number(n || 0).toLocaleString('id-ID')
-}
-
-// Pesan waktu kuota AI harian habis / provider lagi nge-limit.
-function limitMsg(conf, used = 0) {
-  const lim = Number(conf?.dailyTokenLimit) || DEFAULT_DAILY_TOKENS
+/* ══════════════════════ error ramah ══════════════════════ */
+function limitMsg() {
   return (
     '🚦 *FITUR AI SEDANG LIMIT*\n\n' +
-    `Kuota token harian udah habis (±${nfmt(lim)} token/hari — paket gratis).\n` +
-    (used ? `> Terpakai hari ini: *${nfmt(used)}* token\n` : '') +
-    '\n*Coba lagi BESOK* ya — kuota reset otomatis tiap ganti hari.\n' +
-    '> Biar lebih hemat: kecilin riwayat (`maxHistory`) di config.'
+    'Gemini lagi nolak permintaan (kebanyakan request / rate limit).\n' +
+    `> Terpakai hari ini: *${nfmt(usageToday())}* balasan\n\n` +
+    '*Coba lagi beberapa menit* ya — biasanya pulih sendiri. Kalau masih nolak, ' +
+    'tunggu agak lama (Google sering batasi akses tanpa login).'
   )
 }
 
 function isLimitErr(err) {
   const status = err?.status
   const msg = String(err?.message || err)
-  return status === 429 || /rate.?limit|usage limit|quota|too many requests|exceed/i.test(msg)
+  return status === 429 || /rate.?limit|too many requests|quota|limité|limit exceeded/i.test(msg)
 }
 
 function humanError(err) {
   const status = err?.status
   const msg = String(err?.message || err)
-  // Kuota/limit Aion (token habis / rate limit) → peringatan "sedang limit"
-  if (isLimitErr(err)) {
-    return limitMsg(null, usageToday())
+  if (isLimitErr(err)) return limitMsg()
+  if (err?.parse || /gak bisa dibaca|gak ngasih cookie|format web/i.test(msg)) {
+    return (
+      '🔧 Balasan Gemini gak bisa dibaca — kemungkinan Google baru ngubah web-nya.\n' +
+      '> Coba lagi sebentar. Kalau tetap, lapor owner biar scraper-nya di-update.'
+    )
   }
-  if (status === 402 || /insufficient|balance|credit/i.test(msg)) {
-    return '💳 Saldo/kredit akun Aion habis.\n> Cek: https://www.aionlabs.ai/pricing/'
+  if (status === 403 || status === 401) {
+    return '🔒 Gemini nolak akses dari server ini (butuh login/verifikasi). Coba lagi nanti ya.'
   }
-  if (status === 401 || status === 403) {
-    return '❌ API key Aion ditolak.\n> Cek `apikey` di `config.js` → blok `aiChat` (atau env `AICHAT_API_KEY`).'
+  if (status >= 500) return '🛠️ Server Gemini lagi error. Coba lagi nanti ya.'
+  if (/timeout|ECONNABORTED|ETIMEDOUT|socket hang up/i.test(msg)) {
+    return '⏱️ Gemini kelamaan balas. Coba lagi ya (kadang kalau pertanyaannya berat).'
   }
-  if (status === 404) return '❌ Model Aion gak ketemu. Cek `aiChat.model` di `config.js`.'
-  if (status === 400) return `❌ Permintaan ditolak Aion: ${msg.slice(0, 160)}`
-  if (err?.code === 'ECONNABORTED' || /timeout/i.test(msg)) return '⏱️ AI kelamaan balas. Coba lagi ya.'
-  if (status >= 500) return '🛠️ Server Aion lagi error (gangguan di sisi mereka). Coba lagi nanti ya.'
-  return `❌ Gagal hubungi Aion: ${msg.slice(0, 160)}`
+  if (/ENOTFOUND|ECONNREFUSED|EAI_AGAIN|getaddrinfo|network/i.test(msg)) {
+    return '🌐 Gak bisa nyambung ke Gemini (internet/DNS server lagi ngadat). Coba lagi ya.'
+  }
+  return `❌ Gagal hubungi Gemini: ${msg.slice(0, 160)}`
 }
 
 /* ══════════════════════ alur chat inti ══════════════════════ */
+function gagal(err, conf) {
+  logger.warn({
+    err: String(err?.message || err).slice(0, 200),
+    status: err?.status ?? null,
+  }, '[AIChat] gagal')
+  const le = isLimitErr(err)
+  return { ok: false, limit: le, reply: le ? limitMsg() : humanError(err) }
+}
+
 async function runChat(ctx, text) {
   const conf = cfg()
   if (!conf.enabled) return { ok: false, reply: '❌ Fitur AI chat lagi nonaktif (config.aiChat.enabled).' }
-  if (!conf.apikey) return { ok: false, reply: missingKeyMsg(conf) }
-  if (!conf.baseUrl || !conf.model) {
-    return { ok: false, reply: '❌ Provider AI belum lengkap (baseUrl/model kosong). Cek config.aiChat.' }
-  }
-
-  // Kuota harian udah abis? Gak usah panggil API (mubazir) — langsung kasih peringatan.
-  const usedBefore = conf.dailyTokenLimit > 0 ? usageToday() : 0
-  if (conf.dailyTokenLimit > 0 && usedBefore >= conf.dailyTokenLimit) {
-    return { ok: false, limit: true, reply: limitMsg(conf, usedBefore) }
-  }
 
   const key = historyKey(ctx)
   const h = getHistory(key, conf.maxHistory)
   h.at = Date.now()
-  h.msgs.push({ role: 'user', content: String(text).slice(0, MAX_CHARS) })
-  if (h.msgs.length > conf.maxHistory) h.msgs = h.msgs.slice(-conf.maxHistory)
 
+  const pesan = String(text).slice(0, MAX_CHARS)
   const system = conf.systemPrompt || readPersona()
+  const instruction = buildSystem(ctx, system)
+  // Kalau udah ada session, Gemini inget sendiri konteksnya (cukup kirim pesan baru).
+  // Kalau belum/gagal, riwayat teks ditempel biar obrolan tetap nyambung.
+  const withHistory = flatten(h.msgs, pesan)
 
-  let answer
-  let tokens = 0
+  let res
   try {
-    const res = await askModel(conf, buildSystem(ctx, system), h.msgs)
-    answer = res.content
-    tokens = res.tokens
+    res = await geminiChat({
+      message: h.session ? pesan : withHistory,
+      instruction,
+      session: h.session,
+      timeoutMs: conf.timeoutMs,
+    })
   } catch (err) {
-    h.msgs.pop() // pesan gagal jangan nyangkut di riwayat
-    saveStore()
-    logger.warn({ err: String(err?.message || err).slice(0, 200) }, '[AIChat] gagal')
-    const le = isLimitErr(err)
-    return { ok: false, limit: le, reply: le ? limitMsg(conf, usageToday()) : humanError(err) }
-  }
-
-  if (!answer) {
-    h.msgs.pop()
-    saveStore()
-    return { ok: false, reply: '❌ AI gak ngasih balasan. Coba lagi ya.' }
-  }
-
-  h.msgs.push({ role: 'assistant', content: answer.slice(0, MAX_CHARS) })
-  if (h.msgs.length > conf.maxHistory) h.msgs = h.msgs.slice(-conf.maxHistory)
-  saveStore()
-
-  let out = answer.slice(0, MAX_CHARS)
-  // Catat token + tempel peringatan kalau kuota harian udah mepet (≥90%).
-  if (conf.dailyTokenLimit > 0) {
-    const total = addUsage(tokens)
-    if (total >= conf.dailyTokenLimit * WARN_RATIO) {
-      const left = Math.max(0, conf.dailyTokenLimit - total)
-      out += `\n\n_⚠️ Kuota AI hari ini mepet — sisa ±${nfmt(left)} token. Reset otomatis besok._`
+    // session lama basi/rusak → ulang SEKALI dari awal (tanpa session)
+    if (h.session) {
+      logger.warn({ err: String(err?.message || err).slice(0, 140) }, '[AIChat] session lama gagal — ulang tanpa session')
+      h.session = null
+      try {
+        res = await geminiChat({ message: withHistory, instruction, timeoutMs: conf.timeoutMs })
+      } catch (err2) {
+        saveStore()
+        return gagal(err2, conf)
+      }
+    } else {
+      return gagal(err, conf)
     }
   }
-  return { ok: true, reply: out }
+
+  const answer = String(res?.text || '').trim()
+  if (!answer) return { ok: false, reply: '❌ AI gak ngasih balasan. Coba lagi ya.' }
+
+  h.msgs.push({ role: 'user', content: pesan })
+  h.msgs.push({ role: 'assistant', content: answer.slice(0, MAX_CHARS) })
+  if (h.msgs.length > conf.maxHistory) h.msgs = h.msgs.slice(-conf.maxHistory)
+  if (res?.session) h.session = res.session
+  saveStore()
+  addUsage(1)
+
+  return { ok: true, reply: answer.slice(0, MAX_CHARS) }
 }
 
 /* ══════════════════════ teks bantuan ══════════════════════ */
-function missingKeyMsg(conf) {
-  return (
-    '⚠️ *API KEY AION BELUM DIISI*\n\n' +
-    `Model: \`${conf.model}\`\n\n` +
-    'Ambil key GRATIS (tanpa kartu kredit):\n' +
-    '> 🎭 https://www.aionlabs.ai/app/api-keys/\n\n' +
-    '*Cara isi (pilih salah satu):*\n' +
-    '> `config.js` → blok `aiChat.apikey`\n' +
-    '> env `AICHAT_API_KEY` (Pterodactyl: tab *Startup*)\n' +
-    '> file `src/data/ai.json` → `{ "apikey": "..." }` (gak ikut ke GitHub)'
-  )
-}
-
 function helpText(p, conf) {
-  const used = conf.dailyTokenLimit > 0 ? usageToday() : 0
-  const kuota = conf.dailyTokenLimit > 0
-    ? `Kuota harian: *${nfmt(used)}* / ${nfmt(conf.dailyTokenLimit)} token\n`
-    : ''
+  const persona = personaIsCustom() ? 'custom (`data/ai-persona.txt`)' : 'Bella Clarissa (default)'
   return (
-    '🤖 *AI CHAT — Aion Labs*\n\n' +
-    `Model: \`${conf.model}\` (tanpa filter)\n` +
+    '🤖 *AI CHAT — Gemini*\n\n' +
+    `Otak: *Gemini* (lewat web, tanpa API key)\n` +
+    `Persona: ${persona}\n` +
     `Aku inget riwayat obrolan kita (maks ${conf.maxHistory} pesan).\n` +
-    kuota +
-    '\n*Cara pakai:*\n' +
+    `Pemakaian hari ini: *${nfmt(usageToday())}* balasan\n\n` +
+    '*Cara pakai:*\n' +
     `> ${p}bot <pertanyaan>\n` +
-    `> ${p}bot reset — hapus riwayat\n` +
+    `> ${p}bot reset — hapus riwayat, mulai dari awal\n` +
     (conf.mentionTrigger ? '> tag nomor aku langsung (tanpa prefix)\n' : '') +
     (conf.mentionTrigger && conf.replyTrigger ? '> atau BALES/quote pesan-ku\n' : '') +
-    (conf.mentionTrigger || conf.replyTrigger ? '\n' : '\n') +
-    '*Contoh:*\n' +
+    '\n*Contoh:*\n' +
     `> ${p}bot jelasin apa itu lubang hitam singkat`
   )
 }
@@ -428,8 +348,6 @@ async function handler(ctx) {
     resetHistory(historyKey(ctx))
     return ctx.reply('🧹 Oke, riwayat obrolan kita udah aku lupain. Mulai dari awal lagi ya!')
   }
-
-  if (!conf.apikey) return ctx.reply(missingKeyMsg(conf))
 
   await ctx.react('🕕')
   const r = await runChat(ctx, text)
@@ -535,7 +453,6 @@ function stripMention(text, num) {
 async function onMention(ctx) {
   const conf = cfg()
   if (!conf.enabled || !conf.mentionTrigger) return false
-  if (!conf.apikey) return false // jangan spam kalau key belum diisi
   if (!(await isBotMentioned(ctx, conf))) return false
 
   const num = getBotNumber()
@@ -570,7 +487,8 @@ setMentionHandler(onMention)
 export { pluginConfig as config, handler }
 // Buat pengujian internal (loader cuma baca `config` + `handler`).
 export const _internals = {
-  cfg, askModel, runChat, humanError, isLimitErr, limitMsg,
-  usageToday, addUsage, USAGE_FILE, AION, buildSystem, userProfile,
-  isBotMentioned, mentionedJids, quotedParticipant, stripMention,
+  cfg, runChat, humanError, isLimitErr, limitMsg,
+  usageToday, addUsage, USAGE_FILE, STORE_FILE, buildSystem, userProfile,
+  isBotMentioned, mentionedJids, quotedParticipant, stripMention, flatten,
+  resetHistory, store,
 }

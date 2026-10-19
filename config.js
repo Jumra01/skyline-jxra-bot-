@@ -133,34 +133,24 @@ export default {
 
   /* ════════════════════════════════════════════
    *  AI CHAT (.bot) — chat AI yang INGET riwayat obrolan
-   *  PROVIDER: **Aion Labs** — https://api.aionlabs.ai/v1 (OpenAI-compatible)
-   *    • Model default: aion-labs/aion-3.5  (is_moderated: false → tanpa
-   *      filter, paling pinter ngikutin instruksi & ngenalin lawan bicara)
-   *      alternatif: aion-labs/aion-2.0
-   *      ⚠️ jangan pakai aion-rp-llama-3.1-8b — itu model ROLEPLAY, suka
-   *         nganggep obrolan fiksi & GAK ngenalin nama user (bug lama)
-   *    • Free tier: 15 req/menit · 20.000 token/hari (tanpa kartu kredit)
-   *    • Ambil key GRATIS: https://www.aionlabs.ai/app/api-keys/
-   *  `apikey` DITANAM (pilihan owner — repo ini publik & mau langsung jalan
-   *  tanpa setup). Tetap bisa ditimpa tanpa nyentuh file ini:
-   *    • env AICHAT_API_KEY (paling diutamakan)
-   *    • file `src/data/ai.json` (GITIGNORED) → { "apikey": "..." }
-   *  Persona/prompt: file `data/ai-persona.txt` atau command `.setpersona`.
+   *  OTAK: **Gemini web** (lib/geminiWeb.js) — TANPA API key & tanpa kredit,
+   *  cukup server ada internet. Pola sama dengan auto-ai skyline-md.
+   *    • Multi-turn asli (session resumeArray+cookie disimpan per user)
+   *    • Kalau Gemini ubah web-nya sampai gagal dibaca → bot balas pesan
+   *      ramah, tinggal update `lib/geminiWeb.js`.
+   *  PERSONA: file `data/ai-persona.txt` atau command `.setpersona`.
+   *  Default: Bella Clarissa (Bell409) — lihat `lib/aiPersona.js`.
    *  AUTO-BALAS (tanpa prefix): `mentionTrigger` = bot di-tag/di-@ nomornya,
    *  `replyTrigger` = pesan bot DIBALES (quote/swipe-reply) → dua-duanya
    *  dianggap ngajak ngobrol. Matiin salah satu kalau berisik di grup.
    * ════════════════════════════════════════════ */
   aiChat: {
     enabled: true,        // matiin total kalau lagi gak mau pakai
-    apikey: 'alv2_3ZgYP4bG9uvT4JpEYyxvt_NgkJM_-DlnFe0pb2r9rag', // Aion Labs (free tier 20K token/hari)
-    model: 'aion-labs/aion-3.5', // tanpa filter; alternatif: aion-labs/aion-2.0
-    baseUrl: '',          // kosong → default Aion (jangan diubah kecuali tau)
     maxHistory: 20,       // jumlah pesan riwayat per user (user + assistant)
-    dailyTokenLimit: 20000, // kuota token/hari (free tier Aion = 20K). 0 = matiin peringatan
     timeoutMs: 60_000,    // batas tunggu balasan AI (ms)
     mentionTrigger: true, // balas otomatis kalau nomor bot di-tag (tanpa prefix)
     replyTrigger: true,   // balas juga kalau pesan bot DIBALES (quote/swipe-reply)
-    systemPrompt: '',     // kosong → pakai data/ai-persona.txt / default
+    systemPrompt: '',     // kosong → pakai data/ai-persona.txt / default (Bella)
   },
 
   /* ════════════════════════════════════════════
