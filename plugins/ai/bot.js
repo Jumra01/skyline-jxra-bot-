@@ -492,8 +492,45 @@ function helpText(p, conf) {
     (conf.mentionTrigger ? '> tag nomor aku langsung (tanpa prefix)\n' : '') +
     (conf.mentionTrigger && conf.replyTrigger ? '> atau BALES/quote pesan-ku\n' : '') +
     `> ${p}autoai on/off — atur Auto AI per grup (admin)\n` +
+    `> ${p}bot diag — cek kenapa tag/bales gak dibalas (owner/staff)\n` +
     '\n*Contoh:*\n' +
     `> ${p}bot jelasin apa itu lubang hitam singkat`
+  )
+}
+
+/** `.bot diag` — kenapa tag/bales gak dibalas? (identitas + pesan terakhir) */
+function diagText(ctx, p) {
+  const conf = cfg()
+  const id = botIdentity(ctx)
+  const ai = resolveAutoAI(ctx.chat)
+  const s = lastSeen
+  const yes = (v) => (v ? 'ya' : 'TIDAK')
+  const bot = [
+    `Nomor    : ${id.num ? `+${id.num}` : '❌ belum kedeteksi'}`,
+    `meJid    : ${id.meJid || '-'}`,
+    `meLid    : ${id.meLid || '-'}`,
+    `user.id  : ${ctx.client?.user?.id || ctx.client?.user?.lid || '-'}`,
+    `Fitur AI : ${yes(conf.enabled)} • tag ${yes(conf.mentionTrigger)} • bales ${yes(conf.replyTrigger !== false)}`,
+    `AutoAI   : ${ai.enabled ? `AKTIF (${ai.source}) • ${ai.characterName} • ${ai.mode}` : `NONAKTIF (${ai.source})`}`,
+  ]
+  const last = s
+    ? [
+        `Waktu    : ${s.at}`,
+        `Chat     : ${s.group ? 'grup' : 'pribadi'}`,
+        `Teks     : ${s.body || '(kosong)'}`,
+        `Tag JID  : ${s.mentioned.length ? s.mentioned.join(', ') : '-'}`,
+        `Quote    : ${s.quoted || '-'}`,
+        `Kedeteksi: ${s.matched ? 'YA' : 'TIDAK'}`,
+        `Hasil    : ${s.result || '-'}`,
+      ]
+    : ['(belum ada pesan tanpa prefix sejak bot nyala)']
+
+  return (
+    '🔎 *ᴅɪᴀɢ ᴀɪ*\n\n' +
+    `╭┈┈⬡「 🤖 ʙᴏᴛ 」\n${bot.map((l) => `┃ ${l}`).join('\n')}\n╰┈┈┈┈┈┈┈┈⬡\n\n` +
+    `╭┈┈⬡「 📨 ᴘᴇsᴀɴ ᴛᴇʀᴀᴋʜɪʀ 」\n${last.map((l) => `┃ ${l}`).join('\n')}\n╰┈┈┈┈┈┈┈┈⬡\n\n` +
+    `> Tag / bales pesanku, lalu jalankan \`${p}bot diag\` lagi.\n` +
+    '> Kalau *Kedeteksi: TIDAK*, JID tag/quote gak cocok sama identitas bot di atas.'
   )
 }
 
@@ -525,6 +562,11 @@ async function handler(ctx) {
 
   const text = String(ctx.text || '').trim()
   if (!text) return ctx.reply(helpText(p, conf))
+
+  if (/^(diag|diagnosa|diagnose|cek)$/i.test(text)) {
+    if (!ctx.isStaff) return ctx.reply('🚫 Khusus owner/staff.')
+    return ctx.reply(diagText(ctx, p))
+  }
 
   if (/^(reset|clear|hapus|lupakan|forget)$/i.test(text)) {
     resetHistory(historyKey(ctx))
@@ -560,27 +602,50 @@ async function handler(ctx) {
 const INVISIBLE_RE = /[\u200b-\u200f\u2060-\u2069\ufeff]/g
 let botLidCache // { num, lid } — hasil resolve LID bot (kalau perlu)
 
+/** Angka murni dari jid — buang `@server` DAN suffix device (`:12`). */
 function digits(s) {
-  return String(s || '').replace(/\D/g, '')
+  return String(s || '').split('@')[0].split(':')[0].replace(/\D/g, '')
+}
+
+/**
+ * Race dengan batas waktu. Panggilan zapo (getLidsByPhoneNumbers /
+ * queryGroupMetadata) bisa gantung tanpa resolve — kalau ditunggu terus,
+ * handler tag/reply ikut macet dan bot kelihatan diem.
+ */
+function withTimeout(promise, ms, fallback = null) {
+  let timer
+  const t = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(fallback), ms)
+    timer.unref?.()
+  })
+  return Promise.race([promise, t]).finally(() => clearTimeout(timer))
 }
 
 /** Semua bentuk identitas bot: nomor + jid (PN/LID) yang kita tau. */
 function botIdentity(ctx) {
-  const num = getBotNumber()
-  let meJid = null
-  try { meJid = ctx?.client?.auth?.getCurrentCredentials?.()?.meJid ?? null } catch { /* ignore */ }
+  let cred = null
+  try { cred = ctx?.client?.auth?.getCurrentCredentials?.() ?? null } catch { /* ignore */ }
+  const num = getBotNumber() || digits(cred?.meJid) || null
+  const meJid = cred?.meJid ?? null
+  const meLid = cred?.meLid ?? null
   const userId = ctx?.client?.user?.id ?? ctx?.client?.user?.lid ?? null
-  const jids = [num ? `${num}@s.whatsapp.net` : null, meJid, userId].filter(Boolean)
-  return { num, jids }
+  const jids = [
+    num ? `${num}@s.whatsapp.net` : null,
+    meJid,
+    meLid,
+    userId,
+  ].filter(Boolean)
+  return { num, meJid, meLid, jids }
 }
 
 async function botLid(ctx) {
-  const { num } = botIdentity(ctx)
+  const { num, meLid } = botIdentity(ctx)
+  if (meLid) return meLid // paling cepat & akurat — dari credentials, tanpa network
   if (!num) return null
   // cache cuma kalau ketemu — kalau gagal, biar bisa dicoba lagi kapan-kapan
   if (botLidCache?.num === num && botLidCache.lid) return botLidCache.lid
   try {
-    const rows = await ctx.client?.profile?.getLidsByPhoneNumbers?.([num])
+    const rows = await withTimeout(ctx.client?.profile?.getLidsByPhoneNumbers?.([num]), 3000, null)
     const lid = (rows ?? [])[0]?.lidJid ?? (rows ?? [])[0]?.lid ?? null
     if (lid) botLidCache = { num, lid }
     return lid
@@ -618,10 +683,17 @@ async function isBotJid(ctx, jid) {
   const { num, jids } = botIdentity(ctx)
   if (num && digits(jid) === num) return true
   if (jids.includes(jid)) return true
+  // jid boleh bawa suffix device (`:12`) — bandingkan angka murninya
+  const jn = digits(jid)
+  if (jn && jids.some((j) => {
+    const isPn = j.endsWith('@s.whatsapp.net') || !j.includes('@')
+    return isPn && digits(j) === jn
+  })) return true
   const lid = await botLid(ctx)
   if (lid && jid === lid) return true
   if (String(jid).endsWith('@lid')) {
-    const pn = await resolveLidToPn(ctx.client, ctx.chat, jid)
+    // resolver network: dibatasi biar gak gantung → bot tetap jawab
+    const pn = await withTimeout(resolveLidToPn(ctx.client, ctx.chat, jid), 3000, null)
     if (pn) {
       if (num && digits(pn) === num) return true
       if (jids.includes(pn)) return true
@@ -651,20 +723,54 @@ function stripMention(text, num) {
   return t.replace(/\s+/g, ' ').trim()
 }
 
+/** Snapshot pesan tanpa-prefix terakhir — buat `.bot diag`. */
+let lastSeen = null
+
+function snapshot(ctx, conf) {
+  const id = botIdentity(ctx)
+  return {
+    at: new Date().toISOString(),
+    chat: ctx.chat,
+    group: Boolean(ctx.isGroup),
+    sender: ctx.sender,
+    senderLid: ctx.senderLid || null,
+    body: String(ctx.body || '').slice(0, 160),
+    mentioned: mentionedJids(ctx),
+    quoted: quotedParticipant(ctx),
+    bot: { num: id.num, meJid: id.meJid, meLid: id.meLid, jids: id.jids },
+    flags: {
+      enabled: conf.enabled,
+      mentionTrigger: conf.mentionTrigger !== false,
+      replyTrigger: conf.replyTrigger !== false,
+    },
+    autoai: null,
+    matched: null,
+    result: 'diproses',
+  }
+}
+
 async function onMention(ctx) {
   const conf = cfg()
   if (!conf.enabled || !conf.mentionTrigger) return false
-  if (!(await isBotMentioned(ctx, conf))) return false
+
+  const snap = snapshot(ctx, conf)
+  lastSeen = snap
+
+  const matched = await isBotMentioned(ctx, conf)
+  snap.matched = matched
+  if (!matched) { snap.result = 'bukan tag / bukan bales bot'; return false }
 
   // Auto AI per-chat (`.autoai`): kalau dimatiin di sini → diem aja.
   const ai = resolveAutoAI(ctx.chat)
-  if (!ai.enabled) return true
+  snap.autoai = { enabled: ai.enabled, source: ai.source, character: ai.character, mode: ai.mode }
+  if (!ai.enabled) { snap.result = `diem — autoai ${ai.source}`; return true }
 
-  const num = getBotNumber()
+  const num = botIdentity(ctx).num
   const text = stripMention(ctx.body, num)
   if (!text) {
     const u = userProfile(ctx)
     const siapa = u.name && u.name !== 'Tanpa Nama' ? ` ${u.name}` : ''
+    snap.result = 'sapaan (tag tanpa teks)'
     await ctx.reply(`Halo${siapa}! 👋 Ada yang bisa aku bantu? Tag aku bareng pertanyaannya ya 😊`)
     return true
   }
@@ -673,14 +779,16 @@ async function onMention(ctx) {
   if (!ctx.isStaff) {
     if (config.antiSpam?.enabled) {
       const f = checkFlood(ctx.sender, config.antiSpam)
-      if (f.flooded) return true // diem aja, jangan nambah spam
+      if (f.flooded) { snap.result = 'diem — anti-spam (flood)'; return true }
     }
     const cd = checkCooldown(ctx.sender, 'aiMention', 4000)
-    if (cd.onCooldown) return true
+    if (cd.onCooldown) { snap.result = 'diem — cooldown 4 detik'; return true }
   }
 
+  snap.result = 'manggil AI…'
   await ctx.react('🕕')
   const r = await runChat(ctx, text, { persona: ai.instruction, mode: ai.mode })
+  snap.result = r.ok ? 'dibalas ✅' : `gagal: ${String(r.reply || '').slice(0, 140)}`
   await ctx.react(r.ok ? '✅' : r.limit ? '🚦' : '❎')
   await ctx.reply(r.reply)
   return true
@@ -695,6 +803,7 @@ export const _internals = {
   cfg, runChat, humanError, isLimitErr, limitMsg,
   usageToday, addUsage, USAGE_FILE, STORE_FILE, buildSystem, userProfile, nowWIB,
   isBotMentioned, mentionedJids, quotedParticipant, stripMention, flatten,
+  botIdentity, isBotJid, withTimeout, diagText, getLastSeen: () => lastSeen,
   resetHistory, store, llmRemember, parseFactsJson, faktaText, helpText,
   sessionGuard: {
     reset: () => { sessionFailStreak = 0; sessionSkipUntil = 0 },
