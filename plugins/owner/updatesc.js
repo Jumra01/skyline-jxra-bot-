@@ -14,13 +14,13 @@
  *   auto             → kalau package.json / package-lock.json ikut berubah,
  *                      jalanin `npm install --omit=dev` sendiri setelah pull.
  *
- * SETTING MILIK USER: update sengaja dijalankan BERSIH — semua file repo
- * (kode, nilai default config, thumbnail) ikut versi terbaru. Nilai yang
- * user isi sendiri (apikey dll) dan thumbnail yang pernah diganti dulu
- * di-BACKUP ke `config.js.update.bak` + `updatesc-keep.bak/`, lalu
- * dipulihin lewat fitur terpisah `.restore` (lihat plugins/owner/restore.js)
- * — jadi script tetap ter-update, settingan bisa dibalikin kapan aja.
- * Lihat lib/keepSettings.js.
+ * SETTING MILIK USER: sebelum update, nilai yang diisi sendiri (apikey dll)
+ * dan thumbnail yang pernah diganti di-BACKUP ke `config.js.update.bak` +
+ * `updatesc-keep.bak/`. Setelah update sukses, backup itu **dipulihkan
+ * otomatis** (config.js + thumbnail saja — kode tetap versi terbaru), jadi
+ * gak perlu ngetik `.restore` lagi. Kalau pemulihan gagal, backup tetap
+ * disimpan dan bisa dicoba manual lewat `.restore`.
+ * Lihat lib/keepSettings.js + lib/keepMigrate.js.
  *
  * Hasil akhir dirender kartu HTML native (richResponseMessage/unifiedResponse,
  * pola ping2/snake — §9 AGENTS.md) tema chrome biru-silver-putih-hitam;
@@ -45,8 +45,9 @@ import os from 'node:os'
 import crypto from 'node:crypto'
 import {
   KEEP_FILES, KEEP_BAK, KEEP_BAK_DIR,
-  readKeep, writeKeep, saveKeep, assetPristine
+  readKeep, writeKeep, saveKeep, assetPristine, backupStatus, restoreFromBackup
 } from '../../lib/keepSettings.js'
+import { normalizeBackup } from '../../lib/keepMigrate.js'
 
 const pexec = promisify(execFile)
 const pgunzip = promisify(gunzip)
@@ -100,43 +101,91 @@ const toSmallCaps = (t) => [...String(t).toLowerCase()].map((c) => SC_MAP[c] || 
 const trunc = (s, n) => (String(s).length > n ? `${String(s).slice(0, n - 1)}…` : String(s))
 
 /**
- * Laporan soal backup setting milik user di `.updatesc`.
- * Pemulihan sengaja TIDAK otomatis di sini — biar update bersih masuk
- * semua; klien tinggal jalanin `.restore` kapan aja.
+ * Balikin setting user OTOMATIS setelah update sukses (atau setelah pull
+ * gagal — config/thumbnail udah terlanjur di-reset ke HEAD).
+ * Cuma nyentuh `config.js` (KEEP_FIELDS) + thumbnail yang di-backup —
+ * kode & config default baru tetap versi terbaru.
+ * Gagal → backup TIDAK dihapus, jadi masih bisa `.restore` manual.
  */
-function savedStats(saved) {
-  return saved ? [{ k: '🔐 setting', v: `${saved} di-backup`, cls: 'ok' }] : []
+async function autoRestore() {
+  try {
+    await normalizeBackup()
+    const r = await restoreFromBackup({ config: true, assets: true })
+    return {
+      kept: r.kept.length + r.assetsKept.length,
+      lost: r.lost.length + r.assetsLost.length,
+      error: null
+    }
+  } catch (err) {
+    return { kept: 0, lost: 0, error: String(err?.message || err) }
+  }
 }
 
-function savedNote(saved) {
-  return saved
-    ? {
-        t: `🔐 ${saved} setting kamu disimpan dulu sebelum<br>ketimpa. Jalankan <b>.restore</b> buat balikin —<br><b>kode tetap versi terbaru</b>.`
-      }
-    : null
+// Sisa backup SETELAH auto-restore (biasanya 0; kalau gagal, masih ada).
+async function pendingNow() {
+  try {
+    const st = await backupStatus()
+    return { config: st.config.length > 0, assets: st.assets.length }
+  } catch {
+    return { config: false, assets: 0 }
+  }
 }
 
-function savedLine(saved) {
-  return saved ? `🔐 ${saved} setting di-backup → jalankan .restore buat balikin` : ''
+function restoredStats(r) {
+  if (!r) return []
+  if (r.error) return [{ k: '♻️ restore', v: 'GAGAL', cls: 'bad' }]
+  const out = []
+  if (r.kept) out.push({ k: '♻️ setting', v: `${r.kept} dipulihkan`, cls: 'ok' })
+  if (r.lost) out.push({ k: '♻️ setting', v: `${r.lost} gagal`, cls: 'warn' })
+  return out
 }
 
-// Backup lama dari update sebelumnya yang belum sempat di-`.restore`.
-// Wajib dilaporin: kalau gak, user ngeliat "0 di-backup" padahal
-// setingannya masih tersimpen nunggu dipulihin.
+function restoredNote(r) {
+  if (!r) return null
+  if (r.error) {
+    return {
+      t: `⚠️ Restore otomatis gagal:<br><b>${hesc(trunc(r.error, 64))}</b><br>Jalankan <b>.restore</b> manual.`,
+      cls: 'warn'
+    }
+  }
+  if (r.lost) {
+    return {
+      t: `⚠️ ${r.kept} setting balik, <b>${r.lost} gagal</b>.<br>Backup-nya masih disimpan — jalankan<br><b>.restore</b> buat coba lagi.`,
+      cls: 'warn'
+    }
+  }
+  if (r.kept) {
+    return {
+      t: `♻️ <b>${r.kept} setting</b> kamu dipulihkan otomatis<br>(apikey / thumbnail) — <b>kode tetap terbaru</b>.`
+    }
+  }
+  return null
+}
+
+function restoredLine(r) {
+  if (!r) return ''
+  if (r.error) return `⚠️ Restore otomatis gagal → jalankan .restore`
+  if (r.lost) return `⚠️ ${r.kept} setting balik · ${r.lost} gagal → coba .restore`
+  if (r.kept) return `♻️ ${r.kept} setting dipulihkan otomatis`
+  return ''
+}
+
+// Sisa backup dari update sebelumnya yang BELUM berhasil dipulihkan
+// (auto-restore gagal / user lama). Wajib dilaporin biar gak dianggap hilang.
 function pendingCount(p) {
   return (p?.config ? 1 : 0) + (p?.assets || 0)
 }
 
 function pendingStats(p) {
   const n = pendingCount(p)
-  return n ? [{ k: '🔐 backup lama', v: `${n} nunggu .restore`, cls: 'warn' }] : []
+  return n ? [{ k: '🔐 backup', v: `${n} belum balik`, cls: 'warn' }] : []
 }
 
 function pendingNote(p) {
   const n = pendingCount(p)
   return n
     ? {
-        t: `🔐 Masih ada <b>${n} backup</b> dari update<br>sebelumnya yang belum dipulihkan —<br>jalankan <b>.restore</b> buat balikin.`,
+        t: `🔐 Masih ada <b>${n} backup</b> yang belum<br>kebalik — jalankan <b>.restore</b><br>buat coba lagi.`,
         cls: 'warn'
       }
     : null
@@ -144,7 +193,7 @@ function pendingNote(p) {
 
 function pendingLine(p) {
   const n = pendingCount(p)
-  return n ? `🔐 ${n} backup lama masih nunggu → .restore` : ''
+  return n ? `🔐 ${n} backup belum kebalik → jalankan .restore` : ''
 }
 
 function card(emoji, title, lines) {
@@ -416,7 +465,7 @@ async function bootstrapRepo() {
   // `fetch` gak nyentuh working tree → baru sekarang bisa bedain file yang
   // BENERAN diubah user vs masih default, pakai pembanding `FETCH_HEAD`
   // (folder belum punya HEAD). Tanpa ini, thumbnail default ikut ke-backup.
-  const keepState = await saveKeep({
+  await saveKeep({
     pristine: (rel) => assetPristine(rel, 'FETCH_HEAD')
   })
   // checkout -f bakal nimpa config.js versi lokal (apikey klien) → simpen
@@ -426,10 +475,6 @@ async function bootstrapRepo() {
   await git(['checkout', '-f', '-B', BRANCH, 'FETCH_HEAD'])
   try { await git(['branch', '--set-upstream-to', `origin/${BRANCH}`, BRANCH]) } catch {}
 
-  // Pemulihan sengaja gak otomatis di sini — biar update masuk bersih.
-  // Klien tinggal jalanin `.restore` bila mau balikin settingnya.
-  const saved = keepState.keeps.length + keepState.assets.length
-
   let pkgChanged = false
   try {
     const pkgAfter = await fs.readFile('package.json')
@@ -437,7 +482,7 @@ async function bootstrapRepo() {
   } catch {}
 
   const head = (await git(['log', '-1', '--oneline'])).out
-  return { head, pkgChanged, saved, pending: keepState.pending }
+  return { head, pkgChanged }
 }
 
 function parseGitHubRepo(url) {
@@ -536,7 +581,7 @@ async function apiSync() {
     // Tarball udah ke-extract di `src` = persis versi upstream → pakai itu
     // sebagai pembanding "pristine" (tanpa git gak ada HEAD). Jadi thumbnail
     // yang masih default gak ikut ke-backup, yang diubah user baru.
-    const keepState = await saveKeep({
+    await saveKeep({
       pristine: async (rel) => {
         try {
           const [upstream, lokal] = await Promise.all([
@@ -550,7 +595,6 @@ async function apiSync() {
       }
     })
     await fs.cp(src, process.cwd(), { recursive: true, force: true })
-    const saved = keepState.keeps.length + keepState.assets.length
 
     let pkgChanged = false
     try {
@@ -558,7 +602,7 @@ async function apiSync() {
       pkgChanged = !!pkgBefore && !pkgBefore.equals(pkgAfter)
     } catch {}
 
-    return { short, msg, pkgChanged, saved, pending: keepState.pending }
+    return { short, msg, pkgChanged }
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
   }
@@ -637,8 +681,10 @@ async function handler(ctx) {
       `🕒 ${nowWIB()}`
     ]))
     try {
-      const { short, msg, pkgChanged, saved, pending } = await apiSync()
+      const { short, msg, pkgChanged } = await apiSync()
       const { installed, installErr } = await npmInstallMaybe(ctx, pkgChanged)
+      const restored = await autoRestore()
+      const pending = await pendingNow()
       await ctx.react(installErr ? '⚠️' : '✅')
       await replyRich(ctx, {
         icon: '🌐',
@@ -649,14 +695,14 @@ async function handler(ctx) {
 <div class="meta"><span class="hash">${hesc(short)}</span><span>${hesc(trunc(msg, 34))}</span></div>`,
         meta: [`⏱️ <b>${hesc(fmtDur(Date.now() - t0))}</b>`, `🕒 ${hesc(nowWIB())}`],
         notes: [
-          savedNote(saved),
+          restoredNote(restored),
           pendingNote(pending),
           { t: '🌐 Server gak punya git — file disamain<br>langsung dari GitHub (tarball mode).' },
           { t: 'ℹ️ Daftar file berubah gak bisa<br>dideteksi tanpa git.', cls: 'warn' }
         ].filter(Boolean),
         stats: [
           { k: '📦 npm install', v: installed ? 'sukses' : installErr ? 'GAGAL' : 'lewati', cls: installed ? 'ok' : installErr ? 'bad' : 'dim' },
-          ...savedStats(saved),
+          ...restoredStats(restored),
           ...pendingStats(pending)
         ],
         buttons: [{ t: '🔁 RESTART di panel', cls: 'blue' }]
@@ -670,13 +716,15 @@ async function handler(ctx) {
         'ℹ️ Daftar file gak bisa dideteksi (tanpa git)',
         installed ? '📦 npm install *sukses*' : installErr ? '⚠️ npm install *gagal* (cek log)' : '📦 npm install *lewati*',
         '',
-        savedLine(saved),
+        restoredLine(restored),
         pendingLine(pending),
         '🔁 *RESTART* bot di panel biar kode baru kebaca',
         '',
         `🕒 ${nowWIB()}`
       ])
     } catch (err) {
+      const restored = await autoRestore()
+      const pending = await pendingNow()
       await ctx.react('⚠️')
       await replyRich(ctx, {
         icon: '⚠️',
@@ -686,13 +734,19 @@ async function handler(ctx) {
         head: `<div class="lbl">❌ <span>API error</span></div>
 ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
         meta: [`⏱️ <b>${hesc(fmtDur(Date.now() - t0))}</b>`, `🕒 ${hesc(nowWIB())}`],
-        notes: [{ t: 'Cek koneksi / rate limit GitHub,<br>lalu coba lagi <b>.updatesc</b>.', cls: 'bad' }]
+        notes: [
+          restoredNote(restored),
+          pendingNote(pending),
+          { t: 'Cek koneksi / rate limit GitHub,<br>lalu coba lagi <b>.updatesc</b>.', cls: 'bad' }
+        ].filter(Boolean)
       }, [
         '*UPDATE GAGAL*',
         '',
         '🔍 Detail error:',
         ...gitErrDetail(err),
         '',
+        restoredLine(restored),
+        pendingLine(pending),
         `⏱️ *${fmtDur(Date.now() - t0)}*`,
         `🕒 ${nowWIB()}`
       ])
@@ -733,7 +787,8 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
       return
     }
     const { installed, installErr } = await npmInstallMaybe(ctx, bootstrapped.pkgChanged)
-    const { saved, pending } = bootstrapped
+    const restored = await autoRestore()
+    const pending = await pendingNow()
     await ctx.react(installErr ? '⚠️' : '✅')
     await replyRich(ctx, {
       icon: '⚙️',
@@ -744,14 +799,14 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
 <div class="meta"><span class="hash">${hesc(bootstrapped.head.split(' ')[0])}</span><span>${hesc(trunc(bootstrapped.head.split(' ').slice(1).join(' '), 40))}</span></div>`,
       meta: [`⏱️ <b>${hesc(fmtDur(Date.now() - t0))}</b>`, `🕒 ${hesc(nowWIB())}`],
       notes: [
-        savedNote(saved),
+        restoredNote(restored),
         pendingNote(pending),
         { t: '💾 Config lama disimpan di<br><b>config.js.pre-git.bak</b>' },
         { t: '⚠️ Abis <b>RESTART</b>, jalur .updatesc<br>berikutnya normal (git pull).', cls: 'warn' }
       ].filter(Boolean),
       stats: [
         { k: '📦 npm install', v: installed ? 'sukses' : installErr ? 'GAGAL' : 'lewati', cls: installed ? 'ok' : installErr ? 'bad' : 'dim' },
-        ...savedStats(saved),
+        ...restoredStats(restored),
         ...pendingStats(pending),
         { k: '📁 session/ & data/', v: 'aman utuh', cls: 'ok' }
       ].filter(Boolean),
@@ -764,7 +819,7 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
       '',
       '📥 Repo di-init otomatis + sync penuh',
       '💾 config.js lama → `config.js.pre-git.bak`',
-      savedLine(saved),
+      restoredLine(restored),
       pendingLine(pending),
       installed ? '📦 npm install *sukses*' : installErr ? '⚠️ npm install *gagal* (cek log)' : '📦 npm install *lewati*',
       '',
@@ -852,6 +907,11 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
   if (behind === '0') {
     const cur = (await git(['log', '-1', '--oneline'])).out
     const [curHash = '', ...curMsg] = cur.split(' ')
+    // Kalau masih ada backup dari update sebelumnya (mis. run lama yang
+    // belum sempat `.restore`), pulihin sekarang juga — biar `.updatesc`
+    // selalu beres tanpa langkah tambahan.
+    const restored = await autoRestore()
+    const pending = await pendingNow()
     await ctx.react('✅')
     await replyRich(ctx, {
       icon: '✅',
@@ -863,8 +923,11 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
       meta: [`⏱️ <b>${hesc(fmtDur(Date.now() - t0))}</b>`, `🌿 ${hesc(BRANCH)}`, `🕒 ${hesc(nowWIB())}`],
       stats: [
         { k: '📡 origin', v: 'tersambung', cls: 'ok' },
-        { k: '🔄 update terakhir', v: 'cek ulang nanti', cls: 'dim' }
-      ]
+        { k: '🔄 update terakhir', v: 'cek ulang nanti', cls: 'dim' },
+        ...restoredStats(restored),
+        ...pendingStats(pending)
+      ],
+      notes: [restoredNote(restored), pendingNote(pending)].filter(Boolean)
     }, [
       '✅ *UDAH TERBARU*',
       '',
@@ -872,6 +935,8 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
       curMsg.length ? `💬 ${trunc(curMsg.join(' '), 36)}` : null,
       '',
       'ℹ️ Gak ada commit baru dari GitHub',
+      restoredLine(restored),
+      pendingLine(pending),
       `⏱️ *${fmtDur(Date.now() - t0)}*`,
       `🕒 ${nowWIB()}`
     ].filter(Boolean))
@@ -881,8 +946,9 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
   // ── Simpen nilai milik user (apikey dll) dulu ──
   // config.js lokal pasti beda dari GitHub (user ngisi apikey sendiri),
   // dan `pull --ff-only` bakal NOLAK kalau file tracked berubah lokal.
-  // Jadi: backup → balikin ke versi HEAD → pull. Pemulihan dari backup
-  // dilakuin lewat `.restore` (fitur terpisah), biar update masuk bersih.
+  // Jadi: backup → balikin ke versi HEAD → pull → **auto-restore** setting
+  // user (config + thumbnail) di atas kode terbaru. `.restore` cuma perlu
+  // kalau auto-restore gagal.
   let keepState = { keeps: [], assets: [], pending: { config: false, assets: 0 } }
   let cfgReset = false
   try {
@@ -912,10 +978,13 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
     pullErr = err
   }
 
-  // Pull gagal → file lokal udah dibalikin ke versi HEAD, tapi gak ada
-  // yang hilang: semua setting user ada di backup, tinggal `.restore`.
+  // Pull gagal → file lokal udah dibalikin ke versi HEAD, jadi setting user
+  // WAJIB dipulihkan balik (kalau enggak, apikey di config.js hilang sampai
+  // `.restore` manual).
 
   if (pullErr) {
+    const restored = await autoRestore()
+    const pending = await pendingNow()
     await ctx.react('⚠️')
     await replyRich(ctx, {
       icon: '⚠️',
@@ -926,9 +995,11 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
 ${gitErrDetail(pullErr).map((l) => row(hesc(l))).join('')}`,
       meta: [`⏱️ <b>${hesc(fmtDur(Date.now() - t0))}</b>`, `🕒 ${hesc(nowWIB())}`],
       notes: [
+        restoredNote(restored),
+        pendingNote(pending),
         { t: '💡 Kemungkinan ada file diedit<br>langsung di panel.', cls: 'warn' },
         { t: 'Paling aman: edit di <b>lokal</b> →<br><b>push</b> → <b>.updatesc</b><br>(atau reset repo di panel).', cls: 'warn' }
-      ]
+      ].filter(Boolean)
     }, [
       '*UPDATE GAGAL*',
       '',
@@ -938,15 +1009,17 @@ ${gitErrDetail(pullErr).map((l) => row(hesc(l))).join('')}`,
       '   di panel. Paling aman: edit di lokal',
       '   → push → .updatesc (atau reset repo)',
       '',
+      restoredLine(restored),
+      pendingLine(pending),
       `⏱️ *${fmtDur(Date.now() - t0)}*`,
       `🕒 ${nowWIB()}`
     ])
     return
   }
 
-  // ── Setting user udah ke-backup; pemulihan lewat `.restore` ──
-  const saved = keepState.keeps.length + keepState.assets.length
-  const pending = keepState.pending || { config: false, assets: 0 }
+  // ── Kode udah terbaru → balikin setting user OTOMATIS ──
+  const restored = await autoRestore()
+  const pending = await pendingNow()
 
   const newHead = (await git(['rev-parse', 'HEAD'])).out
   let commits = [] // { hash, subject, body }
@@ -1027,7 +1100,7 @@ ${gitErrDetail(pullErr).map((l) => row(hesc(l))).join('')}`,
     ].filter(Boolean),
     stats: [
       { k: '📦 npm install', v: installed ? 'sukses' : installErr ? 'GAGAL' : 'lewati', cls: installed ? 'ok' : installErr ? 'bad' : 'dim' },
-      ...savedStats(saved),
+      ...restoredStats(restored),
       ...pendingStats(pending),
       needRestart
         ? { k: '🔁 aksi', v: 'RESTART di panel', cls: 'bad' }
@@ -1036,7 +1109,7 @@ ${gitErrDetail(pullErr).map((l) => row(hesc(l))).join('')}`,
           : { k: '✅ aksi', v: 'selesai', cls: 'ok' }
     ].filter(Boolean),
     notes: [
-      savedNote(saved),
+      restoredNote(restored),
       pendingNote(pending),
       cfgReset ? { t: '⚙️ config.js sempat di-reset ke<br>versi GitHub sebelum update.' } : null,
       needRestart
@@ -1059,7 +1132,7 @@ ${gitErrDetail(pullErr).map((l) => row(hesc(l))).join('')}`,
     ...section('📝 *LAINNYA*', groups.other),
     ...fileSection(files),
     installed ? '📦 npm install *sukses*' : installErr ? '⚠️ npm install *gagal* (cek log)' : '📦 npm install *lewati*',
-    savedLine(saved),
+    restoredLine(restored),
     pendingLine(pending),
     needRestart
       ? '🔁 *RESTART* diperlukan (core/lib/handlers)'
@@ -1076,7 +1149,9 @@ export { pluginConfig as config, handler }
 // buat pengujian (loader cuma baca `config` + `handler`)
 export const _internals = {
   KEEP_FILES, KEEP_BAK, KEEP_BAK_DIR, readKeep, writeKeep, saveKeep, assetPristine,
-  savedStats, savedNote, savedLine,
+  backupStatus, restoreFromBackup, normalizeBackup,
+  autoRestore, pendingNow,
+  restoredStats, restoredNote, restoredLine,
   pendingCount, pendingStats, pendingNote, pendingLine,
   untgz
 }

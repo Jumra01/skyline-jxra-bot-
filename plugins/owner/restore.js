@@ -4,11 +4,12 @@
  * Hargai sebagaimana u mau dihargai.
  * restore.js — Balikin SETTING & apikey dari backup, tanpa menyentuh kode.
  *
- * `.updatesc` sengaja update BERSIH: semua file repo (kode, nilai default
- * config, thumbnail) ikut versi terbaru, tapi setting milik user dulu
- * di-backup ke `config.js.update.bak` + `updatesc-keep.bak/`.
- * Fitur inilah yang menebusnya — dan karena cuma file setting yang
- * disentuh, script yang barusan ke-update TETAP versi terbaru.
+ * `.updatesc` sekarang memulihkan setting OTOMATIS setelah update sukses,
+ * jadi command ini jarang dibutuhkan — pakai kalau auto-restore gagal atau
+ * kalau mau balikin manual kapan aja. Setting yang dulu di-backup ke
+ * `config.js.update.bak` + `updatesc-keep.bak/` tetap aman: karena cuma
+ * file setting yang disentuh, script yang barusan ke-update TETAP versi
+ * terbaru.
  *
  * Pakai:
  *   .restore              → lihat isi backup + pilihan tombol
@@ -25,11 +26,9 @@
  *
  * Catatan: balikin API di config.js butuh RESTART biar kebaca bot.
  */
-import { promises as fs } from 'node:fs'
 import { onRichReply } from '../../handlers/messageHandler.js'
 import { backupStatus, restoreFromBackup } from '../../lib/keepSettings.js'
-
-const BAK = 'config.js.update.bak'
+import { normalizeBackup } from '../../lib/keepMigrate.js'
 
 // Label tampilan — SENGAJA lokal (bukan export baru dari lib/keepSettings.js):
 // hot reload cuma re-import `plugins/`, sedangkan `lib/` masih versi lama di
@@ -60,97 +59,8 @@ function card(emoji, title, lines) {
 
 const kb = (n) => (n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1048576).toFixed(1)} MB`)
 
-/* ══════════════ migrasi backup lama (`omniedit` → `skyline`) ══════════════
- * Blok config `omniedit` sudah DIGABUNG ke `skyline`, tapi backup yang
- * dibuat `.updatesc` versi lama masih menyimpan blok `omniedit`. Kalau
- * dibiarin, `.restore` di bot yang belum di-restart (lib lama masih di
- * module cache) bakal nulis ke blok yang udah gak ada → dianggap gagal.
- * Jadi backup-nya dirapikan DULU sebelum dibaca `backupStatus` /
- * `restoreFromBackup`: nilainya dipindah ke `skyline`, blok `omniedit`
- * dibuang. Aman dipanggil berkali-kali (kalau udah rapi → langsung return).
- */
-
-/** Rentang `{ ... }` milik blok `name` (brace-aware). */
-function blockRange(src, name) {
-  const at = src.search(new RegExp(`(^|\\n)[ \\t]*${name}[ \\t]*:[ \\t]*\\{`))
-  if (at < 0) return null
-  const open = src.indexOf('{', at)
-  let depth = 0
-  for (let i = open; i < src.length; i++) {
-    if (src[i] === '{') depth++
-    else if (src[i] === '}') {
-      depth--
-      if (depth === 0) return { at, open, close: i + 1 }
-    }
-  }
-  return null
-}
-
-/** Nilai string field di dalam blok ('' kalau gak ada / kosong). */
-function blockValue(src, name, key) {
-  const b = blockRange(src, name)
-  if (!b) return ''
-  const seg = src.slice(b.open, b.close)
-  const m = seg.match(new RegExp(`(^|[\\s{,])${key}[ \\t]*:[ \\t]*(['"\`])([^'"\`]*)\\2`))
-  return m ? m[3] : ''
-}
-
-/** Ganti nilai string field di dalam blok. */
-function setBlockValue(src, name, key, value) {
-  const b = blockRange(src, name)
-  if (!b) return src
-  const seg = src.slice(b.open, b.close)
-  const re = new RegExp(`(^|[\\s{,])(${key}[ \\t]*:[ \\t]*)(['"\`])([^'"\`]*)\\3`)
-  const nseg = seg.replace(re, (_f, pre, decl, q) => `${pre}${decl}${q}${value}${q}`)
-  return src.slice(0, b.open) + nseg + src.slice(b.close)
-}
-
-/** Buang satu blok `name: { ... },` sekaligus barisnya. */
-function removeBlock(src, name) {
-  const b = blockRange(src, name)
-  if (!b) return src
-  let start = src.lastIndexOf('\n', b.at) + 1
-  let end = b.close
-  if (src[end] === ',') end++
-  while (src[end] === ' ' || src[end] === '\t' || src[end] === '\r') end++
-  if (src[end] === '\n') end++
-  return src.slice(0, start) + src.slice(end)
-}
-
-/** Rapikan backup lama: `omniedit` → `skyline`. Balikin true kalau diubah. */
-async function normalizeBackup() {
-  let src
-  try {
-    src = await fs.readFile(BAK, 'utf8')
-  } catch {
-    return false
-  }
-  if (!blockRange(src, 'omniedit')) return false
-
-  const omniKey = blockValue(src, 'omniedit', 'apikey')
-  const omniSite = blockValue(src, 'omniedit', 'website')
-
-  // Config jadul (sebelum fitur YouTube) cuma punya blok `omniedit` —
-  // cukup ganti nama bloknya, isinya sama (`website` + `apikey`).
-  if (!blockRange(src, 'skyline') && omniKey) {
-    src = src.replace(/(^|\n)([ \t]*)omniedit([ \t]*:[ \t]*\{)/, '$1$2skyline$3')
-    await fs.writeFile(BAK, src, 'utf8')
-    return true
-  }
-
-  if (blockRange(src, 'skyline')) {
-    if (omniKey && !blockValue(src, 'skyline', 'apikey')) {
-      src = setBlockValue(src, 'skyline', 'apikey', omniKey)
-    }
-    if (omniSite && !blockValue(src, 'skyline', 'website')) {
-      src = setBlockValue(src, 'skyline', 'website', omniSite)
-    }
-  }
-
-  src = removeBlock(src, 'omniedit')
-  await fs.writeFile(BAK, src, 'utf8')
-  return true
-}
+// Backup lama (`omniedit` → `skyline`) dirapikan oleh `normalizeBackup()`
+// dari lib/keepMigrate.js — dipakai bareng `.updatesc` (auto-restore).
 
 /** Teks isi backup — dipakai buat status & sesudah restore. */
 async function backupText() {
@@ -297,4 +207,4 @@ async function handler(ctx) {
 
 export { pluginConfig as config, handler }
 // buat pengujian (loader cuma baca `config` + `handler`)
-export const _internals = { normalizeBackup, blockValue }
+export const _internals = { normalizeBackup }
