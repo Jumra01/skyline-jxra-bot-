@@ -45,7 +45,7 @@ import { resolveLidToPn } from '../../core/lid.js'
 import { unwrapMessage } from '../../core/context.js'
 import { sendTyping } from '../../core/presence.js'
 import { readPersona, personaIsCustom } from '../../lib/aiPersona.js'
-import { geminiChat } from '../../lib/geminiWeb.js'
+import { geminiChat, SUPPORTS_IMAGES } from '../../lib/geminiWeb.js'
 import { resolveAutoAI } from '../../lib/autoai.js'
 import { extractFacts, remember, factsFor, formatBlock, forget, stats as memStats } from '../../lib/aiMemory.js'
 
@@ -60,7 +60,10 @@ const HISTORY_IN_PROMPT = 16  // pesan terakhir yang ditempel kalau mulai dari n
 const VISION_MAX_BYTES = 6 * 1024 * 1024 // foto asli di atas ini dilewati
 const VISION_MAX_DIM = 1024              // sisi terpanjang setelah resize
 const VISION_DOWNLOAD_MS = 12_000        // batas unduh media dari WhatsApp
-const IMG_FIELDS = ['imageMessage', 'stickerMessage']
+const IMG_FIELDS = ['imageMessage', 'stickerMessage', 'documentMessage']
+// Balasan "error" bawaan Gemini web (bukan jawaban beneran) — kalau ini muncul
+// padahal ada gambar, berarti servernya nolak (bukan berarti gambarnya salah).
+const CANNED_ERR_RE = /(sorry,?\s*something went wrong|something went wrong|an error occurred|please try again|try again later|terjadi kesalahan|gagal memproses)/i
 
 // Sesi anonim Gemini (cookie) umurnya pendek — kalau dipakai setelah nganggur,
 // Google balikin balasan yang gak bisa di-parse → dulu tiap begitu buang 1
@@ -431,6 +434,15 @@ async function runChat(ctx, text, opts = {}) {
     h.sessionAt = 0
   }
 
+  // Giliran BERGAMBAR selalu mulai dari percakapan baru (tanpa sesi lama):
+  // sesi lama (apalagi yang dibuat sebelum fitur gambar ada) bikin Gemini
+  // balikin pesan error "Sorry, something went wrong." padahal file-nya udah
+  // terunggah. Konteks obrolan tetap kebawa lewat `withHistory`.
+  if (images.length && h.session) {
+    h.session = null
+    h.sessionAt = 0
+  }
+
   const usedSession = Boolean(h.session)
   let res
   try {
@@ -465,7 +477,32 @@ async function runChat(ctx, text, opts = {}) {
     }
   }
 
-  const answer = String(res?.text || '').trim()
+  let answer = String(res?.text || '').trim()
+  // Kalau jawabannya pesan error bawaan Gemini padahal ada gambar → coba sekali
+  // lagi dari percakapan benar-benar baru (kadang sesi anonimnya yang lagi kurang
+  // beruntung). Gagal lagi → jangan teruskan pesan error-nya ke user.
+  if (answer && images.length && CANNED_ERR_RE.test(answer)) {
+    logger.warn({ jawaban: answer.slice(0, 120) }, '[AIChat] Gemini balikin pesan error — coba ulang percakapan baru')
+    try {
+      const ulang = await geminiChat({ message: withHistory, instruction, timeoutMs: conf.timeoutMs, images })
+      const ans2 = String(ulang?.text || '').trim()
+      if (ans2 && !CANNED_ERR_RE.test(ans2)) {
+        res = ulang
+        answer = ans2
+      }
+    } catch (err) {
+      logger.warn({ err: String(err?.message || err).slice(0, 140) }, '[AIChat] ulangan tanpa sesi gagal')
+    }
+  }
+  if (images.length && CANNED_ERR_RE.test(answer)) {
+    saveStore()
+    return {
+      ok: false,
+      reply:
+        '🖼️ *Gemini lagi gak bisa buka gambarnya* 😅\n' +
+        '> Coba kirim ulang gambarnya, atau tulis pertanyaannya aja dulu (tanpa foto).',
+    }
+  }
   if (!answer) return { ok: false, reply: '❌ AI gak ngasih balasan. Coba lagi ya.' }
 
   h.msgs.push({ role: 'user', content: pesan })
@@ -537,6 +574,7 @@ function diagText(ctx, p) {
     `meLid    : ${id.meLid || '-'}`,
     `user.id  : ${ctx.client?.user?.id || ctx.client?.user?.lid || '-'}`,
     `Fitur AI : ${yes(conf.enabled)} • tag ${yes(conf.mentionTrigger)} • bales ${yes(conf.replyTrigger !== false)} • chat pribadi ${yes(conf.privateAuto !== false)} • foto ${yes(conf.vision)}`,
+    `Lib gambar: ${SUPPORTS_IMAGES ? 'ya ✅' : 'TIDAK — lib lama, restart bot dulu!'}`,
     `AutoAI   : ${ai.enabled ? `AKTIF (${ai.source}) • ${ai.characterName} • ${ai.mode}` : `NONAKTIF (${ai.source})`}`,
   ]
   const last = s
@@ -783,10 +821,17 @@ async function imageForAI(ctx) {
       .flatten({ background: '#ffffff' })
       .jpeg({ quality: 82 })
       .toBuffer()
+    logger.debug(
+      { jenis: hit.field, asliKB: Math.round(raw.length / 1024), kirimKB: Math.round(jpeg.length / 1024) },
+      '[AIChat] gambar siap dikirim ke AI'
+    )
     return {
       buffer: jpeg,
       mimetype: 'image/jpeg',
-      filename: hit.field === 'stickerMessage' ? 'stiker.jpg' : 'foto.jpg',
+      filename:
+        hit.field === 'stickerMessage' ? 'stiker.jpg'
+          : hit.field === 'documentMessage' ? 'gambar.jpg'
+            : 'foto.jpg',
     }
   } catch (err) {
     logger.warn({ err: String(err?.message || err).slice(0, 140) }, '[AIChat] gambar gak bisa diproses')
