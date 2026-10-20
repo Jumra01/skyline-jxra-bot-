@@ -73,7 +73,7 @@ export default {
   //   spotify → SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET
   // Kosong = fitur terkait mati/fallback, fitur lain tetap jalan.
   api: {
-    // Satu key buat `.play` `.yta` `.ytv` `.ytsearch` + `.omniedit`.
+    // Satu key buat `.play` `.yta` `.ytv` `.ytsearch` + `.omniedit` + `.ella`.
     skyline: {
       website: 'https://skyline.web.id',
       apikey: '',
@@ -104,6 +104,23 @@ export default {
     rememberEvery: 8,        // tiap N pesan rapihin fakta (0 = pola instan)
     sessionTtlMin: 20,       // sesi Gemini basi setelah N menit nganggur
     systemPrompt: '',        // kosong = persona default (Bella)
+  },
+
+  /* ── ELLA (AI chat skyline.web.id) ─────────────────────── */
+  // Otak: POST /api/ai/aichat-skyline (wajib API key Skyline).
+  // Memakai key yang sama dengan `.play`/`.omniedit`: api.skyline.apikey
+  // atau env SKYLINE_API_KEY. Persona Ella menolak bocoran rahasia.
+  ella: {
+    enabled: true,          // fitur nyala (command + auto)
+    auto: true,             // auto balas tag/bales/DM (false = auto pakai `.bot` Gemini)
+    mentionTrigger: true,   // balas saat bot di-tag
+    replyTrigger: true,     // balas saat pesan Ella dibales
+    privateAuto: true,      // chat pribadi: pesan biasa juga dibalas
+    vision: true,           // foto/stiker dibaca (OCR + deskripsi otomatis)
+    memory: true,           // inget fakta penting tentang user
+    maxHistory: 8,          // pesan terakhir yang dikirim ke API (maks 10)
+    timeoutMs: 30_000,      // batas tunggu balasan (ms)
+    systemPrompt: '',       // instruksi tambahan (opsional)
   },
 
   /* ── MEDIA WORKER (WebSocket) ──────────────────────────── */
