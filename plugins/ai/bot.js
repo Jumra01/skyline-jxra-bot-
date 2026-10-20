@@ -63,7 +63,7 @@ const VISION_DOWNLOAD_MS = 12_000        // batas unduh media dari WhatsApp
 const IMG_FIELDS = ['imageMessage', 'stickerMessage', 'documentMessage']
 // Balasan "error" bawaan Gemini web (bukan jawaban beneran) — kalau ini muncul
 // padahal ada gambar, berarti servernya nolak (bukan berarti gambarnya salah).
-const CANNED_ERR_RE = /(sorry,?\s*something went wrong|something went wrong|an error occurred|please try again|try again later|terjadi kesalahan|gagal memproses)/i
+const CANNED_ERR_RE = /(sorry,?\s*something went wrong|something went wrong|encountered an error|error doing what you asked|could you try again|an error occurred|please try again|try again later|terjadi kesalahan|gagal memproses|maaf,?\s*terjadi)/i
 
 // Sesi anonim Gemini (cookie) umurnya pendek — kalau dipakai setelah nganggur,
 // Google balikin balasan yang gak bisa di-parse → dulu tiap begitu buang 1
@@ -555,9 +555,77 @@ function helpText(p, conf) {
     (conf.vision ? '> kirim/tag foto atau stiker — aku lihat lalu jawab\n' : '') +
     `> ${p}autoai on/off — atur Auto AI per grup (admin)\n` +
     `> ${p}bot diag — cek kenapa tag/bales gak dibalas (owner/staff)\n` +
+    `> ${p}bot tes — tes koneksi AI teks & gambar (owner/staff)\n` +
     '\n*Contoh:*\n' +
     `> ${p}bot jelasin apa itu lubang hitam singkat\n` +
     (conf.vision ? `> tag aku + kirim foto: "ini gambar apa?"` : '')
+  )
+}
+
+/** `.bot tes` — cek jalur teks & gambar ke Gemini langkah demi langkah (owner/staff). */
+async function selfTestText(conf) {
+  const durasi = (ms) => (ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`)
+  const baris = []
+  const jalan = async (label, fn) => {
+    const t0 = Date.now()
+    try {
+      const note = await fn()
+      baris.push(`✅ *${label}* — ${durasi(Date.now() - t0)}${note ? `\n   ${note}` : ''}`)
+      return true
+    } catch (err) {
+      baris.push(`❌ *${label}* — ${durasi(Date.now() - t0)}\n   ${String(err?.message || err).slice(0, 180)}`)
+      return false
+    }
+  }
+
+  // Gambar tes dibikin sendiri → gak perlu kirim WhatsApp dulu.
+  let gambar = null
+  try {
+    gambar = await sharp({ create: { width: 360, height: 260, channels: 3, background: '#1a73e8' } })
+      .composite([{
+        input: Buffer.from('<svg width="360" height="260"><text x="30" y="152" font-size="58" font-family="DejaVu Sans" fill="#ffffff">TES 47</text></svg>')
+      }])
+      .jpeg({ quality: 82 })
+      .toBuffer()
+  } catch { /* sharp error → bagian gambar dilewati */ }
+
+  const teksOk = await jalan('Teks ke Gemini', async () => {
+    const r = await geminiChat({ message: 'balas satu kata: oke', instruction: 'Jawab satu kata saja.', timeoutMs: Math.min(conf.timeoutMs, 45_000) })
+    const t = String(r?.text || '').trim()
+    if (!t) throw new Error('jawaban kosong')
+    if (CANNED_ERR_RE.test(t)) throw new Error(`Gemini balas error: ${t.slice(0, 120)}`)
+    return `jawaban: ${t.slice(0, 60)}`
+  })
+
+  let gambarOk = false
+  if (gambar) {
+    gambarOk = await jalan('Gambar ke Gemini', async () => {
+      const r = await geminiChat({
+        message: 'tulisan apa yang ada di gambar ini? sebut apa adanya.',
+        instruction: 'Jawab singkat.',
+        timeoutMs: Math.min(conf.timeoutMs, 60_000),
+        images: [{ buffer: gambar, mimetype: 'image/jpeg', filename: 'tes.jpg' }],
+      })
+      const t = String(r?.text || '').trim()
+      if (!t) throw new Error('jawaban kosong')
+      if (CANNED_ERR_RE.test(t)) throw new Error(`Gemini nolak gambarnya: ${t.slice(0, 120)}`)
+      return `jawaban: ${t.slice(0, 90)}${/47/.test(t) ? '' : ' (angka di gambar gak kebaca)'}`
+    })
+  } else {
+    baris.push('⚠️ *Gambar tes* — dilewati (sharp gak bisa bikin gambar di server ini)')
+  }
+
+  const hasil = !teksOk
+    ? '❌ Gemini *teks* juga gagal — bukan soal gambar. Server/IP-nya lagi nolak, coba lagi nanti.'
+    : gambarOk
+      ? '✅ Teks & gambar dua-duanya jalan. Kalau tadi gagal, coba kirim ulang fotonya.'
+      : '⚠️ Teks jalan, *gambar gagal* — server Gemini nolak file yang diunggah (bukan salah fotomu).'
+  return (
+    '🧪 *TES AI*\n' +
+    `> lib gambar: ${SUPPORTS_IMAGES ? 'ya' : 'TIDAK (lib lama — restart bot dulu!)'}\n` +
+    `> node: ${process.version}\n\n` +
+    baris.join('\n\n') +
+    `\n\n*Hasil:* ${hasil}`
   )
 }
 
@@ -650,6 +718,12 @@ async function handler(ctx) {
   if (/^(diag|diagnosa|diagnose|cek)$/i.test(text)) {
     if (!ctx.isStaff) return ctx.reply('🚫 Khusus owner/staff.')
     return ctx.reply(diagText(ctx, p))
+  }
+
+  if (/^(tes|test|uji)$/i.test(text)) {
+    if (!ctx.isStaff) return ctx.reply('🚫 Khusus owner/staff.')
+    if (config.typingPresence) void sendTyping(ctx.client, ctx.chat)
+    return ctx.reply(await selfTestText(conf))
   }
 
   if (/^(reset|clear|hapus|lupakan|forget)$/i.test(text)) {
@@ -1091,7 +1165,7 @@ export const _internals = {
   isBotMentioned, mentionedJids, quotedParticipant, hasQuoted, stripMention, flatten,
   botIdentity, isBotJid, withTimeout, diagText, getLastSeen: () => lastSeen, normJid, jidUser,
   resetHistory, store, llmRemember, parseFactsJson, faktaText, helpText,
-  imageForAI, findImgNode,
+  imageForAI, findImgNode, selfTestText, CANNED_ERR_RE,
   sessionGuard: {
     reset: () => { sessionFailStreak = 0; sessionSkipUntil = 0 },
     state: () => ({ sessionFailStreak, sessionSkipUntil }),
