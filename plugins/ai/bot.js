@@ -46,6 +46,7 @@ import { unwrapMessage } from '../../core/context.js'
 import { sendTyping } from '../../core/presence.js'
 import { readPersona, personaIsCustom } from '../../lib/aiPersona.js'
 import { geminiChat, SUPPORTS_IMAGES } from '../../lib/geminiWeb.js'
+import { readImage, visionContext } from '../../lib/visionFallback.js'
 import { resolveAutoAI } from '../../lib/autoai.js'
 import { extractFacts, remember, factsFor, formatBlock, forget, stats as memStats } from '../../lib/aiMemory.js'
 
@@ -103,6 +104,7 @@ function cfg() {
     replyTrigger: c.replyTrigger !== false,
     privateAuto: c.privateAuto !== false,
     vision: c.vision !== false,
+    visionFallback: c.visionFallback !== false,
     remember: c.remember !== false,
     rememberEvery: Math.max(0, Math.min(50, Number(c.rememberEvery ?? 8) || 0)),
     sessionTtlMin: Math.max(0, Math.min(720, c.sessionTtlMin === 0 ? 0 : (Number(c.sessionTtlMin) || 20))),
@@ -495,6 +497,33 @@ async function runChat(ctx, text, opts = {}) {
     }
   }
   if (images.length && CANNED_ERR_RE.test(answer)) {
+    // Jalur cadangan: server Gemini nolak FILE-nya, tapi teks masih jalan.
+    // Gambar dibaca lewat OCR + deskripsi otomatis, lalu model tetap Gemini.
+    if (conf.visionFallback) {
+      try {
+        const baca = await readImage(images[0].buffer)
+        if (baca.ada) {
+          logger.info(
+            { ocr: baca.teks ? baca.teks.length : 0, deskripsi: baca.deskripsi ? baca.deskripsi.length : 0 },
+            '[AIChat] Gemini nolak file — gambar dibaca lewat jalur cadangan (OCR + deskripsi)'
+          )
+          const ulang3 = await geminiChat({
+            message: `${withHistory}\n\n${visionContext(baca)}`,
+            instruction,
+            timeoutMs: conf.timeoutMs,
+          })
+          const ans3 = String(ulang3?.text || '').trim()
+          if (ans3 && !CANNED_ERR_RE.test(ans3)) {
+            res = ulang3
+            answer = ans3
+          }
+        }
+      } catch (err) {
+        logger.warn({ err: String(err?.message || err).slice(0, 140) }, '[AIChat] jalur cadangan gambar gagal')
+      }
+    }
+  }
+  if (images.length && CANNED_ERR_RE.test(answer)) {
     saveStore()
     return {
       ok: false,
@@ -615,11 +644,23 @@ async function selfTestText(conf) {
     baris.push('⚠️ *Gambar tes* — dilewati (sharp gak bisa bikin gambar di server ini)')
   }
 
+  // Gemini nolak file? cek apakah jalur cadangan (OCR + deskripsi) masih bisa baca
+  let cadanganOk = null
+  if (!gambarOk && gambar && conf.visionFallback) {
+    cadanganOk = await jalan('Cadangan gambar (OCR + deskripsi)', async () => {
+      const baca = await readImage(gambar)
+      if (!baca.ada) throw new Error('OCR & deskripsi dua-duanya gak ngasih hasil')
+      return `tulisan: ${baca.teks ? `"${baca.teks.slice(0, 50)}"` : '-'} · deskripsi: ${baca.deskripsi ? `${baca.deskripsi.length} char` : '-'}`
+    })
+  }
+
   const hasil = !teksOk
     ? '❌ Gemini *teks* juga gagal — bukan soal gambar. Server/IP-nya lagi nolak, coba lagi nanti.'
     : gambarOk
       ? '✅ Teks & gambar dua-duanya jalan. Kalau tadi gagal, coba kirim ulang fotonya.'
-      : '⚠️ Teks jalan, *gambar gagal* — server Gemini nolak file yang diunggah (bukan salah fotomu).'
+      : cadanganOk
+        ? '⚠️ Gemini nolak file, tapi *jalur cadangan jalan* — gambar tetap kebaca & dijawab (lebih lambat ±5-10 dtk).'
+        : '⚠️ Teks jalan, *gambar gagal* — server Gemini nolak file & jalur cadangan juga gak dapet hasil.'
   return (
     '🧪 *TES AI*\n' +
     `> lib gambar: ${SUPPORTS_IMAGES ? 'ya' : 'TIDAK (lib lama — restart bot dulu!)'}\n` +

@@ -99,6 +99,7 @@ export default {
     replyTrigger: true,      // balas saat pesan bot di-reply
     privateAuto: true,       // chat pribadi: pesan biasa (tanpa tag) juga dibalas
     vision: true,            // bisa lihat foto/stiker yang dikirim atau di-quote
+    visionFallback: true,    // kalau Gemini nolak file → baca gambar lewat OCR + deskripsi otomatis
     remember: true,          // catat fakta penting tentang user
     rememberEvery: 8,        // tiap N pesan rapihin fakta (0 = pola instan)
     sessionTtlMin: 20,       // sesi Gemini basi setelah N menit nganggur
