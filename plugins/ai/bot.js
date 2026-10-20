@@ -90,6 +90,7 @@ function cfg() {
     timeoutMs: Math.max(5000, Number(c.timeoutMs) || 60_000),
     mentionTrigger: c.mentionTrigger !== false,
     replyTrigger: c.replyTrigger !== false,
+    privateAuto: c.privateAuto !== false,
     remember: c.remember !== false,
     rememberEvery: Math.max(0, Math.min(50, Number(c.rememberEvery ?? 8) || 0)),
     sessionTtlMin: Math.max(0, Math.min(720, c.sessionTtlMin === 0 ? 0 : (Number(c.sessionTtlMin) || 20))),
@@ -492,6 +493,7 @@ function helpText(p, conf) {
     `> ${p}bot reset — hapus riwayat${conf.remember ? ' + catatan' : ''}, mulai dari awal\n` +
     (conf.mentionTrigger ? '> tag nomor aku langsung (tanpa prefix)\n' : '') +
     (conf.mentionTrigger && conf.replyTrigger ? '> atau BALES/quote pesan-ku\n' : '') +
+    (conf.privateAuto ? '> di chat pribadi tinggal kirim pesan biasa, aku balas\n' : '') +
     `> ${p}autoai on/off — atur Auto AI per grup (admin)\n` +
     `> ${p}bot diag — cek kenapa tag/bales gak dibalas (owner/staff)\n` +
     '\n*Contoh:*\n' +
@@ -511,7 +513,7 @@ function diagText(ctx, p) {
     `meJid    : ${id.meJid || '-'}`,
     `meLid    : ${id.meLid || '-'}`,
     `user.id  : ${ctx.client?.user?.id || ctx.client?.user?.lid || '-'}`,
-    `Fitur AI : ${yes(conf.enabled)} • tag ${yes(conf.mentionTrigger)} • bales ${yes(conf.replyTrigger !== false)}`,
+    `Fitur AI : ${yes(conf.enabled)} • tag ${yes(conf.mentionTrigger)} • bales ${yes(conf.replyTrigger !== false)} • chat pribadi ${yes(conf.privateAuto !== false)}`,
     `AutoAI   : ${ai.enabled ? `AKTIF (${ai.source}) • ${ai.characterName} • ${ai.mode}` : `NONAKTIF (${ai.source})`}`,
   ]
   const last = s
@@ -530,6 +532,7 @@ function diagText(ctx, p) {
         `key.remoteJid  : ${raw0(s.raw.key.remoteJid)}`,
         `key.participant: ${raw0(s.raw.key.participant)}${s.raw.key.participantAlt ? `  (alt: ${s.raw.key.participantAlt})` : ''}`,
         `remoteJidAlt   : ${raw0(s.raw.key.remoteJidAlt)}`,
+        `recipient      : ${raw0(s.raw.key.recipientJid)}${s.raw.key.recipientAlt ? `  (alt: ${s.raw.key.recipientAlt})` : ''}`,
         `fromMe         : ${s.raw.key.fromMe}`,
         `ctx.mentioned  : ${raw0(s.raw.mentionedJid.join(', '))}`,
         `ctx.quotePart. : ${raw0(s.raw.quoteParticipant)}`,
@@ -644,22 +647,27 @@ function withTimeout(promise, ms, fallback = null) {
   return Promise.race([promise, t]).finally(() => clearTimeout(timer))
 }
 
-/** Semua bentuk identitas bot: nomor + jid (PN/LID) yang kita tau. */
+/**
+ * Semua bentuk identitas bot: nomor + jid (PN/LID) yang kita tau.
+ * Termasuk `key.recipientJid` — di chat pribadi stanza masuknya dialamatkan
+ * ke bot sendiri, jadi field itu = identitas bot (di grup isinya jid grup).
+ */
 function botIdentity(ctx) {
   let cred = null
   try { cred = ctx?.client?.auth?.getCurrentCredentials?.() ?? null } catch { /* ignore */ }
-  const user = ctx?.client?.user ?? {}
-  const num = getBotNumber() || jidUser(cred?.meJid) || jidUser(user.id) || null
+  const num = getBotNumber() || jidUser(cred?.meJid) || null
   const meJid = normJid(cred?.meJid) || null
-  const meLid = normJid(cred?.meLid) || normJid(user.lid) || null
-  const userId = normJid(user.id) || null
+  const meLid = normJid(cred?.meLid) || null
+  const recipients = [ctx?.event?.key?.recipientJid, ctx?.event?.key?.recipientAlt]
+    .map(normJid)
+    .filter((j) => Boolean(j) && (j.endsWith('@s.whatsapp.net') || j.endsWith('@lid')))
   const jids = [...new Set([
     num ? `${num}@s.whatsapp.net` : null,
     meJid,
     meLid,
-    userId,
+    ...recipients,
   ].filter(Boolean))]
-  return { num, meJid, meLid, userId, jids }
+  return { num, meJid, meLid, userId: null, jids }
 }
 
 /** Kumpulin mentionedJid dari SEMUA jenis pesan (teks, caption, bungkus ephemeral/view-once). */
@@ -746,19 +754,26 @@ function hasQuoted(ctx) {
 /**
  * Bot "diajak ngobrol"? = di-TAG (PN/LID/teks @nomor) ATAU dibales
  * (quote pesan bot, kalau `replyTrigger` gak dimatiin) → dua-duanya manggil AI.
+ * Di chat pribadi, lawan bicaranya cuma bot: pesan biasa juga dianggap ngajak
+ * ngobrol (kalau `privateAuto` gak dimatiin).
  */
 async function isBotMentioned(ctx, conf) {
-  const { num } = botIdentity(ctx)
+  const { num, meLid } = botIdentity(ctx)
   for (const j of mentionedJids(ctx)) {
     if (await isBotJid(ctx, j)) return true
   }
   const body = String(ctx.body || '').replace(INVISIBLE_RE, '')
   if (num && new RegExp(`@${num}(?![0-9])`).test(body)) return true
+  // Mention bisa juga tampil sebagai @LID (grup LID-addressed) di teks pesan.
+  const lidNum = jidUser(meLid)
+  if (lidNum.length >= 6 && new RegExp(`@${lidNum}(?![0-9])`).test(body)) return true
   if (conf?.replyTrigger !== false) {
     if (await isBotJid(ctx, quotedParticipant(ctx))) return true
     // Chat pribadi: lawan bicaranya cuma bot → tiap balesan = balesan pesan bot
     if (!ctx.isGroup && hasQuoted(ctx)) return true
   }
+  // Chat pribadi = memang ngobrol sama bot → gak perlu tag/bales sama sekali.
+  if (!ctx.isGroup && conf?.privateAuto !== false) return true
   return false
 }
 
@@ -770,6 +785,25 @@ function stripMention(text, num) {
 
 /** Snapshot pesan tanpa-prefix terakhir — buat `.bot diag`. */
 let lastSeen = null
+
+/**
+ * Kalau pesan kelihatan niat nge-tag / bales bot tapi gak kedeteksi, tulis
+ * satu baris log INFO — biar kelihatan di console tanpa perlu `.bot diag`.
+ */
+function logMiss(ctx, snap) {
+  const key = ctx?.event?.key ?? {}
+  const adaTag = snap.mentioned.length > 0
+  const adaQuote = Boolean(snap.raw?.quoteStanzaId)
+  const sebutAt = String(ctx?.body || '').includes('@')
+  if (!adaTag && !adaQuote && !sebutAt) return
+  logger.info(
+    `🔎 [AIChat] gak kedeteksi — chat=${ctx.chat} grup=${ctx.isGroup} ` +
+    `sender=${ctx.sender} tag=[${snap.mentioned.join(', ') || '-'}] ` +
+    `quote=${snap.raw?.quoteParticipant || '-'} quoteId=${snap.raw?.quoteStanzaId || '-'} ` +
+    `bot=${snap.bot.num ? `+${snap.bot.num}` : '-'}/${snap.bot.meLid || '-'} ` +
+    `teks="${String(ctx.body || '').slice(0, 60)}"`
+  )
+}
 
 function snapshot(ctx, conf) {
   const id = botIdentity(ctx)
@@ -796,6 +830,8 @@ function snapshot(ctx, conf) {
         participant: key.participant ?? null,
         participantAlt: key.participantAlt ?? null,
         remoteJidAlt: key.remoteJidAlt ?? null,
+        recipientJid: key.recipientJid ?? null,
+        recipientAlt: key.recipientAlt ?? null,
       },
       mentionedJid: Array.isArray(ci.mentionedJid) ? ci.mentionedJid : [],
       quoteParticipant: ci.participant ?? null,
@@ -805,6 +841,7 @@ function snapshot(ctx, conf) {
       enabled: conf.enabled,
       mentionTrigger: conf.mentionTrigger !== false,
       replyTrigger: conf.replyTrigger !== false,
+      privateAuto: conf.privateAuto !== false,
     },
     autoai: null,
     matched: null,
@@ -821,31 +858,52 @@ async function onMention(ctx) {
 
   const matched = await isBotMentioned(ctx, conf)
   snap.matched = matched
-  if (!matched) { snap.result = 'bukan tag / bukan bales bot'; return false }
+  if (!matched) {
+    snap.result = 'bukan tag / bukan bales bot'
+    logMiss(ctx, snap)
+    return false
+  }
 
   // Auto AI per-chat (`.autoai`): kalau dimatiin di sini → diem aja.
   const ai = resolveAutoAI(ctx.chat)
   snap.autoai = { enabled: ai.enabled, source: ai.source, character: ai.character, mode: ai.mode }
-  if (!ai.enabled) { snap.result = `diem — autoai ${ai.source}`; return true }
+  if (!ai.enabled) {
+    snap.result = `diem — autoai ${ai.source}`
+    logger.info(`💤 [AIChat] tag/bales kedeteksi tapi autoai ${ai.source} mati — gak dibalas`)
+    return true
+  }
 
   const num = botIdentity(ctx).num
   const text = stripMention(ctx.body, num)
   if (!text) {
     const u = userProfile(ctx)
     const siapa = u.name && u.name !== 'Tanpa Nama' ? ` ${u.name}` : ''
-    snap.result = 'sapaan (tag tanpa teks)'
-    await ctx.reply(`Halo${siapa}! 👋 Ada yang bisa aku bantu? Tag aku bareng pertanyaannya ya 😊`)
+    snap.result = 'sapaan (tanpa teks)'
+    await ctx.reply(
+      ctx.isGroup
+        ? `Halo${siapa}! 👋 Ada yang bisa aku bantu? Tag aku bareng pertanyaannya ya 😊`
+        : `Halo${siapa}! 👋 Mau ngobrol apa? Kirim pesannya ya 😊`
+    )
     return true
   }
 
-  // anti-spam + cooldown ringan (staff/owner bebas)
+  // anti-spam + cooldown ringan (staff/owner bebas). Di chat pribadi cukup
+  // cooldown pendek: orang ngobrol wajar bisa kirim beberapa pesan cepat.
   if (!ctx.isStaff) {
-    if (config.antiSpam?.enabled) {
+    if (ctx.isGroup && config.antiSpam?.enabled) {
       const f = checkFlood(ctx.sender, config.antiSpam)
-      if (f.flooded) { snap.result = 'diem — anti-spam (flood)'; return true }
+      if (f.flooded) {
+        snap.result = 'diem — anti-spam (flood)'
+        logger.info('💤 [AIChat] diem — pengirim kena anti-spam')
+        return true
+      }
     }
-    const cd = checkCooldown(ctx.sender, 'aiMention', 4000)
-    if (cd.onCooldown) { snap.result = 'diem — cooldown 4 detik'; return true }
+    const cd = checkCooldown(ctx.sender, 'aiMention', ctx.isGroup ? 4000 : 1500)
+    if (cd.onCooldown) {
+      snap.result = `diem — cooldown ${ctx.isGroup ? 4 : 1.5} detik`
+      logger.debug(`💤 [AIChat] diem — cooldown ${Math.ceil(cd.remainingMs / 1000)}s`)
+      return true
+    }
   }
 
   snap.result = 'manggil AI…'

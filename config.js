@@ -97,6 +97,7 @@ export default {
     timeoutMs: 60_000,       // batas tunggu balasan AI (ms)
     mentionTrigger: true,    // balas saat bot di-tag (tanpa prefix)
     replyTrigger: true,      // balas saat pesan bot di-reply
+    privateAuto: true,       // chat pribadi: pesan biasa (tanpa tag) juga dibalas
     remember: true,          // catat fakta penting tentang user
     rememberEvery: 8,        // tiap N pesan rapihin fakta (0 = pola instan)
     sessionTtlMin: 20,       // sesi Gemini basi setelah N menit nganggur
