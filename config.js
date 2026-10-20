@@ -123,6 +123,23 @@ export default {
     systemPrompt: '',       // instruksi tambahan (opsional)
   },
 
+  /* ── ELLA v2 (AI chat Gemma skyline.web.id) ────────────── */
+  // Otak: POST /api/ai/gemma (model gemma-4-31b). API key opsional —
+  // kalau `api.skyline.apikey` kosong request tetap jalan (limit per IP).
+  // Modelnya besar: balasan bisa 10-25 detik, timeout sengaja lega.
+  // Auto-nya OPT-IN (`.ella2 on`) biar gak rebutan sama `.ella`/`.autoai`.
+  ella2: {
+    enabled: true,          // fitur nyala (command + auto)
+    auto: true,             // izin auto balas tag/bales/DM
+    mentionTrigger: true,   // balas saat bot di-tag
+    replyTrigger: true,     // balas saat pesan Ella v2 dibales
+    privateAuto: true,      // chat pribadi: pesan biasa juga dibalas
+    memory: true,           // inget fakta penting tentang user
+    maxHistory: 8,          // pesan terakhir yang dikirim ke API (maks 10)
+    timeoutMs: 60_000,      // batas tunggu balasan (ms) — Gemma lambat
+    systemPrompt: '',       // instruksi tambahan (opsional)
+  },
+
   /* ── MEDIA WORKER (WebSocket) ──────────────────────────── */
   wsWorkerUrl: 'wss://audio.jhx.my.id/wss/audio',
   wsPort: 8090,

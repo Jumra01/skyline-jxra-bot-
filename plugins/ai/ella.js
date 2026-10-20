@@ -18,6 +18,9 @@
  *   • per-chat on/off: `.ella on|off` (admin grup / siapa pun di DM-nya sendiri)
  *   • global: `.ella global on|off` (owner)
  *   • belum di-set? ikut status `.autoai` biar `.autoai off` tetap membisukan.
+ *   • EKSKLUSIF dengan `.autoai`: `.ella on` otomatis mematikan AutoAI di chat
+ *     itu (begitu juga sebaliknya, lihat `plugins/group/autoai.js`) — biar dua
+ *     fitur AI gak rebutan / balas dobel. Yang dinyalakan terakhir yang jalan.
  *
  * Perintah:
  *   `.ella <teks>`            chat
@@ -38,7 +41,7 @@ import { sendTyping } from '../../core/presence.js'
 import { isGroupAdmin } from '../../core/permission.js'
 import { getGroupMetaCached } from '../../core/lid.js'
 import { getSetting, setSetting, getGlobal, setGlobal } from '../../core/groupSettings.js'
-import { resolveAutoAI } from '../../lib/autoai.js'
+import { resolveAutoAI, getGroupConfig, setGroupConfig, getGlobalConfig, setGlobalConfig } from '../../lib/autoai.js'
 import { extractFacts, remember, factsFor, formatBlock, forget } from '../../lib/aiMemory.js'
 import { aiChatSkyline, isConfigured, skylineCreds, SkylineKeyError } from '../../scraper/SKYLINE.js'
 import { readImage, visionContext } from '../../lib/visionFallback.js'
@@ -354,10 +357,61 @@ async function runChat(ctx, text, { mode = 'onlychat', image = null } = {}) {
 }
 
 /* ══════════════════════ auto AI (tag / bales / DM) ══════════════════════ */
-/** Ella aktif di chat ini? per-chat → global → ikut `.autoai`. */
+/**
+ * AutoAI ⇄ Ella saling eksklusif: nyalain Ella = AutoAI dimatikan.
+ * @returns {boolean} true kalau AutoAI tadi memang sedang aktif (perlu diumumkan)
+ */
+function silenceAutoAI(scope = 'chat', chat = null) {
+  try {
+    if (scope === 'global') {
+      const g = getGlobalConfig()
+      if (g?.enabled) {
+        setGlobalConfig({ ...g, enabled: false })
+        return true
+      }
+      return false
+    }
+    const c = getGroupConfig(chat)
+    if (c?.enabled) {
+      setGroupConfig(chat, { ...c, enabled: false })
+      return true
+    }
+    return false
+  } catch {
+    return false
+  }
+}
+
+/** AutoAI per-chat aktif dengan karakter selain Ella = dia yang pegang chat ini. */
+function autoAiOwnsChat(chat) {
+  const c = getGroupConfig(chat)
+  return Boolean(c && c.enabled && String(c.character || '').toLowerCase() !== 'ella')
+}
+
+/** Ella v2 aktif di chat ini? (per-chat → global) */
+function ella2OwnsChat(chat) {
+  try {
+    const v = getSetting(chat, 'ella2')
+    if (v === '1') return true
+    if (v === '0') return false
+    return getGlobal('ella2') === '1'
+  } catch {
+    return false
+  }
+}
+
+/** Ella aktif di chat ini? per-chat → AutoAI per-chat → global → ikut `.autoai`. */
 function hereOn(chat) {
   const v = getSetting(chat, 'ella')
   if (v === '1' || v === '0') return v === '1'
+  // Ella v2 di-set khusus buat chat ini → jangan rebutan, dia yang jawab.
+  if (ella2OwnsChat(chat)) return false
+  // AutoAI sudah di-set khusus buat chat ini → jangan rebutan, dia yang jawab.
+  try {
+    if (autoAiOwnsChat(chat)) return false
+  } catch {
+    /* biarin lanjut */
+  }
   const g = getGlobal('ella')
   if (g === '1' || g === '0') return g === '1'
   try {
@@ -446,8 +500,12 @@ function statusText(ctx, conf = cfg()) {
     `> Key    : ${isConfigured() ? 'TERPASANG ✅' : 'BELUM DIISI ⚠️'}`,
     '> Sifat  : roleplay manusia — gak pernah ngaku AI',
     `> Auto   : ${hereOn(ctx.chat) ? 'AKTIF ✅' : 'MATI 💤'} (${ai.source || 'default'})`,
+    `> AutoAI : ${ai.enabled ? `aktif — ${ai.characterName || '-'} (${ai.source})` : `mati (${ai.source})`}`,
+    `> Ella v2 : ${ella2OwnsChat(ctx.chat) ? 'AKTIF ✅' : 'mati 💤'}`,
     `> Mode   : ${ai.mode || 'onlychat'}`,
     `> Ingatan: ${facts.length} catatan · ${h?.msgs?.length || 0} pesan`,
+    '',
+    '> ℹ️ AutoAI, Ella & Ella v2 saling eksklusif — yang dinyalain terakhir yang jalan.',
     '',
     '📌 *Cara pakai*',
     `> ${p}ella <teks> — ngobrol`,
@@ -482,9 +540,13 @@ async function handler(ctx) {
       if (!admin) return ctx.reply('🚫 Cuma admin grup (atau staff bot) yang bisa ngatur Ella di grup ini.')
     }
     setSetting(ctx.chat, 'ella', want ? '1' : '0')
+    const autoOff = want ? silenceAutoAI('chat', ctx.chat) : false
+    if (want) setSetting(ctx.chat, 'ella2', '0')
     return ctx.reply(
       want
-        ? '✅ *Ella aktif di chat ini.*\n> Tag dia atau bales pesannya, nanti dia jawab.'
+        ? '✅ *Ella aktif di chat ini.*\n> Tag dia atau bales pesannya, nanti dia jawab.' +
+          (autoOff ? '\n> 🤖 AutoAI (`.autoai`) otomatis *dimatikan* di chat ini biar gak tabrakan.' : '') +
+          '\n> 🧠 Ella v2 (`.ella2`) juga dimatikan di chat ini.'
         : '💤 *Ella diem di chat ini.*\n> Obrolan AI otomatis gak jalan sampai dinyalain lagi.'
     )
   }
@@ -499,7 +561,15 @@ async function handler(ctx) {
     }
     const want = ['on', 'nyala'].includes(v)
     setGlobal('ella', want ? '1' : '0')
-    return ctx.reply(want ? '✅ *Ella aktif di semua chat* (yang gak punya setelan sendiri).' : '💤 *Ella dimatiin global.*')
+    const autoOff = want ? silenceAutoAI('global') : false
+    if (want) setGlobal('ella2', '0')
+    return ctx.reply(
+      want
+        ? '✅ *Ella aktif di semua chat* (yang gak punya setelan sendiri).' +
+          (autoOff ? '\n> 🤖 AutoAI global otomatis *dimatikan* biar gak tabrakan.' : '') +
+          '\n> 🧠 Ella v2 global juga dimatikan.'
+        : '💤 *Ella dimatiin global.*'
+    )
   }
 
   /* persona custom — owner only, dibaca live tanpa restart */

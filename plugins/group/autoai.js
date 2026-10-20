@@ -16,8 +16,14 @@
  *
  * Config disimpan di `lib/autoai.js` (settings.sqlite). Trigger tag/bales
  * ditangani `plugins/ai/bot.js` lewat `core/mentionTrigger.js`.
+ *
+ * EKSKLUSIF dengan `.ella` / `.ella2`: `.autoai on` otomatis mematikan keduanya
+ * di chat itu (dan `.ella on` / `.ella2 on` mematikan AutoAI) — biar fitur AI
+ * gak rebutan/balas dobel.
+ * Yang dinyalakan terakhir yang jalan.
  */
 import { isGroupAdmin } from '../../core/permission.js'
+import { setSetting, getSetting, setGlobal, getGlobal } from '../../core/groupSettings.js'
 import {
   CHARACTERS, DEFAULT_CHARACTER,
   getGroupConfig, setGroupConfig, getGlobalConfig, setGlobalConfig,
@@ -46,6 +52,29 @@ const pluginConfig = {
 /* ══════════════════════ helper tampilan ══════════════════════ */
 const p = (ctx) => ctx.prefix || '.'
 
+/**
+ * AutoAI ⇄ Ella / Ella v2 saling eksklusif: nyalain AutoAI = auto-reply
+ * keduanya dimatikan di scope yang sama (per chat / global), biar gak rebutan.
+ * @returns {boolean} true kalau salah satu tadi memang aktif di scope itu
+ */
+function silenceElla(scope = 'chat', chat = null) {
+  try {
+    if (scope === 'global') {
+      const wasOn = getGlobal('ella') === '1' || getGlobal('ella2') === '1'
+      setGlobal('ella', '0')
+      setGlobal('ella2', '0')
+      return wasOn
+    }
+    const wasOn = getSetting(chat, 'ella') === '1' || getSetting(chat, 'ella2') === '1'
+    setSetting(chat, 'ella', '0')
+    setSetting(chat, 'ella2', '0')
+    return wasOn
+  } catch {
+    /* gagal nyimpen jangan bikin command ikut gagal */
+    return false
+  }
+}
+
 function box(title, lines) {
   return `╭┈┈⬡「 ${title} 」\n${lines.map((l) => `┃ ${l}`).join('\n')}\n╰┈┈┈┈┈┈┈┈⬡`
 }
@@ -64,11 +93,17 @@ function statusText(ctx) {
   const ai = resolveAutoAI(ctx.chat)
   const src = { group: 'grup ini', global: 'global (owner)', default: 'default', 'group-off': 'grup ini (dimatikan)', 'global-off': 'global (dimatikan)' }[ai.source] || ai.source
   const state = ai.enabled ? '✅ AKTIF' : '❌ NONAKTIF'
+  const ellaRaw = getSetting(ctx.chat, 'ella')
+  const ellaState = ellaRaw === '1' ? 'AKTIF (chat ini)' : ellaRaw === '0' ? 'MATI (chat ini)' : 'ikut global/default'
+  const ella2Raw = getSetting(ctx.chat, 'ella2')
+  const ella2State = ella2Raw === '1' ? 'AKTIF (chat ini)' : ella2Raw === '0' ? 'MATI (chat ini)' : 'ikut global/default'
   const lines = [
     `Status   : *${state}*`,
     `Sumber   : ${src}`,
     ai.enabled ? `Karakter : *${ai.characterName || '-'}* (${ai.character || 'default'})` : null,
     ai.enabled ? `Mode     : *${ai.mode || 'onlychat'}*` : null,
+    `Ella     : ${ellaState}`,
+    `Ella v2  : ${ella2State}`,
     `Chat     : ${ctx.isGroup ? 'grup' : 'pribadi'}`,
   ].filter(Boolean)
 
@@ -76,6 +111,7 @@ function statusText(ctx) {
     `🤖 *AUTO AI*\n\n` +
     box('📋 ɪɴғᴏ', lines) + '\n\n' +
     `> Bot balas otomatis saat *di-tag* atau *dibales*.\n` +
+    `> AutoAI, Ella & Ella v2 eksklusif — yang dinyalain terakhir yang jalan.\n` +
     `> \`${p(ctx)}autoai on --skylinemode=${DEFAULT_CHARACTER}\`\n` +
     `> \`${p(ctx)}autoai off\`\n` +
     `> \`${p(ctx)}autoai listpersona\``
@@ -146,12 +182,14 @@ async function handler(ctx) {
     const built = buildConfig({ charKey, logic, mode, responseType, prev: getGlobalConfig(), by: ctx.sender })
     if (!built.ok) return ctx.reply(`❌ ${built.error}\n\n${personaList()}`)
     setGlobalConfig({ ...built.cfg, global: true })
+    const ellaOff = silenceElla('global')
     return ctx.reply(
       `🌐 *ᴀᴜᴛᴏ ᴀɪ ɢʟᴏʙᴀʟ ᴅɪᴀᴋᴛɪꜰᴋᴀɴ*\n\n` +
       box('📋 ɪɴғᴏ', [
         `Karakter : *${built.cfg.characterName}*`,
         `Mode     : *${built.cfg.mode}*`,
-      ]) + '\n\n> Berlaku buat grup yang belum di-set sendiri.'
+      ]) + '\n\n> Berlaku buat grup yang belum di-set sendiri.' +
+      (ellaOff ? '\n> 💝 Ella / Ella v2 auto-reply otomatis *dimatikan* (global) biar gak tabrakan.' : '')
     )
   }
 
@@ -167,6 +205,7 @@ async function handler(ctx) {
     const built = buildConfig({ charKey, logic, mode, responseType, prev: getGroupConfig(ctx.chat), by: ctx.sender })
     if (!built.ok) return ctx.reply(`❌ ${built.error}\n\n${personaList()}`)
     setGroupConfig(ctx.chat, built.cfg)
+    const ellaOff = silenceElla('chat', ctx.chat)
     const note = responseType && responseType.toLowerCase() === 'voice'
       ? '\n> ⚠️ Voice note belum didukung di bot ini — pakai teks dulu ya.'
       : ''
@@ -176,7 +215,9 @@ async function handler(ctx) {
         `Karakter : *${built.cfg.characterName}* (${built.cfg.character})`,
         `Mode     : *${built.cfg.mode}*`,
       ]) + '\n\n' +
-      `> Bot balas saat *di-tag* / *dibales* di sini.` + note
+      `> Bot balas saat *di-tag* / *dibales* di sini.` +
+      (ellaOff ? '\n> 💝 Ella / Ella v2 auto-reply otomatis *dimatikan* di chat ini biar gak tabrakan.' : '') +
+      note
     )
   }
 

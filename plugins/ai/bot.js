@@ -48,6 +48,7 @@ import { readPersona, personaIsCustom } from '../../lib/aiPersona.js'
 import { geminiChat, SUPPORTS_IMAGES } from '../../lib/geminiWeb.js'
 import { readImage, visionContext } from '../../lib/visionFallback.js'
 import { resolveAutoAI } from '../../lib/autoai.js'
+import { getSetting, getGlobal } from '../../core/groupSettings.js'
 import { extractFacts, remember, factsFor, formatBlock, forget, stats as memStats } from '../../lib/aiMemory.js'
 
 const DATA_DIR = './data'
@@ -1118,6 +1119,18 @@ function snapshot(ctx, conf) {
   }
 }
 
+/** Ella v2 aktif di chat ini? (per-chat → global) */
+function ella2OwnsChat(chat) {
+  try {
+    const v = getSetting(chat, 'ella2')
+    if (v === '1') return true
+    if (v === '0') return false
+    return getGlobal('ella2') === '1'
+  } catch {
+    return false
+  }
+}
+
 async function onMention(ctx) {
   const conf = cfg()
   if (!conf.enabled || !conf.mentionTrigger) return false
@@ -1136,6 +1149,12 @@ async function onMention(ctx) {
   // Auto AI per-chat (`.autoai`): kalau dimatiin di sini → diem aja.
   const ai = resolveAutoAI(ctx.chat)
   snap.autoai = { enabled: ai.enabled, source: ai.source, character: ai.character, mode: ai.mode }
+  // Ella v2 pegang chat ini → biarin dia yang jawab (gak dobel).
+  if (ella2OwnsChat(ctx.chat)) {
+    snap.result = 'diem — ella2 aktif'
+    logger.debug('💤 [AIChat] diem — Ella v2 aktif di chat ini')
+    return false
+  }
   if (!ai.enabled) {
     snap.result = `diem — autoai ${ai.source}`
     logger.info(`💤 [AIChat] tag/bales kedeteksi tapi autoai ${ai.source} mati — gak dibalas`)

@@ -16,6 +16,7 @@
  *   GET /api/tools/ytdl/audio?url=...                        → binary MP3
  *   GET /api/tools/ytdl/download?url=...&quality=360|720|1080 → binary MP4
  *   POST /api/ai/aichat-skyline { message, history, system, apikey } → chat AI (Ella)
+ *   POST /api/ai/gemma        { message, history, system, apikey? } → chat AI (Ella v2)
  *
  * Link audio/video dari server SUDAH membawa apikey, jadi tinggal di-fetch.
  * File disiapin dulu di server: request pertama bisa 10-30 detik (timeout 180s).
@@ -471,9 +472,88 @@ export async function aiChatSkyline({ message, history = [], system = '', timeou
   };
 }
 
+/* ══════════════ AI chat (Ella v2 — Gemma) ══════════════ */
+
+/**
+ * POST /api/ai/gemma — chat AI teks model Gemma (otak fitur `.ella2`).
+ *
+ *   body: { message (wajib, ≤4000), history (≤10 pesan), system (≤3000),
+ *           apikey (opsional — tanpa key dihitung per IP) }
+ *   resp: { status, model, reply, took_ms }
+ *
+ * Model besar → balasan bisa 10-25 detik, jadi default timeout dibikin lega.
+ * Kalau `api.skyline.apikey` kosong, request tetap jalan (rate limit per IP).
+ */
+export const AI_GEMMA_PATH = '/api/ai/gemma';
+
+export async function gemmaChat({ message, history = [], system = '', timeoutMs = 60000 } = {}) {
+  const teks = String(message || '').trim();
+  if (!teks) throw new SkylineApiError('Pesan kosong', 400);
+
+  const { website, apikey } = skylineCreds();
+
+  breakerCheck('gemma');
+
+  const body = { message: teks.slice(0, 4000) };
+  if (apikey) body.apikey = apikey;
+  if (Array.isArray(history) && history.length) {
+    body.history = history
+      .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && String(m.content || '').trim())
+      .slice(-10)
+      .map((m) => ({ role: m.role, content: String(m.content).slice(0, 2000) }));
+  }
+  if (system) body.system = String(system).slice(0, 3000);
+
+  let res;
+  try {
+    res = await fetch(`${website}${AI_GEMMA_PATH}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Accept: 'application/json', 'User-Agent': UA },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+  } catch (err) {
+    breakerFail('gemma');
+    const msg = err?.name === 'TimeoutError'
+      ? 'Ella v2 kelamaan mikir (timeout)'
+      : `Gagal konek API Skyline (${err?.message || err})`;
+    throw new SkylineApiError(msg, 0);
+  }
+
+  const text = await res.text();
+  let json = null;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    /* ditangani di bawah */
+  }
+
+  if (!res.ok || !json) {
+    breakerFail('gemma');
+    throw new SkylineApiError(parseApiError(text) || `HTTP ${res.status}`, res.status, text);
+  }
+  if (json.status === false) {
+    breakerFail('gemma');
+    throw new SkylineApiError(parseApiError(text) || 'API Skyline nolak request', res.status, text);
+  }
+
+  const reply = String(json.reply || '').trim();
+  if (!reply) {
+    breakerFail('gemma');
+    throw new SkylineApiError('Balasan AI kosong', res.status, text);
+  }
+
+  breakerOk('gemma');
+  return {
+    reply,
+    model: String(json.model || 'gemma-4-31b'),
+    tookMs: Number(json.took_ms) || 0,
+    website
+  };
+}
+
 /** Pesan ramah buat user kalau key belum diisi. */
-export function keyHint(ctx) {
-  const { website } = skylineCreds();
+export function keyHint(ctx) {  const { website } = skylineCreds();
   const p = ctx?.prefix || '.';
   return (
     '⚠️ *API KEY SKYLINE BELUM ADA*\n\n' +
@@ -494,6 +574,7 @@ export default {
   downloadAudio,
   downloadVideo,
   aiChatSkyline,
+  gemmaChat,
   keyHint,
   MAX_AUDIO_BYTES,
   MAX_VIDEO_BYTES,
