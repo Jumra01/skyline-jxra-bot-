@@ -17,7 +17,9 @@
  * Perintah:
  *   `.ella2 <teks>`           chat
  *   `.ella2 on|off`           auto di chat ini (admin grup / DM sendiri)
- *   `.ella2 global on|off`    auto di semua chat (owner)
+ *   `.ella2 grup|pribadi on|off`  eksplisit per jenis chat
+ *   `.ella2 global on|off`    auto di semua chat (owner) — bisa dipisah:
+ *                             `global grup on|off` / `global pribadi on|off`
  *   `.ella2 persona [teks]`   lihat/ubah persona (owner, `reset` = default)
  *   `.ella2 fakta`            lihat fakta yang dicatat
  *   `.ella2 inget <hal>`      catat manual
@@ -37,8 +39,9 @@ import { addMentionHandler } from '../../core/mentionTrigger.js'
 import { sendTyping } from '../../core/presence.js'
 import { isGroupAdmin } from '../../core/permission.js'
 import { getGroupMetaCached } from '../../core/lid.js'
-import { getSetting, setSetting, getGlobal, setGlobal } from '../../core/groupSettings.js'
-import { getGroupConfig, setGroupConfig, getGlobalConfig, setGlobalConfig } from '../../lib/autoai.js'
+import { getSetting, setSetting } from '../../core/groupSettings.js'
+import { getGroupConfig, setGroupConfig, disableGlobalAutoAI } from '../../lib/autoai.js'
+import { kindOf, kindOfJid, parseKind, KIND_LABEL, getGlobalKind, setGlobalKind, kindLabel } from '../../lib/aiScope.js'
 import { extractFacts, remember, factsFor, formatBlock, forget } from '../../lib/aiMemory.js'
 import { gemmaChat } from '../../scraper/SKYLINE.js'
 import { isBotMentioned, stripMention, botIdentity, withTimeout, findImgNode } from '../../lib/aiTrigger.js'
@@ -198,35 +201,36 @@ async function contextFor(ctx) {
 }
 
 /* ══════════════════════ status on/off ══════════════════════ */
-/** Ella v2 aktif di chat ini? (opt-in) per-chat → global → mati. */
-function hereOn(chat) {
-  const v = getSetting(chat, 'ella2')
-  if (v === '1') return true
-  if (v === '0') return false
-  return getGlobal('ella2') === '1'
+/** Ella v2 aktif di chat ini? (opt-in) per-chat → global jenis chat → mati. */
+function hereOn(ctx) {
+  const chat = typeof ctx === 'string' ? ctx : ctx.chat
+  const kind = typeof ctx === 'string' ? kindOfJid(chat) : kindOf(ctx)
+  try {
+    const v = getSetting(chat, 'ella2')
+    if (v === '1') return true
+    if (v === '0') return false
+    return getGlobalKind('ella2', kind) === '1'
+  } catch {
+    return false
+  }
 }
 
-function sourceOf(chat) {
+function sourceOf(ctx) {
+  const chat = typeof ctx === 'string' ? ctx : ctx.chat
+  const kind = typeof ctx === 'string' ? kindOfJid(chat) : kindOf(ctx)
   const v = getSetting(chat, 'ella2')
   if (v === '1') return 'chat ini'
   if (v === '0') return 'chat ini (dimatikan)'
-  const g = getGlobal('ella2')
-  if (g === '1') return 'global (owner)'
-  if (g === '0') return 'global (dimatikan)'
+  const g = getGlobalKind('ella2', kind)
+  if (g === '1') return `global ${KIND_LABEL[kind]} (owner)`
+  if (g === '0') return `global ${KIND_LABEL[kind]} (dimatikan)`
   return 'belum diaktifkan'
 }
 
 /* ══════════════════════ eksklusif ══════════════════════ */
-function silenceAutoAI(scope = 'chat', chat = null) {
+function silenceAutoAI(scope = 'chat', chat = null, kind = null) {
   try {
-    if (scope === 'global') {
-      const g = getGlobalConfig()
-      if (g?.enabled) {
-        setGlobalConfig({ ...g, enabled: false })
-        return true
-      }
-      return false
-    }
+    if (scope === 'global') return disableGlobalAutoAI(kind)
     const c = getGroupConfig(chat)
     if (c?.enabled) {
       setGroupConfig(chat, { ...c, enabled: false })
@@ -238,11 +242,15 @@ function silenceAutoAI(scope = 'chat', chat = null) {
   }
 }
 
-function silenceElla(scope = 'chat', chat = null) {
+function silenceElla(scope = 'chat', chat = null, kind = null) {
   try {
     if (scope === 'global') {
-      const was = getGlobal('ella') === '1'
-      setGlobal('ella', '0')
+      const kinds = kind ? [kind] : ['group', 'private']
+      let was = false
+      for (const k of kinds) {
+        if (getGlobalKind('ella', k) === '1') was = true
+        setGlobalKind('ella', k, false)
+      }
       return was
     }
     const was = getSetting(chat, 'ella') === '1'
@@ -358,7 +366,7 @@ async function onMention(ctx) {
   if (!matched) return false
 
   // Opt-in: belum diaktifkan di chat ini → serahkan ke handler lain (`.ella`).
-  if (!hereOn(ctx.chat)) return false
+  if (!hereOn(ctx)) return false
 
   if (!ctx.isStaff) {
     if (ctx.isGroup && config.antiSpam?.enabled) {
@@ -404,18 +412,22 @@ function statusText(ctx) {
   const p = ctx.prefix || '.'
   const h = store.get(storeKey(ctx))
   const facts = factsFor(ctx.sender)
-  const on = hereOn(ctx.chat)
+  const kind = kindOf(ctx)
+  const on = hereOn(ctx)
   return [
     '🤖 *ELLA v2* — jalur Gemma',
     '',
     '> Otak   : skyline.web.id/api/ai/gemma',
     `> Model  : ${MODEL_LABEL}`,
-    `> Auto   : ${on ? 'AKTIF ✅' : 'MATI 💤'} (${sourceOf(ctx.chat)})`,
+    `> Ruang  : ${ctx.isGroup ? 'grup' : 'pribadi'}`,
+    `> Auto   : ${on ? 'AKTIF ✅' : 'MATI 💤'} (${sourceOf(ctx)})`,
+    `> Global : grup ${kindLabel(getGlobalKind('ella2', 'group'))} · pribadi ${kindLabel(getGlobalKind('ella2', 'private'))}`,
     `> Persona: ${ella2PersonaIsCustom() ? 'CUSTOM' : 'DEFAULT'}`,
     `> Ingatan: ${facts.length} catatan · ${h?.msgs?.length || 0} pesan`,
     '',
     '> ℹ️ Beda dengan `.ella`: persona & riwayat terpisah, otaknya Gemma.',
     '> ℹ️ Auto `.ella2` dan `.autoai`/`.ella` saling eksklusif (yang nyala terakhir jalan).',
+    '> ℹ️ Saklar global grup & pribadi dipisah.',
     '',
     '📌 *Cara pakai*',
     `> ${p}ella2 <teks> — ngobrol`,
@@ -423,7 +435,9 @@ function statusText(ctx) {
     '',
     '⚙️ *Atur*',
     `> ${p}ella2 on / off — auto di chat ini`,
-    `> ${p}ella2 global on|off — semua chat (owner)`,
+    `> ${p}ella2 grup on / pribadi on — eksplisit per jenis`,
+    `> ${p}ella2 global on|off — dua jenis (owner)`,
+    `> ${p}ella2 global grup on|off · global pribadi on|off`,
     `> ${p}ella2 persona — atur karakter (owner)`,
     `> ${p}ella2 fakta — lihat catatan`,
     `> ${p}ella2 inget <hal> — catat manual`,
@@ -438,12 +452,35 @@ async function handler(ctx) {
   const p = ctx.prefix || '.'
   if (!conf.enabled) return ctx.reply(`❌ Fitur Ella v2 lagi nonaktif (owner bisa nyalain di \`config.ella2.enabled\`).`)
 
-  const sub = String(ctx.args?.[0] || '').toLowerCase()
+  const tokens = String(ctx.text || '').toLowerCase().split(/\s+/).filter(Boolean)
+  const sub = tokens[0] || ''
   const rest = String(ctx.text || '').trim()
+  const ON = ['on', 'nyala', 'hidup']
+  const OFF = ['off', 'mati', 'matiin', 'matikan']
 
-  /* on / off per chat */
-  if (['on', 'nyala', 'hidup', 'off', 'mati'].includes(sub)) {
-    const want = ['on', 'nyala', 'hidup'].includes(sub)
+  /* on / off per chat — bisa dipilih jenisnya (harus cocok sama chat ini) */
+  const kindArg = parseKind(sub)
+  let action = sub
+  if (kindArg) {
+    const word = tokens[1] || ''
+    if (!ON.includes(word) && !OFF.includes(word)) {
+      return ctx.reply(
+        `❌ Format: \`${p}ella2 ${KIND_LABEL[kindArg]} on|off\`\n` +
+        `> Global: \`${p}ella2 global ${KIND_LABEL[kindArg]} on|off\``
+      )
+    }
+    if (kindArg !== kindOf(ctx)) {
+      return ctx.reply(
+        `⚠️ Ini ${KIND_LABEL[kindOf(ctx)]}, bukan ${KIND_LABEL[kindArg]}.\n` +
+        `> Buat chat ini: \`${p}ella2 ${kindOf(ctx)} ${word}\`\n` +
+        (ctx.isOwner ? `> Buat semua ${KIND_LABEL[kindArg]}: \`${p}ella2 global ${kindArg} ${word}\`` : '')
+      )
+    }
+    action = word
+  }
+
+  if (ON.includes(action) || OFF.includes(action)) {
+    const want = ON.includes(action)
     if (ctx.isGroup) {
       const admin = await withTimeout(isGroupAdmin(ctx), 2500, false)
       if (!admin) return ctx.reply('🚫 Cuma admin grup (atau staff bot) yang bisa ngatur Ella v2 di grup ini.')
@@ -462,28 +499,52 @@ async function handler(ctx) {
     )
   }
 
-  /* global on/off */
+  /* global on/off — bisa per jenis chat (grup / pribadi) */
   if (sub === 'global') {
     if (!ctx.isOwner) return ctx.reply('🚫 Khusus owner.')
-    const v = String(ctx.args?.[1] || '').toLowerCase()
-    if (!['on', 'off', 'nyala', 'mati'].includes(v)) {
-      const g = getGlobal('ella2')
+    const scopeArg = parseKind(tokens[1])
+    const v = String((scopeArg ? tokens[2] : tokens[1]) || '').toLowerCase()
+
+    if (!ON.includes(v) && !OFF.includes(v)) {
       return ctx.reply(
-        `🌍 Status global Ella v2: *${g === '1' ? 'AKTIF' : g === '0' ? 'MATI' : 'belum diatur'}*\n> \`${p}ella2 global on|off\``
+        '🌍 *Global Ella v2*\n\n' +
+        `> Grup    : *${kindLabel(getGlobalKind('ella2', 'group'))}*\n` +
+        `> Pribadi : *${kindLabel(getGlobalKind('ella2', 'private'))}*\n\n` +
+        `> \`${p}ella2 global on|off\` — dua-duanya\n` +
+        `> \`${p}ella2 global grup on|off\`\n` +
+        `> \`${p}ella2 global pribadi on|off\``
       )
     }
-    const want = ['on', 'nyala'].includes(v)
-    setGlobal('ella2', want ? '1' : '0')
-    const autoOff = want ? silenceAutoAI('global') : false
-    const ellaOff = want ? silenceElla('global') : false
+
+    const want = ON.includes(v)
+    const where = scopeArg ? KIND_LABEL[scopeArg] : 'grup + pribadi'
+    let autoOff = false
+    let ellaOff = false
+
+    if (want) {
+      if (scopeArg) {
+        setGlobalKind('ella2', scopeArg, true)
+        autoOff = silenceAutoAI('global', null, scopeArg)
+        ellaOff = silenceElla('global', null, scopeArg)
+      } else {
+        for (const k of ['group', 'private']) setGlobalKind('ella2', k, true)
+        autoOff = silenceAutoAI('global', null, null)
+        ellaOff = silenceElla('global', null, null)
+      }
+    } else if (scopeArg) {
+      setGlobalKind('ella2', scopeArg, false)
+    } else {
+      for (const k of ['group', 'private']) setGlobalKind('ella2', k, false)
+    }
+
     const notes = [
-      autoOff ? '> 🤖 AutoAI global otomatis *dimatikan*.' : '',
-      ellaOff ? '> 💝 Ella global otomatis *dimatikan* (biar gak dobel balas).' : '',
+      autoOff ? `> 🤖 AutoAI otomatis *dimatikan* di ${where}.` : '',
+      ellaOff ? `> 💝 Ella otomatis *dimatikan* di ${where} (biar gak dobel balas).` : '',
     ].filter(Boolean)
     return ctx.reply(
       want
-        ? ['✅ *Ella v2 aktif di semua chat* (yang gak punya setelan sendiri).', ...notes].join('\n')
-        : '💤 *Ella v2 dimatiin global.*'
+        ? [`✅ *Ella v2 aktif global — ${where}* (yang gak punya setelan sendiri).`, ...notes].join('\n')
+        : `💤 *Ella v2 dimatiin global — ${where}.*`
     )
   }
 

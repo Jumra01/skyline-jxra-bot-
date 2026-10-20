@@ -48,7 +48,8 @@ import { readPersona, personaIsCustom } from '../../lib/aiPersona.js'
 import { geminiChat, SUPPORTS_IMAGES } from '../../lib/geminiWeb.js'
 import { readImage, visionContext } from '../../lib/visionFallback.js'
 import { resolveAutoAI } from '../../lib/autoai.js'
-import { getSetting, getGlobal } from '../../core/groupSettings.js'
+import { kindOf, getGlobalKind } from '../../lib/aiScope.js'
+import { getSetting } from '../../core/groupSettings.js'
 import { extractFacts, remember, factsFor, formatBlock, forget, stats as memStats } from '../../lib/aiMemory.js'
 
 const DATA_DIR = './data'
@@ -675,7 +676,7 @@ async function selfTestText(conf) {
 function diagText(ctx, p) {
   const conf = cfg()
   const id = botIdentity(ctx)
-  const ai = resolveAutoAI(ctx.chat)
+  const ai = resolveAutoAI(ctx.chat, kindOf(ctx))
   const s = lastSeen
   const yes = (v) => (v ? 'ya' : 'TIDAK')
   const bot = [
@@ -790,7 +791,7 @@ async function handler(ctx) {
     }
   }
 
-  const ai = resolveAutoAI(ctx.chat)
+  const ai = resolveAutoAI(ctx.chat, kindOf(ctx))
   const opts = ai.enabled ? { persona: ai.instruction, mode: ai.mode } : { persona: readPersona(), mode: 'onlychat' }
   // Foto/stiker (yang dikirim atau yang di-quote) ikut dikirim ke AI.
   if (conf.vision) {
@@ -1119,13 +1120,13 @@ function snapshot(ctx, conf) {
   }
 }
 
-/** Ella v2 aktif di chat ini? (per-chat → global) */
-function ella2OwnsChat(chat) {
+/** Ella v2 aktif di chat ini? (per-chat → global jenis chat) */
+function ella2OwnsChat(chat, kind = 'group') {
   try {
     const v = getSetting(chat, 'ella2')
     if (v === '1') return true
     if (v === '0') return false
-    return getGlobal('ella2') === '1'
+    return getGlobalKind('ella2', kind) === '1'
   } catch {
     return false
   }
@@ -1147,10 +1148,10 @@ async function onMention(ctx) {
   }
 
   // Auto AI per-chat (`.autoai`): kalau dimatiin di sini → diem aja.
-  const ai = resolveAutoAI(ctx.chat)
+  const ai = resolveAutoAI(ctx.chat, kindOf(ctx))
   snap.autoai = { enabled: ai.enabled, source: ai.source, character: ai.character, mode: ai.mode }
   // Ella v2 pegang chat ini → biarin dia yang jawab (gak dobel).
-  if (ella2OwnsChat(ctx.chat)) {
+  if (ella2OwnsChat(ctx.chat, kindOf(ctx))) {
     snap.result = 'diem — ella2 aktif'
     logger.debug('💤 [AIChat] diem — Ella v2 aktif di chat ini')
     return false

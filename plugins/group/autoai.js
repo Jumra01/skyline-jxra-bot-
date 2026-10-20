@@ -11,7 +11,9 @@
  *   • `.autoai on --skylinemode=furina`
  *   • `.autoai on --skylinemode=custom --logic=kamu adalah nexa ai`
  *   • `.autoai on --mode=assistant|onlychat`
- *   • `.autoai global on/off --skylinemode=...` (owner)
+ *   • `.autoai grup on` / `.autoai pribadi on` (eksplisit per jenis chat)
+ *   • `.autoai global on/off --skylinemode=...` (owner) — bisa dipisah:
+ *     `.autoai global grup on|off` / `.autoai global pribadi on|off`
  *   • `.autoai listpersona` / `tambahpersona nama | logic` / `hapuspersona nama`
  *
  * Config disimpan di `lib/autoai.js` (settings.sqlite). Trigger tag/bales
@@ -23,13 +25,17 @@
  * Yang dinyalakan terakhir yang jalan.
  */
 import { isGroupAdmin } from '../../core/permission.js'
-import { setSetting, getSetting, setGlobal, getGlobal } from '../../core/groupSettings.js'
+import { setSetting, getSetting } from '../../core/groupSettings.js'
 import {
   CHARACTERS, DEFAULT_CHARACTER,
   getGroupConfig, setGroupConfig, getGlobalConfig, setGlobalConfig,
-  listCustomPersonas, addCustomPersona, removeCustomPersona,
+  migrateGlobalConfig, listCustomPersonas, addCustomPersona, removeCustomPersona,
   resolveAutoAI, buildConfig,
 } from '../../lib/autoai.js'
+import {
+  kindOf, parseKind, KIND_LABEL,
+  getGlobalKind, setGlobalKind, kindLabel,
+} from '../../lib/aiScope.js'
 
 const pluginConfig = {
   name: 'autoai',
@@ -54,15 +60,21 @@ const p = (ctx) => ctx.prefix || '.'
 
 /**
  * AutoAI ⇄ Ella / Ella v2 saling eksklusif: nyalain AutoAI = auto-reply
- * keduanya dimatikan di scope yang sama (per chat / global), biar gak rebutan.
+ * keduanya dimatikan di scope yang sama (per chat / per jenis global), biar
+ * gak rebutan. Scope global sekarang dipisah grup & pribadi.
  * @returns {boolean} true kalau salah satu tadi memang aktif di scope itu
  */
-function silenceElla(scope = 'chat', chat = null) {
+function silenceElla(scope = 'chat', chat = null, kind = null) {
   try {
     if (scope === 'global') {
-      const wasOn = getGlobal('ella') === '1' || getGlobal('ella2') === '1'
-      setGlobal('ella', '0')
-      setGlobal('ella2', '0')
+      const kinds = kind ? [kind] : ['group', 'private']
+      let wasOn = false
+      for (const k of kinds) {
+        for (const name of ['ella', 'ella2']) {
+          if (getGlobalKind(name, k) === '1') wasOn = true
+          setGlobalKind(name, k, false)
+        }
+      }
       return wasOn
     }
     const wasOn = getSetting(chat, 'ella') === '1' || getSetting(chat, 'ella2') === '1'
@@ -90,21 +102,35 @@ function personaList() {
 }
 
 function statusText(ctx) {
-  const ai = resolveAutoAI(ctx.chat)
-  const src = { group: 'grup ini', global: 'global (owner)', default: 'default', 'group-off': 'grup ini (dimatikan)', 'global-off': 'global (dimatikan)' }[ai.source] || ai.source
+  const kind = kindOf(ctx)
+  const ai = resolveAutoAI(ctx.chat, kind)
+  const src = {
+    group: 'chat ini', 'group-off': 'chat ini (dimatikan)',
+    global: 'global lama (dua jenis)', 'global-off': 'global lama (dimatikan)',
+    'global-group': 'global grup', 'global-group-off': 'global grup (dimatikan)',
+    'global-private': 'global pribadi', 'global-private-off': 'global pribadi (dimatikan)',
+    default: 'default',
+  }[ai.source] || ai.source
   const state = ai.enabled ? '✅ AKTIF' : '❌ NONAKTIF'
-  const ellaRaw = getSetting(ctx.chat, 'ella')
-  const ellaState = ellaRaw === '1' ? 'AKTIF (chat ini)' : ellaRaw === '0' ? 'MATI (chat ini)' : 'ikut global/default'
-  const ella2Raw = getSetting(ctx.chat, 'ella2')
-  const ella2State = ella2Raw === '1' ? 'AKTIF (chat ini)' : ella2Raw === '0' ? 'MATI (chat ini)' : 'ikut global/default'
+  const fmtGlobal = (k) => {
+    const c = getGlobalConfig(k)
+    if (c) return c.enabled ? `aktif (${c.characterName || '-'})` : 'mati'
+    const legacy = getGlobalConfig()
+    return legacy ? (legacy.enabled ? `aktif (${legacy.characterName || '-'}, lama)` : 'mati (lama)') : 'belum diatur'
+  }
+  const ellaChat = getSetting(ctx.chat, 'ella')
+  const ellaState = ellaChat === '1' ? 'AKTIF' : ellaChat === '0' ? 'MATI' : `ikut global ${KIND_LABEL[kind]} (${kindLabel(getGlobalKind('ella', kind))})`
+  const ella2Chat = getSetting(ctx.chat, 'ella2')
+  const ella2State = ella2Chat === '1' ? 'AKTIF' : ella2Chat === '0' ? 'MATI' : `ikut global ${KIND_LABEL[kind]} (${kindLabel(getGlobalKind('ella2', kind))})`
   const lines = [
+    `Ruang    : ${ctx.isGroup ? 'grup' : 'pribadi'}`,
     `Status   : *${state}*`,
     `Sumber   : ${src}`,
     ai.enabled ? `Karakter : *${ai.characterName || '-'}* (${ai.character || 'default'})` : null,
     ai.enabled ? `Mode     : *${ai.mode || 'onlychat'}*` : null,
+    `Global   : grup → ${fmtGlobal('group')} · pribadi → ${fmtGlobal('private')}`,
     `Ella     : ${ellaState}`,
     `Ella v2  : ${ella2State}`,
-    `Chat     : ${ctx.isGroup ? 'grup' : 'pribadi'}`,
   ].filter(Boolean)
 
   return (
@@ -112,8 +138,10 @@ function statusText(ctx) {
     box('📋 ɪɴғᴏ', lines) + '\n\n' +
     `> Bot balas otomatis saat *di-tag* atau *dibales*.\n` +
     `> AutoAI, Ella & Ella v2 eksklusif — yang dinyalain terakhir yang jalan.\n` +
+    `> Saklar grup & pribadi dipisah (global).\n` +
     `> \`${p(ctx)}autoai on --skylinemode=${DEFAULT_CHARACTER}\`\n` +
-    `> \`${p(ctx)}autoai off\`\n` +
+    `> \`${p(ctx)}autoai grup on\` / \`${p(ctx)}autoai pribadi on\`\n` +
+    `> \`${p(ctx)}autoai global grup on|off\` · \`global pribadi on|off\`\n` +
     `> \`${p(ctx)}autoai listpersona\``
   )
 }
@@ -136,11 +164,36 @@ function getLogic(raw) {
 /* ══════════════════════ handler ══════════════════════ */
 async function handler(ctx) {
   const raw = String(ctx.text || '').trim()
-  const sub = (raw.toLowerCase().split(/\s+/)[0] || '')
+  const tokens = raw.toLowerCase().split(/\s+/).filter(Boolean)
+  const sub = tokens[0] || ''
   const charKey = getFlag(raw, ['skylinemode', 'persona', 'char', 'karakter'])
   const mode = getFlag(raw, ['mode'])
   const responseType = getFlag(raw, ['type'])
   const logic = getLogic(raw)
+  const kind = kindOf(ctx)
+  const ON = ['on', 'nyala', 'hidup']
+  const OFF = ['off', 'mati', 'matiin', 'matikan']
+
+  // `.autoai grup on` / `.autoai pribadi on` — harus cocok sama jenis chat ini.
+  const kindArg = parseKind(sub)
+  let action = sub
+  if (kindArg) {
+    const word = tokens[1] || ''
+    if (!ON.includes(word) && !OFF.includes(word)) {
+      return ctx.reply(
+        `❌ Format: \`${p(ctx)}autoai ${KIND_LABEL[kindArg]} on|off\`\n` +
+        `> Global: \`${p(ctx)}autoai global ${KIND_LABEL[kindArg]} on|off\``
+      )
+    }
+    if (kindArg !== kind) {
+      return ctx.reply(
+        `⚠️ Ini ${KIND_LABEL[kind]}, bukan ${KIND_LABEL[kindArg]}.\n` +
+        `> Buat chat ini: \`${p(ctx)}autoai ${kind} ${word}\`\n` +
+        (ctx.isOwner ? `> Buat semua ${KIND_LABEL[kindArg]}: \`${p(ctx)}autoai global ${kindArg} ${word}\`` : '')
+      )
+    }
+    action = word
+  }
 
   /* ── tambah / hapus persona (owner) ── */
   if (/^(tambahpersona|addpersona|newpersona)$/.test(sub)) {
@@ -165,42 +218,74 @@ async function handler(ctx) {
 
   /* ── list persona ── */
   if (/^(listpersona|personas|list)$/.test(sub)) {
-    return ctx.reply(`🎭 *ᴅᴀꜰᴛᴀʀ ᴘᴇʀsᴏɴᴀ*\n\n${personaList()}\n\n> Global: ${getGlobalConfig()?.enabled ? '✅ Aktif' : '❌ Nonaktif'}`)
+    return ctx.reply(`🎭 *ᴅᴀꜰᴛᴀʀ ᴘᴇʀsᴏɴᴀ*\n\n${personaList()}\n\n> Global grup: ${getGlobalConfig('group')?.enabled ? '✅ Aktif' : '❌ Nonaktif'}\n> Global pribadi: ${getGlobalConfig('private')?.enabled ? '✅ Aktif' : '❌ Nonaktif'}`)
   }
 
-  /* ── global on/off (owner) ── */
+  /* ── global on/off (owner) — bisa per jenis chat ── */
   if (sub === 'global') {
     if (!ctx.isOwner) return ctx.reply('🚫 Khusus owner.')
-    const gmode = (raw.split(/\s+/)[1] || '').toLowerCase()
-    if (!['on', 'off'].includes(gmode)) {
-      return ctx.reply(`❌ Format: \`${p(ctx)}autoai global on/off --skylinemode=<karakter>\``)
+    const scopeArg = parseKind(tokens[1])
+    const gmode = String((scopeArg ? tokens[2] : tokens[1]) || '').toLowerCase()
+
+    if (!ON.includes(gmode) && !OFF.includes(gmode)) {
+      const legacy = getGlobalConfig()
+      const fmt = (c) => (c ? (c.enabled ? `aktif (${c.characterName || '-'})` : 'mati') : 'belum diatur')
+      return ctx.reply(
+        `🌐 *AUTO AI GLOBAL*\n\n` +
+        box('📋 ɪɴғᴏ', [
+          `Grup     : ${fmt(getGlobalConfig('group') || legacy)}`,
+          `Pribadi  : ${fmt(getGlobalConfig('private') || legacy)}`,
+          legacy ? 'Catatan  : setelan lama masih berlaku buat dua jenis' : null,
+        ].filter(Boolean)) + '\n\n' +
+        `> \`${p(ctx)}autoai global on|off\` — dua-duanya\n` +
+        `> \`${p(ctx)}autoai global grup on|off\`\n` +
+        `> \`${p(ctx)}autoai global pribadi on|off\``
+      )
     }
-    if (gmode === 'off') {
-      setGlobalConfig({ ...(getGlobalConfig() || {}), enabled: false })
-      return ctx.reply('🌐 Auto AI *global* dimatikan.')
+
+    const want = ON.includes(gmode)
+    const kinds = scopeArg ? [scopeArg] : ['group', 'private']
+
+    if (want) {
+      migrateGlobalConfig()
+      const prev = scopeArg
+        ? getGlobalConfig(scopeArg)
+        : (getGlobalConfig('group') || getGlobalConfig('private'))
+      const built = buildConfig({ charKey, logic, mode, responseType, prev, by: ctx.sender })
+      if (!built.ok) return ctx.reply(`❌ ${built.error}\n\n${personaList()}`)
+      for (const k of kinds) setGlobalConfig({ ...built.cfg, global: true, scope: k }, k)
+      const ellaOff = silenceElla('global', null, scopeArg)
+      const where = scopeArg ? KIND_LABEL[scopeArg] : 'grup + pribadi'
+      return ctx.reply(
+        `🌐 *ᴀᴜᴛᴏ ᴀɪ ɢʟᴏʙᴀʟ ᴅɪᴀᴋᴛɪꜰᴋᴀɴ* — ${where}\n\n` +
+        box('📋 ɪɴғᴏ', [
+          `Karakter : *${built.cfg.characterName}*`,
+          `Mode     : *${built.cfg.mode}*`,
+        ]) + '\n\n' +
+        `> Berlaku buat ${where} yang belum di-set sendiri.` +
+        (ellaOff ? `\n> 💝 Ella / Ella v2 auto-reply *dimatikan* di ${where} biar gak tabrakan.` : '')
+      )
     }
-    const built = buildConfig({ charKey, logic, mode, responseType, prev: getGlobalConfig(), by: ctx.sender })
-    if (!built.ok) return ctx.reply(`❌ ${built.error}\n\n${personaList()}`)
-    setGlobalConfig({ ...built.cfg, global: true })
-    const ellaOff = silenceElla('global')
-    return ctx.reply(
-      `🌐 *ᴀᴜᴛᴏ ᴀɪ ɢʟᴏʙᴀʟ ᴅɪᴀᴋᴛɪꜰᴋᴀɴ*\n\n` +
-      box('📋 ɪɴғᴏ', [
-        `Karakter : *${built.cfg.characterName}*`,
-        `Mode     : *${built.cfg.mode}*`,
-      ]) + '\n\n> Berlaku buat grup yang belum di-set sendiri.' +
-      (ellaOff ? '\n> 💝 Ella / Ella v2 auto-reply otomatis *dimatikan* (global) biar gak tabrakan.' : '')
-    )
+
+    migrateGlobalConfig()
+    for (const k of kinds) {
+      setGlobalConfig({ ...(getGlobalConfig(k) || {}), enabled: false }, k)
+    }
+    return ctx.reply(`🌐 Auto AI *global ${scopeArg ? KIND_LABEL[scopeArg] : '(grup + pribadi)'}* dimatikan.`)
   }
 
   /* ── on / off (per chat) ── */
-  if (sub === 'off') {
+  if (OFF.includes(action)) {
     if (ctx.isGroup && !(await isGroupAdmin(ctx))) return ctx.reply('🚫 Khusus admin grup / staff bot.')
     setGroupConfig(ctx.chat, { enabled: false })
-    return ctx.reply(`🤖 Auto AI *dimatikan* di ${ctx.isGroup ? 'grup ini' : 'chat ini'}.\n> Bot gak balas saat di-tag/di-bales.`)
+    return ctx.reply(
+      `🤖 Auto AI *dimatikan* di ${ctx.isGroup ? 'grup ini' : 'chat pribadi ini'}.\n` +
+      `> Bot gak balas saat di-tag/di-bales di sini.\n` +
+      (ctx.isOwner ? `> Semua ${KIND_LABEL[kind]}: \`${p(ctx)}autoai global ${kind} off\`` : '')
+    )
   }
 
-  if (sub === 'on') {
+  if (ON.includes(action)) {
     if (ctx.isGroup && !(await isGroupAdmin(ctx))) return ctx.reply('🚫 Khusus admin grup / staff bot.')
     const built = buildConfig({ charKey, logic, mode, responseType, prev: getGroupConfig(ctx.chat), by: ctx.sender })
     if (!built.ok) return ctx.reply(`❌ ${built.error}\n\n${personaList()}`)
@@ -217,6 +302,7 @@ async function handler(ctx) {
       ]) + '\n\n' +
       `> Bot balas saat *di-tag* / *dibales* di sini.` +
       (ellaOff ? '\n> 💝 Ella / Ella v2 auto-reply otomatis *dimatikan* di chat ini biar gak tabrakan.' : '') +
+      (ctx.isOwner ? `\n> Semua ${KIND_LABEL[kind]}: \`${p(ctx)}autoai global ${kind} on\`` : '') +
       note
     )
   }
