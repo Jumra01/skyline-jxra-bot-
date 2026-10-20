@@ -108,6 +108,16 @@ function installGlobalReplyStyle(client) {
   }
 }
 
+/**
+ * Chat yang WhatsApp TOLAK dikirimi pesan: Channel (`@newsletter`) dan
+ * status/broadcast (`@broadcast`). Balasan ke sana selalu gagal 401, jadi
+ * mending gak usah dicoba.
+ */
+export function isUnsendableChat(jid) {
+  const j = String(jid || '')
+  return j.endsWith('@newsletter') || j.endsWith('@broadcast')
+}
+
 export function buildContext(client, event) {
   installGlobalReplyStyle(client)
   const primary = event.key.participant ?? event.key.remoteJid
@@ -152,6 +162,10 @@ export function buildContext(client, event) {
     text: '',
 
     async reply(text) {
+      if (isUnsendableChat(ctx.chat)) {
+        logger.debug({ chat: ctx.chat }, '⏭️  Balasan dibatalkan — chat channel/broadcast gak bisa dikirimi')
+        return null
+      }
       let style = 1
       try {
         style = getReplyStyle()
@@ -170,6 +184,7 @@ export function buildContext(client, event) {
     },
 
     async replyButtons({ text, footer, buttons, adReply, headerImage }) {
+      if (isUnsendableChat(ctx.chat)) return null
       return client.message.send(
         ctx.chat,
         richButtons({ text, footer, buttons, adReply, headerImage }),
@@ -178,6 +193,7 @@ export function buildContext(client, event) {
     },
 
     async replyList({ text, footer, title, buttonText, sections, adReply, headerImage }) {
+      if (isUnsendableChat(ctx.chat)) return null
       return client.message.send(
         ctx.chat,
         richList({ text, footer, title, buttonText, sections, adReply, headerImage }),

@@ -143,6 +143,19 @@ async function describeMessage(client, chat, message) {
 export async function route(client, event) {
   if (event.key.fromMe) return
 
+  // WhatsApp Channel (@newsletter) & status/broadcast: WhatsApp NOLAK semua
+  // kiriman ke sana (`401 negative publish ack`, `newsletter sends do not
+  // support: quote`). Dulu bot tetep coba balas → banjir error tiap pesan.
+  // Abaikan total: gak diproses, gak dibalas.
+  const chatJid = String(event.key.remoteJid || '')
+  if (chatJid.endsWith('@newsletter') || chatJid.endsWith('@broadcast')) {
+    logger.debug(
+      { chat: chatJid, tipe: Object.keys(event.message || {})[0] || '-' },
+      '⏭️  Pesan channel/broadcast diabaikan (gak bisa dibalas)'
+    )
+    return
+  }
+
   const ctx = buildContext(client, event)
   const who = `${ctx.pushName || 'Anonim'} +${ctx.senderNumber}`
   const where = ctx.isGroup ? 'GRUP' : 'PRIV'
