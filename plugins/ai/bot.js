@@ -42,6 +42,7 @@ import { getUser } from '../../core/database.js'
 import { setMentionHandler } from '../../core/mentionTrigger.js'
 import { resolveLidToPn } from '../../core/lid.js'
 import { unwrapMessage } from '../../core/context.js'
+import { sendTyping } from '../../core/presence.js'
 import { readPersona, personaIsCustom } from '../../lib/aiPersona.js'
 import { geminiChat } from '../../lib/geminiWeb.js'
 import { resolveAutoAI } from '../../lib/autoai.js'
@@ -613,9 +614,10 @@ async function handler(ctx) {
 
   const ai = resolveAutoAI(ctx.chat)
   const opts = ai.enabled ? { persona: ai.instruction, mode: ai.mode } : { persona: readPersona(), mode: 'onlychat' }
-  await ctx.react('🕕')
+  // Tanpa reaction (permintaan owner) — cukup indikator "typing", gak nunggu
+  // round-trip reaction sebelum AI dipanggil.
+  if (config.typingPresence) void sendTyping(ctx.client, ctx.chat)
   const r = await runChat(ctx, text, opts)
-  await ctx.react(r.ok ? '✅' : r.limit ? '🚦' : '❎')
   return ctx.reply(r.reply)
 }
 
@@ -728,15 +730,19 @@ async function isBotJid(ctx, jid) {
   if (jids.some((x) => jidUser(x) === jidUser(j))) return true
 
   // LID yang belum cocok (mis. `meLid` kosong) → petakan via participant grup
+  // dan LID bot sekaligus (PARALEL): dua-duanya panggilan network, kalau
+  // berurutan bisa nambah sampai 2× batas waktu sebelum AI dipanggil.
   if (!j.endsWith('@s.whatsapp.net')) {
-    const pn = await withTimeout(resolveLidToPn(ctx.client, ctx.chat, j), 3000, null)
+    const [pn, lid] = await Promise.all([
+      withTimeout(resolveLidToPn(ctx.client, ctx.chat, j), 2500, null),
+      botLid(ctx),
+    ])
     if (pn && normJid(pn) !== j) {
       if (num && jidUser(pn) === num) return true
       if (jids.includes(normJid(pn))) return true
       if (jids.some((x) => jidUser(x) === jidUser(pn))) return true
     }
     // terakhir: bandingkan sama LID bot sendiri (hasil balik dari nomor bot)
-    const lid = await botLid(ctx)
     if (lid && jidUser(lid) === jidUser(j)) return true
   }
   return false
@@ -759,8 +765,11 @@ function hasQuoted(ctx) {
  */
 async function isBotMentioned(ctx, conf) {
   const { num, meLid } = botIdentity(ctx)
-  for (const j of mentionedJids(ctx)) {
-    if (await isBotJid(ctx, j)) return true
+  // Cek semua mention sekaligus — jangan berurutan (tiap LID bisa nunggu network).
+  const mentions = mentionedJids(ctx)
+  if (mentions.length) {
+    const hits = await Promise.all(mentions.map((j) => isBotJid(ctx, j)))
+    if (hits.some(Boolean)) return true
   }
   const body = String(ctx.body || '').replace(INVISIBLE_RE, '')
   if (num && new RegExp(`@${num}(?![0-9])`).test(body)) return true
@@ -907,10 +916,11 @@ async function onMention(ctx) {
   }
 
   snap.result = 'manggil AI…'
-  await ctx.react('🕕')
+  // Gak ada reaction (owner minta) — indikator "typing" dikirim tanpa ditunggu,
+  // jadi AI langsung dipanggil tanpa nunggu round-trip reaction dulu.
+  if (config.typingPresence) void sendTyping(ctx.client, ctx.chat)
   const r = await runChat(ctx, text, { persona: ai.instruction, mode: ai.mode })
   snap.result = r.ok ? 'dibalas ✅' : `gagal: ${String(r.reply || '').slice(0, 140)}`
-  await ctx.react(r.ok ? '✅' : r.limit ? '🚦' : '❎')
   await ctx.reply(r.reply)
   return true
 }
