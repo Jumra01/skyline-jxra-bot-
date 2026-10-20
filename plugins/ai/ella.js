@@ -42,7 +42,7 @@ import { resolveAutoAI } from '../../lib/autoai.js'
 import { extractFacts, remember, factsFor, formatBlock, forget } from '../../lib/aiMemory.js'
 import { aiChatSkyline, isConfigured, skylineCreds, SkylineKeyError } from '../../scraper/SKYLINE.js'
 import { readImage, visionContext } from '../../lib/visionFallback.js'
-import { SAFE_LINE, RETRY_NOTE, buildEllaSystem, isAdmission, leakIntent } from '../../lib/ella.js'
+import { SAFE_LINE, RETRY_NOTE, buildEllaSystem, isAdmission, leakIntent, readEllaPersona, writeEllaPersona, ellaPersonaIsCustom, ELLA_PERSONA_FILE } from '../../lib/ella.js'
 import { botIdentity, findImgNode, isBotMentioned, stripMention, withTimeout } from '../../lib/aiTrigger.js'
 
 const DATA_DIR = './data'
@@ -457,6 +457,7 @@ function statusText(ctx, conf = cfg()) {
     '⚙️ *Atur*',
     `> ${p}ella on / off — auto di chat ini`,
     `> ${p}ella global on|off — semua chat (owner)`,
+    `> ${p}ella persona — atur karakter Ella (owner)`,
     `> ${p}ella fakta — lihat catatan`,
     `> ${p}ella inget <hal> — catat manual`,
     `> ${p}ella lupa — hapus catatan`,
@@ -499,6 +500,25 @@ async function handler(ctx) {
     const want = ['on', 'nyala'].includes(v)
     setGlobal('ella', want ? '1' : '0')
     return ctx.reply(want ? '✅ *Ella aktif di semua chat* (yang gak punya setelan sendiri).' : '💤 *Ella dimatiin global.*')
+  }
+
+  /* persona custom — owner only, dibaca live tanpa restart */
+  if (['persona', 'prompt', 'karakter'].includes(sub)) {
+    if (!ctx.isOwner) return ctx.reply('🚫 Khusus owner.')
+    const personaArg = rest.replace(/^\S+\s*/i, '').trim()
+    if (/^(reset|default|bawaan)$/i.test(personaArg)) {
+      writeEllaPersona('')
+      return ctx.reply('♻️ Persona Ella dikembalikan ke default.')
+    }
+    if (!personaArg) {
+      const cur = readEllaPersona()
+      const preview = cur.length > 1200 ? `${cur.slice(0, 1200)}…` : cur
+      return ctx.reply(`🎭 *Persona Ella* — ${ellaPersonaIsCustom() ? 'CUSTOM' : 'DEFAULT'}\n\n${preview}\n\n` +
+        `Ubah: \`${p}ella persona <teks>\`\nReset: \`${p}ella persona reset\``)
+    }
+    if (personaArg.length > 2500) return ctx.reply('⚠️ Persona terlalu panjang. Maksimal 2500 karakter.')
+    if (!writeEllaPersona(personaArg)) return ctx.reply('❌ Gagal menyimpan persona Ella ke folder data/.')
+    return ctx.reply(`✅ Persona Ella disimpan (${personaArg.length} karakter). Langsung aktif tanpa restart.`)
   }
 
   /* reset riwayat */
