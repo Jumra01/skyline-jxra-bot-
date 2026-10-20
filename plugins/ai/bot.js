@@ -34,6 +34,7 @@
  * Pemakaian harian dicatat di `data/ai-usage.json` (buat info di `.bot`).
  */
 import fs from 'node:fs'
+import sharp from 'sharp'
 import config from '../../config.js'
 import { logger } from '../../core/logger.js'
 import { checkCooldown, checkFlood } from '../../core/cooldown.js'
@@ -55,6 +56,12 @@ const MAX_TRACKED_USERS = 300 // batas jumlah user yang disimpan di disk
 const MAX_CHARS = 4000        // potong pesan biar prompt gak meledak
 const HISTORY_IN_PROMPT = 16  // pesan terakhir yang ditempel kalau mulai dari nol
 
+// Foto/stiker buat "dilihat" Gemini: dikompres dulu biar upload + jawab cepat.
+const VISION_MAX_BYTES = 6 * 1024 * 1024 // foto asli di atas ini dilewati
+const VISION_MAX_DIM = 1024              // sisi terpanjang setelah resize
+const VISION_DOWNLOAD_MS = 12_000        // batas unduh media dari WhatsApp
+const IMG_FIELDS = ['imageMessage', 'stickerMessage']
+
 // Sesi anonim Gemini (cookie) umurnya pendek — kalau dipakai setelah nganggur,
 // Google balikin balasan yang gak bisa di-parse → dulu tiap begitu buang 1
 // request + nulis WARN. Sekarang: sesi yang kelewat tua dilewati duluan, dan
@@ -68,8 +75,8 @@ const pluginConfig = {
   name: 'bot',
   alias: ['aichat', 'ngobrol', 'chatai'],
   category: 'ai',
-  description: 'Chat AI Gemini (persona Bella) — inget riwayat obrolan',
-  usage: '.bot <pertanyaan>  |  .bot reset  |  tag/bales pesan bot',
+  description: 'Chat AI Gemini (persona Bella) — inget riwayat, bisa lihat foto/stiker',
+  usage: '.bot <pertanyaan>  |  .bot reset  |  tag/bales pesan bot  |  kirim/tag foto',
   example: '.bot jelasin apa itu lubang hitam singkat',
   isOwner: false,
   isPremium: false,
@@ -92,6 +99,7 @@ function cfg() {
     mentionTrigger: c.mentionTrigger !== false,
     replyTrigger: c.replyTrigger !== false,
     privateAuto: c.privateAuto !== false,
+    vision: c.vision !== false,
     remember: c.remember !== false,
     rememberEvery: Math.max(0, Math.min(50, Number(c.rememberEvery ?? 8) || 0)),
     sessionTtlMin: Math.max(0, Math.min(720, c.sessionTtlMin === 0 ? 0 : (Number(c.sessionTtlMin) || 20))),
@@ -394,6 +402,7 @@ async function runChat(ctx, text, opts = {}) {
   h.at = Date.now()
 
   const pesan = String(text).slice(0, MAX_CHARS)
+  const images = Array.isArray(opts.images) ? opts.images.filter((i) => i?.buffer?.length) : []
   // Memori jangka panjang: pola kalimat dulu (instan, gratis) — biar fakta yang
   // baru disebut LANGSUNG kepakai di balasan ini juga, bukan nunggu nanti.
   if (conf.remember) {
@@ -430,6 +439,7 @@ async function runChat(ctx, text, opts = {}) {
       instruction,
       session: h.session,
       timeoutMs: conf.timeoutMs,
+      images,
     })
     if (usedSession) sessionFailStreak = 0
   } catch (err) {
@@ -445,7 +455,7 @@ async function runChat(ctx, text, opts = {}) {
         logger.warn({ err: String(err?.message || err).slice(0, 140) }, '[AIChat] sesi Gemini kadaluwarsa — lanjut tanpa sesi (obrolan tetap nyambung dari riwayat)')
       }
       try {
-        res = await geminiChat({ message: withHistory, instruction, timeoutMs: conf.timeoutMs })
+        res = await geminiChat({ message: withHistory, instruction, timeoutMs: conf.timeoutMs, images })
       } catch (err2) {
         saveStore()
         return gagal(err2, conf)
@@ -461,7 +471,16 @@ async function runChat(ctx, text, opts = {}) {
   h.msgs.push({ role: 'user', content: pesan })
   h.msgs.push({ role: 'assistant', content: answer.slice(0, MAX_CHARS) })
   if (h.msgs.length > conf.maxHistory) h.msgs = h.msgs.slice(-conf.maxHistory)
-  if (res?.session) { h.session = res.session; h.sessionAt = Date.now() }
+  // Sesi hasil giliran BERGAMBAR gak bisa dipakai lagi: turn berikutnya balikin
+  // balasan yang gak kebaca (sudah dites: teks→gambar jalan, gambar→apa pun
+  // gagal). Jadi sesi dibuang, konteks tetap nyambung lewat riwayat teks.
+  if (images.length) {
+    h.session = null
+    h.sessionAt = 0
+  } else if (res?.session) {
+    h.session = res.session
+    h.sessionAt = Date.now()
+  }
   h.sinceExtract = Math.max(0, Number(h.sinceExtract) || 0) + 1
   saveStore()
   addUsage(1)
@@ -485,6 +504,7 @@ function helpText(p, conf) {
     `Otak: *Gemini* (lewat web, tanpa API key)\n` +
     `Persona: ${persona}\n` +
     `Aku inget riwayat obrolan kita (maks ${conf.maxHistory} pesan).\n` +
+    (conf.vision ? 'Aku juga *bisa lihat foto & stiker* yang kamu kirim/bales.\n' : '') +
     mem +
     `Pemakaian hari ini: *${nfmt(usageToday())}* balasan\n\n` +
     '*Cara pakai:*\n' +
@@ -495,10 +515,12 @@ function helpText(p, conf) {
     (conf.mentionTrigger ? '> tag nomor aku langsung (tanpa prefix)\n' : '') +
     (conf.mentionTrigger && conf.replyTrigger ? '> atau BALES/quote pesan-ku\n' : '') +
     (conf.privateAuto ? '> di chat pribadi tinggal kirim pesan biasa, aku balas\n' : '') +
+    (conf.vision ? '> kirim/tag foto atau stiker — aku lihat lalu jawab\n' : '') +
     `> ${p}autoai on/off — atur Auto AI per grup (admin)\n` +
     `> ${p}bot diag — cek kenapa tag/bales gak dibalas (owner/staff)\n` +
     '\n*Contoh:*\n' +
-    `> ${p}bot jelasin apa itu lubang hitam singkat`
+    `> ${p}bot jelasin apa itu lubang hitam singkat\n` +
+    (conf.vision ? `> tag aku + kirim foto: "ini gambar apa?"` : '')
   )
 }
 
@@ -514,7 +536,7 @@ function diagText(ctx, p) {
     `meJid    : ${id.meJid || '-'}`,
     `meLid    : ${id.meLid || '-'}`,
     `user.id  : ${ctx.client?.user?.id || ctx.client?.user?.lid || '-'}`,
-    `Fitur AI : ${yes(conf.enabled)} • tag ${yes(conf.mentionTrigger)} • bales ${yes(conf.replyTrigger !== false)} • chat pribadi ${yes(conf.privateAuto !== false)}`,
+    `Fitur AI : ${yes(conf.enabled)} • tag ${yes(conf.mentionTrigger)} • bales ${yes(conf.replyTrigger !== false)} • chat pribadi ${yes(conf.privateAuto !== false)} • foto ${yes(conf.vision)}`,
     `AutoAI   : ${ai.enabled ? `AKTIF (${ai.source}) • ${ai.characterName} • ${ai.mode}` : `NONAKTIF (${ai.source})`}`,
   ]
   const last = s
@@ -524,6 +546,7 @@ function diagText(ctx, p) {
         `Teks     : ${s.body || '(kosong)'}`,
         `Tag JID  : ${s.mentioned.length ? s.mentioned.join(', ') : '-'}`,
         `Quote    : ${s.quoted || '-'}`,
+        `Gambar   : ${s.vision ? 'dilihat AI ✅' : s.adaGambar ? 'ada (gagal dibaca / vision mati)' : '-'}`,
         `Kedeteksi: ${s.matched ? 'YA' : 'TIDAK'}`,
         `Hasil    : ${s.result || '-'}`,
       ]
@@ -583,7 +606,8 @@ async function handler(ctx) {
   if (!conf.enabled) return ctx.reply('❌ Fitur AI chat lagi nonaktif (owner bisa nyalain di config.aiChat.enabled).')
 
   const text = String(ctx.text || '').trim()
-  if (!text) return ctx.reply(helpText(p, conf))
+  const adaGambar = conf.vision && Boolean(findImgNode(ctx?.event?.message))
+  if (!text && !adaGambar) return ctx.reply(helpText(p, conf))
 
   if (/^(diag|diagnosa|diagnose|cek)$/i.test(text)) {
     if (!ctx.isStaff) return ctx.reply('🚫 Khusus owner/staff.')
@@ -614,10 +638,16 @@ async function handler(ctx) {
 
   const ai = resolveAutoAI(ctx.chat)
   const opts = ai.enabled ? { persona: ai.instruction, mode: ai.mode } : { persona: readPersona(), mode: 'onlychat' }
+  // Foto/stiker (yang dikirim atau yang di-quote) ikut dikirim ke AI.
+  if (conf.vision) {
+    const img = await imageForAI(ctx)
+    if (img) opts.images = [img]
+  }
+  const prompt = text || 'Jelaskan gambar/stiker ini.'
   // Tanpa reaction (permintaan owner) — cukup indikator "typing", gak nunggu
   // round-trip reaction sebelum AI dipanggil.
   if (config.typingPresence) void sendTyping(ctx.client, ctx.chat)
-  const r = await runChat(ctx, text, opts)
+  const r = await runChat(ctx, prompt, opts)
   return ctx.reply(r.reply)
 }
 
@@ -693,6 +723,75 @@ function quotedParticipant(ctx) {
     if (p) return p
   }
   return null
+}
+
+/* ══════════════════════ foto / stiker (vision) ══════════════════════ */
+
+/**
+ * Cari gambar/stiker di pesan — foto yang dikirim langsung ATAU yang di-quote
+ * (bales foto pakai `@bot ini apa?`). Balikin `{ node, field }` tanpa mengunduh.
+ */
+function findImgNode(message) {
+  const msg = unwrapMessage(message)
+  if (!msg) return null
+  for (const f of IMG_FIELDS) if (msg[f]) return { node: msg, field: f }
+  for (const v of Object.values(msg)) {
+    const quoted = v?.contextInfo?.quotedMessage
+    if (!quoted) continue
+    const q = unwrapMessage(quoted)
+    if (!q) continue
+    for (const f of IMG_FIELDS) if (q[f]) return { node: q, field: f }
+  }
+  return null
+}
+
+/**
+ * Siapkan gambar buat dikirim ke Gemini: unduh → resize maks 1024px → jpeg.
+ * Stiker webp (termasuk yang animasi, diambil frame pertama) diratakan ke
+ * latar putih biar transparan gak jadi hitam. Gagal apa pun → `null` (bot tetap
+ * jawab teksnya, cuma tanpa lihat gambar).
+ */
+async function imageForAI(ctx) {
+  const conf = cfg()
+  if (!conf.vision) return null
+  const hit = findImgNode(ctx?.event?.message)
+  if (!hit) return null
+
+  const info = hit.node[hit.field] || {}
+  const mimetype = String(info.mimetype || (hit.field === 'stickerMessage' ? 'image/webp' : 'image/jpeg'))
+  if (!mimetype.startsWith('image/')) return null
+
+  let bytes = null
+  try {
+    bytes = await withTimeout(ctx.client.message.downloadBytes(hit.node), VISION_DOWNLOAD_MS, null)
+  } catch (err) {
+    logger.warn({ err: String(err?.message || err).slice(0, 140) }, '[AIChat] gagal unduh gambar')
+    return null
+  }
+  if (!bytes?.length) return null
+
+  const raw = Buffer.from(bytes)
+  if (raw.length > VISION_MAX_BYTES) {
+    logger.info({ ukuranMB: +(raw.length / 1048576).toFixed(1) }, '[AIChat] gambar kebesaran — dilewati')
+    return null
+  }
+
+  try {
+    const jpeg = await sharp(raw, { animated: false })
+      .rotate()
+      .resize(VISION_MAX_DIM, VISION_MAX_DIM, { fit: 'inside', withoutEnlargement: true })
+      .flatten({ background: '#ffffff' })
+      .jpeg({ quality: 82 })
+      .toBuffer()
+    return {
+      buffer: jpeg,
+      mimetype: 'image/jpeg',
+      filename: hit.field === 'stickerMessage' ? 'stiker.jpg' : 'foto.jpg',
+    }
+  } catch (err) {
+    logger.warn({ err: String(err?.message || err).slice(0, 140) }, '[AIChat] gambar gak bisa diproses')
+    return null
+  }
 }
 
 /**
@@ -831,6 +930,7 @@ function snapshot(ctx, conf) {
     body: String(ctx.body || '').slice(0, 160),
     mentioned: mentionedJids(ctx),
     quoted: quotedParticipant(ctx),
+    adaGambar: Boolean(findImgNode(ctx?.event?.message)),
     bot: { num: id.num, meJid: id.meJid, meLid: id.meLid, userId: id.userId, jids: id.jids },
     raw: {
       key: {
@@ -883,8 +983,9 @@ async function onMention(ctx) {
   }
 
   const num = botIdentity(ctx).num
-  const text = stripMention(ctx.body, num)
-  if (!text) {
+  let text = stripMention(ctx.body, num)
+  const adaGambar = conf.vision && Boolean(findImgNode(ctx?.event?.message))
+  if (!text && !adaGambar) {
     const u = userProfile(ctx)
     const siapa = u.name && u.name !== 'Tanpa Nama' ? ` ${u.name}` : ''
     snap.result = 'sapaan (tanpa teks)'
@@ -916,10 +1017,19 @@ async function onMention(ctx) {
   }
 
   snap.result = 'manggil AI…'
+  // Foto/stiker (kalau ada) diunduh + dikompres dulu, baru ikut ditanya.
+  let img = null
+  if (adaGambar) img = await imageForAI(ctx)
+  if (!text && img) text = 'Jelaskan gambar/stiker ini.'
+  if (!text) {
+    snap.result = 'gambar gagal dibaca (sapaan)'
+    return ctx.reply('Hmm, gambarnya gak kebaca 😅 Coba kirim ulang ya, atau tulis pertanyaannya.')
+  }
+  snap.vision = Boolean(img)
   // Gak ada reaction (owner minta) — indikator "typing" dikirim tanpa ditunggu,
   // jadi AI langsung dipanggil tanpa nunggu round-trip reaction dulu.
   if (config.typingPresence) void sendTyping(ctx.client, ctx.chat)
-  const r = await runChat(ctx, text, { persona: ai.instruction, mode: ai.mode })
+  const r = await runChat(ctx, text, { persona: ai.instruction, mode: ai.mode, images: img ? [img] : [] })
   snap.result = r.ok ? 'dibalas ✅' : `gagal: ${String(r.reply || '').slice(0, 140)}`
   await ctx.reply(r.reply)
   return true
@@ -936,6 +1046,7 @@ export const _internals = {
   isBotMentioned, mentionedJids, quotedParticipant, hasQuoted, stripMention, flatten,
   botIdentity, isBotJid, withTimeout, diagText, getLastSeen: () => lastSeen, normJid, jidUser,
   resetHistory, store, llmRemember, parseFactsJson, faktaText, helpText,
+  imageForAI, findImgNode,
   sessionGuard: {
     reset: () => { sessionFailStreak = 0; sessionSkipUntil = 0 },
     state: () => ({ sessionFailStreak, sessionSkipUntil }),
