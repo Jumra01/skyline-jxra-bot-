@@ -624,7 +624,7 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false } = {}) 
         `[Ella2] gagal — ${why.headline}`,
         `  ↳ server    : HTTP ${err?.status || 0} "${String(err?.message || err).slice(0, 120)}"`,
         `  ↳ percobaan : ${err?.attempts || 1}× (${riwayat}) • total ${lama}`,
-        `  ↳ endpoint  : ${err?.endpoint || '/api/ai/gemma'}`,
+        `  ↳ endpoint  : ${(err?.website || '') + (err?.endpoint || '/api/ai/gemma')}`,
         `  ↳ key       : ${err?.keyTag || keyTag()} — ${err?.keySource || keySource()}`,
         `  ↳ chat      : ${ctx.isGroup ? 'grup' : 'pribadi'} • ${ctx.sender || '-'}`,
         `  ↳ sebab     : ${why.reason}`,

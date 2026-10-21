@@ -708,6 +708,18 @@ const RETRY_STATUS = new Set([502, 504]);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** Satu percobaan request ke endpoint Gemma. */
+/* Gemma: model berat, upstream cuma sanggup beberapa request sekaligus.
+ * Request dari chat berbeda diantre (satu per satu) supaya bot sendiri nggak
+ * jadi biang "AI is busy" — dulu 3 chat barengan = 3 request paralel dan
+ * sebagian kena 503. Antrean dilepas tiap percobaan (bukan seluruh retry),
+ * jadi chat lain tetap dapat giliran walau satu chat sedang mengulang. */
+let gemmaChain = Promise.resolve();
+function gemmaSlot(fn) {
+  const run = gemmaChain.then(fn, fn);
+  gemmaChain = run.then(() => {}, () => {});
+  return run;
+}
+
 async function gemmaOnce(body, website, timeoutMs) {
   let res;
   try {
@@ -799,7 +811,9 @@ export async function gemmaChat({ message, history = [], system = '', timeoutMs 
 
     try {
       // Satu percobaan boleh lama (maks 90 dtk); sisa waktu total tetap dipakai.
-      const { reply, json } = await gemmaOnce(liteNext ? liteBody : body, website, Math.min(90_000, Math.max(4000, sisa)));
+      const { reply, json } = await gemmaSlot(() =>
+        gemmaOnce(liteNext ? liteBody : body, website, Math.min(90_000, Math.max(4000, sisa)))
+      );
 
       breakerOk('gemma');
       return {
@@ -842,6 +856,7 @@ export async function gemmaChat({ message, history = [], system = '', timeoutMs 
   errOut.elapsedMs = Date.now() - startedAt;
   errOut.statuses = statuses;
   errOut.endpoint = AI_GEMMA_PATH;
+  errOut.website = website;
   errOut.keyTag = keyTag();
   errOut.keySource = keySource();
   throw errOut;
