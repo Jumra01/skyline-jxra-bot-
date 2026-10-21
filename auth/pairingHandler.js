@@ -43,7 +43,7 @@ export function setupPairing(client, phoneNumber) {
 
       // Tunggu socket benar-benar siap. WA (terutama WA Bisnis) suppress
       // notif pairing kalau companion-hello dikirim terlalu cepat setelah
-      // connect — delay settle dulu, lalu request. (Pola yang work di Baileys.)
+      // connect — delay settle dulu, lalu request.
       logger.info(`⏳ Menunggu koneksi stabil ${PAIRING_SETTLE_MS / 1000}s sebelum request pairing code...`)
       await sleep(PAIRING_SETTLE_MS)
 

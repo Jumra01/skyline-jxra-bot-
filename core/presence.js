@@ -21,19 +21,16 @@ export async function markRead(client, event) {
 }
 
 export async function sendTyping(client, chat) {
-  // zapo-js: `sendChatstate(jid, { state: 'composing' })` → node <composing/>.
-  // Pakai `{ type: ... }` (gaya Baileys) hasilnya node <chatstate> tanpa tag
-  // anak, jadi WhatsApp diem aja — dulu itu sebabnya "typing…" nggak muncul.
+  // Full zapo-js: `{ state: 'composing' }` → node <composing/>.
+  // `{ type: 'composing' }` (gaya Baileys) menghasilkan <chatstate> tanpa tag
+  // anak → diabaikan WhatsApp (dulu itu sebabnya "typing…" nggak muncul).
+  // Tidak ada jalur cadangan gaya Baileys — proyek ini murni zapo.
   try {
     await client.presence.sendChatstate(chat, { state: 'composing' })
-  } catch {
-    try {
-      await client.presence.sendChatstate(chat, { type: 'composing' })
-    } catch (err) {
-      if (!typingWarned) {
-        typingWarned = true
-        logger.warn({ err }, 'Typing indicator gagal')
-      }
+  } catch (err) {
+    if (!typingWarned) {
+      typingWarned = true
+      logger.warn({ err }, 'Typing indicator gagal')
     }
   }
 }
