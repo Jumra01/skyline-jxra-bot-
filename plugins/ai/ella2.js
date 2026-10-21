@@ -420,6 +420,19 @@ async function withChatQueue(key, fn) {
   return run
 }
 
+/* ── indikator "typing…" ─────────────────────────────────────────────────
+ * WhatsApp cuma nampilin status composing ±10-20 detik. Karena Ella v2 bisa
+ * mikir 10-25 detik (bahkan sampai 2 menit kalau server ramai & retry),
+ * indikatornya di-refresh berkala biar user tahu bot masih kerja.
+ */
+function keepTyping(client, chat, everyMs = 8000) {
+  if (!config.typingPresence) return () => {}
+  void sendTyping(client, chat)
+  const timer = setInterval(() => void sendTyping(client, chat), everyMs)
+  timer.unref?.()
+  return () => clearInterval(timer)
+}
+
 /* ── Chat pribadi: gabung pesan beruntun jadi SATU request ───────────────
  * Di DM, tiap pesan memicu request AI. Orang yang ngetik cepat ("halo",
  * "kamu siapa", "eh iya") jadi 3 request beruntun → key kena limit → server
@@ -662,6 +675,9 @@ async function onMention(ctx) {
   // Opt-in: belum diaktifkan di chat ini → serahkan ke handler lain (`.ella`).
   if (!hereOn(ctx)) return false
 
+  // Tanda "typing…" dikirim duluan, biar user tahu pesannya masuk.
+  if (config.typingPresence) void sendTyping(ctx.client, ctx.chat)
+
   const adaGambar = Boolean(conf.mentionTrigger && findImgNode(ctx?.event?.message))
   let text = stripMention(ctx.body, botIdentity(ctx).num)
   if (text.length > MAX_CHARS) text = text.slice(0, MAX_CHARS)
@@ -704,8 +720,13 @@ async function onMention(ctx) {
     return true
   }
 
-  if (config.typingPresence) void sendTyping(ctx.client, ctx.chat)
-  const r = await runChat(ctx, text, { hasImage: adaGambar })
+  const stopTyping = keepTyping(ctx.client, ctx.chat)
+  let r
+  try {
+    r = await runChat(ctx, text, { hasImage: adaGambar })
+  } finally {
+    stopTyping()
+  }
   await ctx.reply(r.reply)
   return true
 }
@@ -979,8 +1000,13 @@ async function handler(ctx) {
   if (text.length > MAX_CHARS) text = text.slice(0, MAX_CHARS)
   if (!text && hit) return ctx.reply('Aku belum bisa lihat gambar di versi ini 😅 tulis aja maksudnya ya.')
 
-  if (config.typingPresence) void sendTyping(ctx.client, ctx.chat)
-  const r = await runChat(ctx, text, { hasImage: Boolean(hit) })
+  const stopTyping = keepTyping(ctx.client, ctx.chat)
+  let r
+  try {
+    r = await runChat(ctx, text, { hasImage: Boolean(hit) })
+  } finally {
+    stopTyping()
+  }
   return ctx.reply(r.reply)
 }
 
