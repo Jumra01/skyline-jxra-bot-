@@ -598,6 +598,31 @@ export async function gemmaChat({ message, history = [], system = '', timeoutMs 
   const busy = BUSY_STATUS.has(code) || /busy|try again later|overload|ramai/i.test(String(lastErr?.message || ''));
   if (!busy) breakerFail('gemma');
 
+  // Server Gemma penuh/ngadat → coba otak cadangan (endpoint Ella v1) biar user
+  // tetap dapat jawaban, bukan cuma pesan "lagi ramai". Persona/system tetap
+  // sama, cuma mesinnya beda.
+  const worthFallback = busy || RETRY_STATUS.has(code) || (code === 0 && /timeout|konek/i.test(String(lastErr?.message || '')));
+  if (worthFallback) {
+    try {
+      const fb = await aiChatSkyline({
+        message: teks,
+        history: body.history || [],
+        system,
+        timeoutMs: Math.max(15000, Math.min(30000, budget))
+      });
+      return {
+        reply: fb.reply,
+        model: 'aichat-skyline (otak cadangan)',
+        tookMs: fb.tookMs,
+        attempts,
+        website,
+        fallback: true
+      };
+    } catch {
+      /* otak cadangan juga gagal — lempar error aslinya di bawah */
+    }
+  }
+
   if (lastErr && attempts > 1) {
     lastErr.attempts = attempts;
     lastErr.message = `${lastErr.message} (dicoba ${attempts}×)`;

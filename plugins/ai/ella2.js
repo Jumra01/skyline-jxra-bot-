@@ -405,6 +405,9 @@ function humanError(err) {
     return '🛠️ Server AI-nya lagi ngadat — coba lagi sebentar ya'
   }
   if (/timeout|kelamaan|ETIMEDOUT/i.test(msg)) return '⏳ Ella v2 kelamaan mikir — coba lagi ya'
+  if (status === 401 || status === 403) {
+    return '🔑 Ella v2 butuh API key skyline.web.id yang valid — kasih tahu owner bot ya'
+  }
   if (status === 400) return '⚠️ Ella v2 gak bisa proses pesan itu — coba tulis ulang sebentar'
   return '😅 Ella v2 lagi gak bisa nyambung — coba lagi sebentar'
 }
@@ -538,7 +541,8 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false } = {}) 
     })
     reply = r.reply
     tookMs = r.tookMs
-    if (r.attempts > 1) logger.info(`[Ella2] AI akhirnya jawab setelah ${r.attempts}× coba (server ramai)`)
+    if (r.fallback) logger.info('[Ella2] otak Gemma ramai — dijawab otak cadangan (aichat-skyline)')
+    else if (r.attempts > 1) logger.info(`[Ella2] AI akhirnya jawab setelah ${r.attempts}× coba (server ramai)`)
   } catch (err) {
     logger.warn(
       {
