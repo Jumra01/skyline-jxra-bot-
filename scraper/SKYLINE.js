@@ -71,6 +71,17 @@ export function isConfigured() {
 }
 
 /**
+ * Dari mana API key-nya diambil. `env` menang atas `config.js`, jadi kalau di
+ * panel masih nyangkut env lama, key di config nggak kepakai sama sekali.
+ */
+export function keySource() {
+  if (String(process.env.SKYLINE_API_KEY || '').trim()) return 'env SKYLINE_API_KEY';
+  if (String(process.env.OMNI_API_KEY || '').trim()) return 'env OMNI_API_KEY (lama)';
+  if (String(config.api?.skyline?.apikey || '').trim()) return 'config.js';
+  return 'kosong';
+}
+
+/**
  * Sidik jari API key buat log/tes: cukup buat mastiin key mana yang kepakai
  * (mis. `sky_ol19bo2…of1rl`), sengaja bukan key utuh.
  */
@@ -649,6 +660,7 @@ export default {
   skylineCreds,
   isConfigured,
   keyTag,
+  keySource,
   ytSearch,
   ytInfo,
   downloadAudio,

@@ -53,7 +53,7 @@ import { getSetting, setSetting } from '../../core/groupSettings.js'
 import { getGroupConfig, setGroupConfig, disableGlobalAutoAI } from '../../lib/autoai.js'
 import { kindOf, kindOfJid, parseKind, KIND_LABEL, getGlobalKind, setGlobalKind, kindLabel } from '../../lib/aiScope.js'
 import { extractFacts, remember, factsFor, formatBlock, forget } from '../../lib/aiMemory.js'
-import { gemmaChat, isConfigured as skylineReady, keyTag } from '../../scraper/SKYLINE.js'
+import { gemmaChat, isConfigured as skylineReady, keyTag, keySource } from '../../scraper/SKYLINE.js'
 import { isBotMentioned, stripMention, botIdentity, withTimeout, findImgNode } from '../../lib/aiTrigger.js'
 import { mayExec, parseRunMarkers, runBotCommand, allowNames, splitCommand } from '../../lib/commandExec.js'
 import { getFeature } from '../loader.js'
@@ -785,6 +785,7 @@ async function handler(ctx) {
         `> Gemma     : ${gemma}\n` +
         `> IP bot    : ${ipBot}\n` +
         `> API key  : ${skylineReady() ? `terisi ✅ ${keyTag()}` : 'KOSONG ❌'}\n` +
+        `> Sumber   : ${keySource()}\n` +
         `> Ruang    : ${ctx.isGroup ? 'grup' : 'pribadi'}\n` +
         `> Auto     : ${hereOn(ctx) ? 'AKTIF' : 'MATI'}\n\n` +
         '> Ella v2 cuma pakai otak Gemma (tanpa cadangan).'
