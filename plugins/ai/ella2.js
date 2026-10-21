@@ -570,7 +570,7 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false } = {}) 
     }))
     reply = r.reply
     tookMs = r.tookMs
-    if (r.fallback) logger.info('[Ella2] otak Gemma ramai — dijawab otak cadangan (aichat-skyline)')
+    if (r.fallback) logger.info(`[Ella2] otak Gemma ramai — dijawab ${r.model}`)
     else if (r.attempts > 1) logger.info(`[Ella2] AI akhirnya jawab setelah ${r.attempts}× coba (server ramai)`)
   } catch (err) {
     logger.warn(

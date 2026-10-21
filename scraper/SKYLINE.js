@@ -475,6 +475,68 @@ export async function aiChatSkyline({ message, history = [], system = '', timeou
 /* ══════════════ AI chat (Ella v2 — Gemma) ══════════════ */
 
 /**
+ * POST /api/ai/assistant — otak widget chat di website skyline.web.id.
+ *
+ * Ini endpoint yang dipakai chat web (asisten situs), bukan Gemma. Modelnya
+ * lebih ringan jadi hampir selalu tersedia — dipakai sebagai otak cadangan
+ * TERAKHIR kalau Gemma + aichat-skyline sama-sama balas "ramai".
+ *
+ *   body: { message, history }  •  header opsional: Authorization: Bearer <apikey>
+ *   resp: { reply, blocked?, took_ms? }
+ */
+export const AI_ASSISTANT_PATH = '/api/ai/assistant';
+
+export async function aiAssistant({ message, history = [], timeoutMs = 60000 } = {}) {
+  const teks = String(message || '').trim();
+  if (!teks) throw new SkylineApiError('Pesan kosong', 400);
+
+  const { website, apikey } = skylineCreds();
+
+  const body = { message: teks.slice(0, 4000) };
+  if (Array.isArray(history) && history.length) {
+    body.history = history
+      .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && String(m.content || '').trim())
+      .slice(-10)
+      .map((m) => ({ role: m.role, content: String(m.content).slice(0, 2000) }));
+  }
+
+  const headers = { 'content-type': 'application/json', Accept: 'application/json', 'User-Agent': UA };
+  if (apikey) headers.Authorization = `Bearer ${apikey}`;
+
+  let res;
+  try {
+    res = await fetch(`${website}${AI_ASSISTANT_PATH}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(Math.max(10000, Number(timeoutMs) || 60000))
+    });
+  } catch (err) {
+    const msg = err?.name === 'TimeoutError'
+      ? 'Asisten Skyline kelamaan mikir (timeout)'
+      : `Gagal konek API Skyline (${err?.message || err})`;
+    throw new SkylineApiError(msg, 0);
+  }
+
+  const text = await res.text();
+  let json = null;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    /* ditangani di bawah */
+  }
+
+  if (!res.ok || !json) {
+    throw new SkylineApiError(parseApiError(text) || `HTTP ${res.status}`, res.status, text);
+  }
+
+  const reply = String(json.reply || '').trim();
+  if (!reply) throw new SkylineApiError('Balasan asisten kosong', res.status, text);
+
+  return { reply, blocked: Boolean(json.blocked), tookMs: Number(json.took_ms) || 0 };
+}
+
+/**
  * POST /api/ai/gemma — chat AI teks model Gemma (otak fitur `.ella2`).
  *
  *   body: { message (wajib, ≤4000), history (≤10 pesan), system (≤3000),
@@ -634,7 +696,24 @@ export async function gemmaChat({ message, history = [], system = '', timeoutMs 
         fallback: true
       };
     } catch {
-      /* otak cadangan juga gagal — lempar error aslinya di bawah */
+      /* otak cadangan juga gagal — coba otak cadangan kedua (asisten web) */
+      try {
+        const as = await aiAssistant({
+          message: teks,
+          history: body.history || [],
+          timeoutMs: Math.max(20000, Math.min(60000, budget))
+        });
+        return {
+          reply: as.reply,
+          model: 'assistant-web (otak cadangan 2)',
+          tookMs: as.tookMs,
+          attempts,
+          website,
+          fallback: true
+        };
+      } catch {
+        /* dua-duanya gagal — lempar error aslinya di bawah */
+      }
     }
   }
 
