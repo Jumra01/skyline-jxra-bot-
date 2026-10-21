@@ -136,8 +136,8 @@ export default {
     privateAuto: true,      // chat pribadi: pesan biasa juga dibalas
     memory: true,           // inget fakta penting tentang user
     maxHistory: 8,          // pesan terakhir yang dikirim ke API (maks 10)
-    timeoutMs: 60_000,      // batas tunggu balasan (ms) — Gemma lambat
-    retries: 4,             // ulang otomatis kalau server balas "AI is busy" (503/429) — total 5 percobaan
+    timeoutMs: 180_000,     // batas tunggu balasan (ms) — 0 = tanpa batas; Gemma bisa 10-25 dtk
+    retries: 6,             // ulang otomatis kalau server balas "AI is busy" (503/429) — total 7 percobaan
     systemPrompt: '',       // instruksi tambahan (opsional)
 
     // Aksi bot (Ella bisa jalanin command beneran atas permintaan):

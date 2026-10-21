@@ -399,7 +399,7 @@ function silenceElla(scope = 'chat', chat = null, kind = null) {
  * request jalan; pesan berikutnya nunggu (maks 45 dtk) baru dikirim.
  */
 const CHAT_QUEUE = new Map()
-const CHAT_QUEUE_MAX_WAIT = 45_000
+const CHAT_QUEUE_MAX_WAIT = 120_000
 
 async function withChatQueue(key, fn) {
   const prev = CHAT_QUEUE.get(key)
@@ -455,7 +455,7 @@ function humanError(err) {
     return '🚦 *Ella v2 lagi dibatasin* — coba lagi sebentar ya 😅'
   }
   if (status === 503 || /busy|try again later|overload|ramai/i.test(msg)) {
-    return '🕐 *Otak Ella v2 lagi ramai* — udah dicoba beberapa kali, tetap penuh. Coba lagi ±10 detik ya 😅'
+    return '🕐 *Otak Ella v2 lagi ramai* — udah dicoba beberapa kali, tetap penuh. Coba lagi ±30 detik ya 😅'
   }
   if (status === 502 || status === 504) {
     return '🛠️ Server AI-nya lagi ngadat — coba lagi sebentar ya'

@@ -780,9 +780,11 @@ export async function gemmaChat({ message, history = [], system = '', timeoutMs 
   if (apikey) liteBody.apikey = apikey;
   if (system) liteBody.system = String(system).slice(0, 1200);
 
-  const budget = Math.max(5000, Number(timeoutMs) || 60000);
+  // Batas tunggu: `timeoutMs` <= 0 = tanpa batas (dipakai 10 menit sebagai
+  // pengaman supaya bot nggak nunggu selamanya kalau server benar-benar mati).
+  const budget = Number(timeoutMs) > 0 ? Number(timeoutMs) : 10 * 60 * 1000;
   const deadline = Date.now() + budget;
-  const maxAttempts = Math.max(1, Math.min(6, (Number(retries) || 0) + 1));
+  const maxAttempts = Math.max(1, Math.min(10, (Number(retries) || 0) + 1));
 
   let lastErr = null;
   let attempts = 0;
@@ -792,11 +794,12 @@ export async function gemmaChat({ message, history = [], system = '', timeoutMs 
 
   for (let i = 1; i <= maxAttempts; i += 1) {
     const sisa = deadline - Date.now();
-    if (i > 1 && sisa < 5000) break;
+    if (sisa <= 1000) break;
     attempts = i;
 
     try {
-      const { reply, json } = await gemmaOnce(liteNext ? liteBody : body, website, Math.max(4000, sisa));
+      // Satu percobaan boleh lama (maks 90 dtk); sisa waktu total tetap dipakai.
+      const { reply, json } = await gemmaOnce(liteNext ? liteBody : body, website, Math.min(90_000, Math.max(4000, sisa)));
 
       breakerOk('gemma');
       return {
