@@ -21,11 +21,14 @@ export async function markRead(client, event) {
 }
 
 export async function sendTyping(client, chat) {
+  // zapo-js: `sendChatstate(jid, { state: 'composing' })` → node <composing/>.
+  // Pakai `{ type: ... }` (gaya Baileys) hasilnya node <chatstate> tanpa tag
+  // anak, jadi WhatsApp diem aja — dulu itu sebabnya "typing…" nggak muncul.
   try {
-    await client.presence.sendChatstate(chat, { type: 'composing' })
+    await client.presence.sendChatstate(chat, { state: 'composing' })
   } catch {
     try {
-      await client.presence.sendChatstate(chat, { state: 'composing' })
+      await client.presence.sendChatstate(chat, { type: 'composing' })
     } catch (err) {
       if (!typingWarned) {
         typingWarned = true
