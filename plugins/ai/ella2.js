@@ -53,7 +53,7 @@ import { getSetting, setSetting } from '../../core/groupSettings.js'
 import { getGroupConfig, setGroupConfig, disableGlobalAutoAI } from '../../lib/autoai.js'
 import { kindOf, kindOfJid, parseKind, KIND_LABEL, getGlobalKind, setGlobalKind, kindLabel } from '../../lib/aiScope.js'
 import { extractFacts, remember, factsFor, formatBlock, forget } from '../../lib/aiMemory.js'
-import { gemmaChat, isConfigured as skylineReady, keyTag, keySource } from '../../scraper/SKYLINE.js'
+import { gemmaChat, isConfigured as skylineReady, keyTag, keySource, explainSkylineError } from '../../scraper/SKYLINE.js'
 import { isBotMentioned, stripMention, botIdentity, withTimeout, findImgNode } from '../../lib/aiTrigger.js'
 import { mayExec, parseRunMarkers, runBotCommand, allowNames, splitCommand } from '../../lib/commandExec.js'
 import { getFeature } from '../loader.js'
@@ -597,16 +597,26 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false } = {}) 
     }))
     reply = r.reply
     tookMs = r.tookMs
-    if (r.attempts > 1) logger.info(`[Ella2] AI akhirnya jawab setelah ${r.attempts}× coba (server ramai)`)
+    if (r.attempts > 1) {
+      logger.info(
+        `[Ella2] akhirnya jawab — ${r.attempts}× coba • ${(r.tookMs / 1000).toFixed(1)}s • model ${r.model} • ${ctx.isGroup ? 'grup' : 'pribadi'}`
+      )
+    }
   } catch (err) {
+    const why = explainSkylineError(err)
+    const riwayat = Array.isArray(err?.statuses) && err.statuses.length ? err.statuses.join(' → ') : String(err?.status || 0)
+    const lama = err?.elapsedMs ? `${(err.elapsedMs / 1000).toFixed(1)}s` : '-'
     logger.warn(
-      {
-        status: err?.status || 0,
-        attempts: err?.attempts || 1,
-        key: keyTag(),
-        err: String(err?.message || err).slice(0, 160),
-      },
-      '[Ella2] AI gagal'
+      [
+        `[Ella2] gagal — ${why.headline}`,
+        `  ↳ server    : HTTP ${err?.status || 0} "${String(err?.message || err).slice(0, 120)}"`,
+        `  ↳ percobaan : ${err?.attempts || 1}× (${riwayat}) • total ${lama}`,
+        `  ↳ endpoint  : ${err?.endpoint || '/api/ai/gemma'}`,
+        `  ↳ key       : ${err?.keyTag || keyTag()} — ${err?.keySource || keySource()}`,
+        `  ↳ chat      : ${ctx.isGroup ? 'grup' : 'pribadi'} • ${ctx.sender || '-'}`,
+        `  ↳ sebab     : ${why.reason}`,
+        `  ↳ saran     : ${why.action}`,
+      ].join('\n')
     )
     return { ok: false, reply: humanError(err) }
   }

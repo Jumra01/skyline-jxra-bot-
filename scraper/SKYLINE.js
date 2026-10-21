@@ -92,6 +92,82 @@ export function keyTag() {
   return `${k.slice(0, 11)}…${k.slice(-4)} (${k.length} char)`;
 }
 
+/**
+ * Terjemahan error Skyline → sebab + saran, biar log gampang dibaca orang
+ * yang nggak hafal kode HTTP.
+ * @returns {{ headline: string, reason: string, action: string }}
+ */
+export function explainSkylineError(err) {
+  const status = Number(err?.status) || 0;
+  const msg = String(err?.message || err || '').trim();
+  const low = msg.toLowerCase();
+
+  if (err?.code === 'NO_API_KEY' || status === 401) {
+    return {
+      headline: 'API key kosong / tidak dikirim',
+      reason: 'server skyline.web.id nolak karena tidak ada API key yang valid di request',
+      action: `isi api.skyline.apikey di config.js atau env SKYLINE_API_KEY (sekarang: ${keySource()})`
+    };
+  }
+  if (status === 403) {
+    return {
+      headline: 'API key ditolak',
+      reason: 'key-nya terbaca tapi tidak berlaku (salah ketik, dicabut, atau beda server)',
+      action: `pakai key dari dashboard skyline.web.id (dipakai bot: ${keyTag()})`
+    };
+  }
+  if (status === 402) {
+    return {
+      headline: 'Kuota / credit habis',
+      reason: 'key masih valid tapi jatah pemakaiannya sudah habis',
+      action: 'top-up / naikkan limit key di dashboard, atau pakai key lain'
+    };
+  }
+  if (status === 429 || status === 503 || /busy|overload|ramai|try again later/i.test(low)) {
+    return {
+      headline: 'Server sedang penuh (bukan bug bot)',
+      reason: 'antrean model AI di server skyline.web.id penuh atau key kena batas laju',
+      action: 'tunggu beberapa detik (bot sudah retry otomatis), atau naikkan concurrency/kuota di sisi server'
+    };
+  }
+  if (status === 502 || status === 504) {
+    return {
+      headline: 'Gateway server bermasalah',
+      reason: 'server di depan model tidak dapat balasan tepat waktu (edge timeout / model kelamaan)',
+      action: 'coba lagi; kalau sering, cek timeout/worker di server skyline'
+    };
+  }
+  if (status === 404) {
+    return {
+      headline: 'Endpoint tidak ketemu',
+      reason: 'path API berubah atau salah tulis',
+      action: 'cek path di docs skyline.web.id (bot pakai GET/POST sesuai dokumentasi)'
+    };
+  }
+  if (status >= 500) {
+    return {
+      headline: `Server error (HTTP ${status})`,
+      reason: 'kesalahan di sisi server, bukan dari request bot',
+      action: 'coba lagi nanti; kalau tetap, cek log server skyline'
+    };
+  }
+  if (!status && /timeout|kelamaan/i.test(low)) {
+    return {
+      headline: 'Timeout',
+      reason: 'server tidak menjawab sampai batas waktu bot (±60 detik)',
+      action: 'coba lagi; kalau sering, cek beban/worker model di server'
+    };
+  }
+  if (!status) {
+    return {
+      headline: 'Koneksi ke skyline.web.id gagal',
+      reason: 'jaringan bot tidak bisa menjangkau server (DNS, firewall, atau server down)',
+      action: 'tes dari server bot: curl -sS https://skyline.web.id/api/status'
+    };
+  }
+  return { headline: `Gagal (HTTP ${status})`, reason: msg || 'tanpa keterangan dari server', action: 'cek pesan server di atas' };
+}
+
 /* ══════════════ breaker (biar gak nunggu tiap request kalau API down) ══════════════ */
 const BREAKER_LIMIT = 3;
 const BREAKER_MS = 5 * 60 * 1000;
@@ -711,6 +787,8 @@ export async function gemmaChat({ message, history = [], system = '', timeoutMs 
   let lastErr = null;
   let attempts = 0;
   let liteNext = false;
+  const startedAt = Date.now();
+  const statuses = [];
 
   for (let i = 1; i <= maxAttempts; i += 1) {
     const sisa = deadline - Date.now();
@@ -731,6 +809,7 @@ export async function gemmaChat({ message, history = [], system = '', timeoutMs 
     } catch (err) {
       lastErr = err;
       const code = Number(err?.status) || 0;
+      statuses.push(code);
       const busy = BUSY_STATUS.has(code) || /busy|try again later|overload|ramai/i.test(String(err?.message || ''));
       const retryable = busy || RETRY_STATUS.has(code) || (code === 0 && /timeout|konek/i.test(String(err?.message || '')));
 
@@ -753,11 +832,16 @@ export async function gemmaChat({ message, history = [], system = '', timeoutMs 
   const busy = BUSY_STATUS.has(code) || /busy|try again later|overload|ramai/i.test(String(lastErr?.message || ''));
   if (!busy) breakerFail('gemma');
 
-  if (lastErr && attempts > 1) {
-    lastErr.attempts = attempts;
-    lastErr.message = `${lastErr.message} (dicoba ${attempts}×)`;
-  }
-  throw lastErr || new SkylineApiError('Ella v2 gagal nyambung', 0);
+  const errOut = lastErr || new SkylineApiError('Ella v2 gagal nyambung', 0);
+  // Info buat log: berapa kali dicoba, berapa lama, status tiap percobaan,
+  // endpoint yang dipakai, dan key mana yang aktif (potongan, bukan key utuh).
+  errOut.attempts = attempts || 1;
+  errOut.elapsedMs = Date.now() - startedAt;
+  errOut.statuses = statuses;
+  errOut.endpoint = AI_GEMMA_PATH;
+  errOut.keyTag = keyTag();
+  errOut.keySource = keySource();
+  throw errOut;
 }
 
 /** Pesan ramah buat user kalau key belum diisi. */
@@ -778,6 +862,7 @@ export default {
   skylineCreds,
   isConfigured,
   keyTag,
+  explainSkylineError,
   keySource,
   ytSearch,
   ytInfo,
