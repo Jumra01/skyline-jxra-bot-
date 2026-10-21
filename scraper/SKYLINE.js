@@ -486,7 +486,60 @@ export async function aiChatSkyline({ message, history = [], system = '', timeou
  */
 export const AI_GEMMA_PATH = '/api/ai/gemma';
 
-export async function gemmaChat({ message, history = [], system = '', timeoutMs = 60000 } = {}) {
+/** Status yang artinya "server lagi ramai" — layak dicoba ulang, bukan gangguan permanen. */
+const BUSY_STATUS = new Set([429, 503]);
+/** Status gangguan sementara lain (gateway/edge) yang juga layak diulang. */
+const RETRY_STATUS = new Set([502, 504]);
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Satu percobaan request ke endpoint Gemma. */
+async function gemmaOnce(body, website, timeoutMs) {
+  let res;
+  try {
+    res = await fetch(`${website}${AI_GEMMA_PATH}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Accept: 'application/json', 'User-Agent': UA },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+  } catch (err) {
+    const msg = err?.name === 'TimeoutError'
+      ? 'Ella v2 kelamaan mikir (timeout)'
+      : `Gagal konek API Skyline (${err?.message || err})`;
+    throw new SkylineApiError(msg, 0);
+  }
+
+  const text = await res.text();
+  let json = null;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    /* ditangani di bawah */
+  }
+
+  if (!res.ok || !json) {
+    throw new SkylineApiError(parseApiError(text) || `HTTP ${res.status}`, res.status, text);
+  }
+  if (json.status === false) {
+    throw new SkylineApiError(parseApiError(text) || 'API Skyline nolak request', res.status, text);
+  }
+
+  const reply = String(json.reply || '').trim();
+  if (!reply) throw new SkylineApiError('Balasan AI kosong', res.status, text);
+
+  return { reply, json };
+}
+
+/**
+ * Chat ke otak Gemma.
+ *
+ * `503 / 429 / "AI is busy"` itu artinya server lagi ramai (bukan rusak), jadi
+ * otomatis diulang dengan jeda pendek — `retries` (default 2) kali. Total waktu
+ * tetap dibatasi `timeoutMs` biar bot gak nunggu kebangetan, dan status "ramai"
+ * sengaja TIDAK dihitung ke breaker (biar 3× ramai gak bikin fitur mati 5 menit).
+ */
+export async function gemmaChat({ message, history = [], system = '', timeoutMs = 60000, retries = 2 } = {}) {
   const teks = String(message || '').trim();
   if (!teks) throw new SkylineApiError('Pesan kosong', 400);
 
@@ -504,52 +557,52 @@ export async function gemmaChat({ message, history = [], system = '', timeoutMs 
   }
   if (system) body.system = String(system).slice(0, 3000);
 
-  let res;
-  try {
-    res = await fetch(`${website}${AI_GEMMA_PATH}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', Accept: 'application/json', 'User-Agent': UA },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(timeoutMs)
-    });
-  } catch (err) {
-    breakerFail('gemma');
-    const msg = err?.name === 'TimeoutError'
-      ? 'Ella v2 kelamaan mikir (timeout)'
-      : `Gagal konek API Skyline (${err?.message || err})`;
-    throw new SkylineApiError(msg, 0);
+  const budget = Math.max(5000, Number(timeoutMs) || 60000);
+  const deadline = Date.now() + budget;
+  const maxAttempts = Math.max(1, Math.min(4, (Number(retries) || 0) + 1));
+
+  let lastErr = null;
+  let attempts = 0;
+
+  for (let i = 1; i <= maxAttempts; i += 1) {
+    const sisa = deadline - Date.now();
+    if (i > 1 && sisa < 5000) break;
+    attempts = i;
+
+    try {
+      const { reply, json } = await gemmaOnce(body, website, Math.max(4000, sisa));
+
+      breakerOk('gemma');
+      return {
+        reply,
+        model: String(json.model || 'gemma-4-31b'),
+        tookMs: Number(json.took_ms) || 0,
+        attempts,
+        website
+      };
+    } catch (err) {
+      lastErr = err;
+      const code = Number(err?.status) || 0;
+      const busy = BUSY_STATUS.has(code) || /busy|try again later|overload|ramai/i.test(String(err?.message || ''));
+      const retryable = busy || RETRY_STATUS.has(code) || (code === 0 && /timeout|konek/i.test(String(err?.message || '')));
+
+      if (!retryable || i >= maxAttempts) break;
+
+      // Jeda 0,6s → 1,2s (+ jitter) biar gak nabrak server di detik yang sama.
+      await sleep(Math.min(2000, 600 * i) + Math.floor(Math.random() * 250));
+    }
   }
 
-  const text = await res.text();
-  let json = null;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    /* ditangani di bawah */
-  }
+  // "Ramai" bukan gangguan konfigurasi → jangan bikin breaker muter 5 menit.
+  const code = Number(lastErr?.status) || 0;
+  const busy = BUSY_STATUS.has(code) || /busy|try again later|overload|ramai/i.test(String(lastErr?.message || ''));
+  if (!busy) breakerFail('gemma');
 
-  if (!res.ok || !json) {
-    breakerFail('gemma');
-    throw new SkylineApiError(parseApiError(text) || `HTTP ${res.status}`, res.status, text);
+  if (lastErr && attempts > 1) {
+    lastErr.attempts = attempts;
+    lastErr.message = `${lastErr.message} (dicoba ${attempts}×)`;
   }
-  if (json.status === false) {
-    breakerFail('gemma');
-    throw new SkylineApiError(parseApiError(text) || 'API Skyline nolak request', res.status, text);
-  }
-
-  const reply = String(json.reply || '').trim();
-  if (!reply) {
-    breakerFail('gemma');
-    throw new SkylineApiError('Balasan AI kosong', res.status, text);
-  }
-
-  breakerOk('gemma');
-  return {
-    reply,
-    model: String(json.model || 'gemma-4-31b'),
-    tookMs: Number(json.took_ms) || 0,
-    website
-  };
+  throw lastErr || new SkylineApiError('Ella v2 gagal nyambung', 0);
 }
 
 /** Pesan ramah buat user kalau key belum diisi. */

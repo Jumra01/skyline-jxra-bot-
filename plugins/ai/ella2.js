@@ -127,6 +127,7 @@ function cfg() {
     maxHistory: num(c.maxHistory, 2, HISTORY_MAX, 8),
     timeoutMs: num(c.timeoutMs, 5000, 180_000, 60_000),
     systemPrompt: String(c.systemPrompt || '').trim(),
+    retries: num(c.retries, 0, 3, 2),
     exec: String(c.exec ?? 'admin').toLowerCase(),
     execAllow: allow.map((s) => String(s).trim()).filter(Boolean),
     execDeny: deny.map((s) => String(s).trim()).filter(Boolean),
@@ -306,6 +307,12 @@ function humanError(err) {
   if (status === 429 || /rate|limit|too many|kuota/i.test(msg)) {
     return '🚦 *Ella v2 lagi dibatasin* — coba lagi sebentar ya 😅'
   }
+  if (status === 503 || /busy|try again later|overload|ramai/i.test(msg)) {
+    return '🕐 *Otak Ella v2 lagi ramai* — udah dicoba beberapa kali, tetap penuh. Coba lagi ±10 detik ya 😅'
+  }
+  if (status === 502 || status === 504) {
+    return '🛠️ Server AI-nya lagi ngadat — coba lagi sebentar ya'
+  }
   if (/timeout|kelamaan|ETIMEDOUT/i.test(msg)) return '⏳ Ella v2 kelamaan mikir — coba lagi ya'
   if (status === 400) return '⚠️ Ella v2 gak bisa proses pesan itu — coba tulis ulang sebentar'
   return '😅 Ella v2 lagi gak bisa nyambung — coba lagi sebentar'
@@ -396,11 +403,25 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false } = {}) 
   let reply = ''
   let tookMs = 0
   try {
-    const r = await gemmaChat({ message: text, history, system, timeoutMs: conf.timeoutMs })
+    const r = await gemmaChat({
+      message: text,
+      history,
+      system,
+      timeoutMs: conf.timeoutMs,
+      retries: conf.retries,
+    })
     reply = r.reply
     tookMs = r.tookMs
+    if (r.attempts > 1) logger.info(`[Ella2] AI akhirnya jawab setelah ${r.attempts}× coba (server ramai)`)
   } catch (err) {
-    logger.warn({ status: err?.status || 0, err: String(err?.message || err).slice(0, 160) }, '[Ella2] AI gagal')
+    logger.warn(
+      {
+        status: err?.status || 0,
+        attempts: err?.attempts || 1,
+        err: String(err?.message || err).slice(0, 160),
+      },
+      '[Ella2] AI gagal'
+    )
     return { ok: false, reply: humanError(err) }
   }
 
@@ -412,6 +433,7 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false } = {}) 
         history,
         system: `${system}\n\n${RETRY_NOTE}`,
         timeoutMs: conf.timeoutMs,
+        retries: conf.retries,
       })
       reply = r2.reply
       tookMs = r2.tookMs

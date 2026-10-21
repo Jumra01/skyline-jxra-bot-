@@ -137,6 +137,7 @@ export default {
     memory: true,           // inget fakta penting tentang user
     maxHistory: 8,          // pesan terakhir yang dikirim ke API (maks 10)
     timeoutMs: 60_000,      // batas tunggu balasan (ms) — Gemma lambat
+    retries: 2,             // ulang otomatis kalau server balas "AI is busy" (503/429)
     systemPrompt: '',       // instruksi tambahan (opsional)
 
     // Aksi bot (Ella bisa jalanin command beneran atas permintaan):
