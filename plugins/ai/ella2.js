@@ -53,7 +53,7 @@ import { getSetting, setSetting } from '../../core/groupSettings.js'
 import { getGroupConfig, setGroupConfig, disableGlobalAutoAI } from '../../lib/autoai.js'
 import { kindOf, kindOfJid, parseKind, KIND_LABEL, getGlobalKind, setGlobalKind, kindLabel } from '../../lib/aiScope.js'
 import { extractFacts, remember, factsFor, formatBlock, forget } from '../../lib/aiMemory.js'
-import { gemmaChat, aiChatSkyline, isConfigured as skylineReady } from '../../scraper/SKYLINE.js'
+import { gemmaChat, aiChatSkyline, aiAssistant, isConfigured as skylineReady } from '../../scraper/SKYLINE.js'
 import { isBotMentioned, stripMention, botIdentity, withTimeout, findImgNode } from '../../lib/aiTrigger.js'
 import { mayExec, parseRunMarkers, runBotCommand, allowNames, splitCommand } from '../../lib/commandExec.js'
 import { getFeature } from '../loader.js'
@@ -743,10 +743,19 @@ async function handler(ctx) {
     } catch (e) {
       cadangan = `❌ status ${e?.status || 0} — ${String(e?.message || e).slice(0, 140)}`
     }
+    const t2 = Date.now()
+    let asisten
+    try {
+      const r = await aiAssistant({ message: 'tes koneksi: balas satu kata: ok', timeoutMs: 30000 })
+      asisten = `✅ ok (${Date.now() - t2} ms)`
+    } catch (e) {
+      asisten = `❌ status ${e?.status || 0} — ${String(e?.message || e).slice(0, 140)}`
+    }
     return ctx.reply(
       '🔍 *TES OTAK ELLA v2*\n\n' +
-        `> Gemma    : ${gemma}\n` +
-        `> Cadangan : ${cadangan}\n` +
+        `> Gemma     : ${gemma}\n` +
+        `> Cadangan1 : ${cadangan}\n` +
+        `> Cadangan2 : ${asisten}\n` +
         `> API key  : ${skylineReady() ? 'terisi ✅' : 'KOSONG ❌'}\n` +
         `> Ruang    : ${ctx.isGroup ? 'grup' : 'pribadi'}\n` +
         `> Auto     : ${hereOn(ctx) ? 'AKTIF' : 'MATI'}\n\n` +
