@@ -53,7 +53,7 @@ import { getSetting, setSetting } from '../../core/groupSettings.js'
 import { getGroupConfig, setGroupConfig, disableGlobalAutoAI } from '../../lib/autoai.js'
 import { kindOf, kindOfJid, parseKind, KIND_LABEL, getGlobalKind, setGlobalKind, kindLabel } from '../../lib/aiScope.js'
 import { extractFacts, remember, factsFor, formatBlock, forget } from '../../lib/aiMemory.js'
-import { gemmaChat, aiChatSkyline, aiAssistant, isConfigured as skylineReady } from '../../scraper/SKYLINE.js'
+import { gemmaChat, isConfigured as skylineReady } from '../../scraper/SKYLINE.js'
 import { isBotMentioned, stripMention, botIdentity, withTimeout, findImgNode } from '../../lib/aiTrigger.js'
 import { mayExec, parseRunMarkers, runBotCommand, allowNames, splitCommand } from '../../lib/commandExec.js'
 import { getFeature } from '../loader.js'
@@ -420,6 +420,33 @@ async function withChatQueue(key, fn) {
   return run
 }
 
+/* ── Chat pribadi: gabung pesan beruntun jadi SATU request ───────────────
+ * Di DM, tiap pesan memicu request AI. Orang yang ngetik cepat ("halo",
+ * "kamu siapa", "eh iya") jadi 3 request beruntun → key kena limit → server
+ * balas `503 AI is busy`. Di grup jarang kejadian karena cuma diproses saat
+ * di-tag. Solusinya: tunggu 1,2 detik; kalau ada pesan baru, yang lama
+ * dibatalkan dan teksnya digabung jadi satu pertanyaan.
+ */
+const PRIV_DEBOUNCE = new Map()
+const PRIV_WAIT_MS = 1200
+
+function joinPrivateBurst(key, text) {
+  return new Promise((resolve) => {
+    const st = PRIV_DEBOUNCE.get(key) || { timer: null, texts: [], pending: null }
+    st.texts.push(String(text || '').trim())
+    if (st.pending) st.pending(null) // versi lama dianggap sudah diwakili pesan terbaru
+    st.pending = resolve
+    if (st.timer) clearTimeout(st.timer)
+    st.timer = setTimeout(() => {
+      const merged = st.texts.filter(Boolean).join('\n')
+      const done = st.pending
+      PRIV_DEBOUNCE.delete(key)
+      if (done) done(merged)
+    }, PRIV_WAIT_MS)
+    PRIV_DEBOUNCE.set(key, st)
+  })
+}
+
 /* ══════════════════════ inti: panggil AI ══════════════════════ */
 function humanError(err) {
   const status = Number(err?.status) || 0
@@ -570,8 +597,7 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false } = {}) 
     }))
     reply = r.reply
     tookMs = r.tookMs
-    if (r.fallback) logger.info(`[Ella2] otak Gemma ramai — dijawab ${r.model}`)
-    else if (r.attempts > 1) logger.info(`[Ella2] AI akhirnya jawab setelah ${r.attempts}× coba (server ramai)`)
+    if (r.attempts > 1) logger.info(`[Ella2] AI akhirnya jawab setelah ${r.attempts}× coba (server ramai)`)
   } catch (err) {
     logger.warn(
       {
@@ -625,6 +651,17 @@ async function onMention(ctx) {
   // Opt-in: belum diaktifkan di chat ini → serahkan ke handler lain (`.ella`).
   if (!hereOn(ctx)) return false
 
+  const adaGambar = Boolean(conf.mentionTrigger && findImgNode(ctx?.event?.message))
+  let text = stripMention(ctx.body, botIdentity(ctx).num)
+  if (text.length > MAX_CHARS) text = text.slice(0, MAX_CHARS)
+
+  // DM: gabung pesan beruntun → satu request AI, bukan tiga.
+  if (!ctx.isGroup && text) {
+    const joined = await joinPrivateBurst(storeKey(ctx), text)
+    if (joined === null) return true // sudah diwakili pesan yang lebih baru
+    text = joined
+  }
+
   if (!ctx.isStaff) {
     if (ctx.isGroup && config.antiSpam?.enabled) {
       const f = checkFlood(ctx.sender, config.antiSpam)
@@ -633,16 +670,14 @@ async function onMention(ctx) {
         return true
       }
     }
-    const cd = checkCooldown(ctx.sender, 'ella2Mention', ctx.isGroup ? 4000 : 1500)
+    // Privat dibuat lebih lega jedanya: request yang terlalu rapat bikin key
+    // kena limit → server balas 503 "AI is busy".
+    const cd = checkCooldown(ctx.sender, 'ella2Mention', ctx.isGroup ? 4000 : 2500)
     if (cd.onCooldown) {
       logger.debug(`💤 [Ella2] diem — cooldown ${Math.ceil(cd.remainingMs / 1000)}s`)
       return true
     }
   }
-
-  const adaGambar = Boolean(conf.mentionTrigger && findImgNode(ctx?.event?.message))
-  let text = stripMention(ctx.body, botIdentity(ctx).num)
-  if (text.length > MAX_CHARS) text = text.slice(0, MAX_CHARS)
 
   if (!text && !adaGambar) {
     const nama = String(ctx.pushName || '').trim()
@@ -735,31 +770,13 @@ async function handler(ctx) {
     } catch (e) {
       gemma = `❌ status ${e?.status || 0} — ${String(e?.message || e).slice(0, 140)}`
     }
-    const t1 = Date.now()
-    let cadangan
-    try {
-      const r = await aiChatSkyline({ message: 'tes koneksi: balas satu kata: ok', timeoutMs: 30000 })
-      cadangan = `✅ ok (${Date.now() - t1} ms)`
-    } catch (e) {
-      cadangan = `❌ status ${e?.status || 0} — ${String(e?.message || e).slice(0, 140)}`
-    }
-    const t2 = Date.now()
-    let asisten
-    try {
-      const r = await aiAssistant({ message: 'tes koneksi: balas satu kata: ok', timeoutMs: 30000 })
-      asisten = `✅ ok (${Date.now() - t2} ms)`
-    } catch (e) {
-      asisten = `❌ status ${e?.status || 0} — ${String(e?.message || e).slice(0, 140)}`
-    }
     return ctx.reply(
       '🔍 *TES OTAK ELLA v2*\n\n' +
         `> Gemma     : ${gemma}\n` +
-        `> Cadangan1 : ${cadangan}\n` +
-        `> Cadangan2 : ${asisten}\n` +
         `> API key  : ${skylineReady() ? 'terisi ✅' : 'KOSONG ❌'}\n` +
         `> Ruang    : ${ctx.isGroup ? 'grup' : 'pribadi'}\n` +
         `> Auto     : ${hereOn(ctx) ? 'AKTIF' : 'MATI'}\n\n` +
-        '> Kalau Gemma ❌ 503 tapi Cadangan ✅ → nanti otomatis dijawab otak cadangan.'
+        '> Ella v2 cuma pakai otak Gemma (tanpa cadangan).'
     )
   }
 
