@@ -566,7 +566,7 @@ export async function gemmaChat({ message, history = [], system = '', timeoutMs 
 
   const budget = Math.max(5000, Number(timeoutMs) || 60000);
   const deadline = Date.now() + budget;
-  const maxAttempts = Math.max(1, Math.min(4, (Number(retries) || 0) + 1));
+  const maxAttempts = Math.max(1, Math.min(6, (Number(retries) || 0) + 1));
 
   let lastErr = null;
   let attempts = 0;
@@ -601,8 +601,10 @@ export async function gemmaChat({ message, history = [], system = '', timeoutMs 
 
       // Jeda: 0,9s → 1,8s, yang "ramai" 1,5s → 3s (+ jitter) biar server
       // sempat lega — dulu cuma 0,6s/1,2s jadi sering nabrak lagi.
-      const base = busy ? 1500 * i : 600 * i;
-      await sleep(Math.min(3000, base) + Math.floor(Math.random() * 300));
+      // "Ramai" biasanya sembuh 10-20 detik → jeda makin panjang (1,5s → 5s)
+      // biar total tunggu masih di bawah `timeoutMs` tapi cukup sabar.
+      const base = busy ? 1200 * i + 300 : 600 * i;
+      await sleep(Math.min(busy ? 5000 : 3000, base) + Math.floor(Math.random() * 300));
     }
   }
 
