@@ -13,9 +13,14 @@
  *   • AUTO (tag / bales / DM): daftar mention handler prioritas 20, TAPI
  *     hanya jalan kalau `.ella2 on` (atau global) — default-nya ikut `.ella`
  *     biar perilaku lama gak berubah.
+ *   • AKSI BOT: owner/staff/admin grup bisa nyuruh aksi beneran lewat obrolan
+ *     ("tutup grup", "buka grup", "kick dia", ...). Model menandai balasan
+ *     dengan `[[RUN: <perintah>]]`, lalu `lib/commandExec.js` yang validasi
+ *     izin + jalanin command aslinya. Daftar command di `config.ella2.execAllow`.
  *
  * Perintah:
  *   `.ella2 <teks>`           chat
+ *   `.ella2 aksi`             lihat command yang bisa diminta
  *   `.ella2 on|off`           auto di chat ini (admin grup / DM sendiri)
  *   `.ella2 grup|pribadi on|off`  eksplisit per jenis chat
  *   `.ella2 global on|off`    auto di semua chat (owner) — bisa dipisah:
@@ -45,6 +50,7 @@ import { kindOf, kindOfJid, parseKind, KIND_LABEL, getGlobalKind, setGlobalKind,
 import { extractFacts, remember, factsFor, formatBlock, forget } from '../../lib/aiMemory.js'
 import { gemmaChat } from '../../scraper/SKYLINE.js'
 import { isBotMentioned, stripMention, botIdentity, withTimeout, findImgNode } from '../../lib/aiTrigger.js'
+import { mayExec, parseRunMarkers, runBotCommand } from '../../lib/commandExec.js'
 import { isAdmission } from '../../lib/ella.js'
 import {
   buildElla2System, readElla2Persona, writeElla2Persona, ella2PersonaIsCustom,
@@ -58,13 +64,30 @@ const MAX_CHARS = 4000
 const HISTORY_MAX = 10
 const MODEL_LABEL = 'gemma-4-31b'
 
+/** Command bawaan yang boleh dijalanin lewat Ella v2 (bisa diubah di config). */
+const DEFAULT_EXEC_ALLOW = [
+  'g open',
+  'g close',
+  'g link',
+  'g revoke',
+  'g setname <nama>',
+  'g setdesc <teks>',
+  'kick <tag/nomor>',
+  'promote <tag/nomor>',
+  'demote <tag/nomor>',
+  'tagall <teks>',
+  'hidetag <teks>',
+  'on <welcome|bye|antilink|game>',
+  'off <welcome|bye|antilink|game>',
+]
+
 const pluginConfig = {
   name: 'ella2',
   alias: ['ellav2', 'ella-2'],
   category: 'ai',
-  description: 'Chat AI Ella v2 (Gemma skyline.web.id) — persona baru, inget obrolan, bisa auto saat di-tag',
-  usage: '.ella2 <teks>  |  .ella2 on|off  |  .ella2 fakta  |  .ella2 reset',
-  example: '.ella2 lagi sibuk ga?',
+  description: 'Chat AI Ella v2 (Gemma skyline.web.id) — persona baru, inget obrolan, bisa auto saat di-tag + jalanin command grup',
+  usage: '.ella2 <teks>  |  .ella2 on|off  |  .ella2 aksi  |  .ella2 fakta  |  .ella2 reset',
+  example: '.ella2 tutup grup',
   isOwner: false,
   isPremium: false,
   isGroup: false,
@@ -90,6 +113,8 @@ function num(v, min, max, def) {
 
 function cfg() {
   const c = config.ella2 || {}
+  const allow = Array.isArray(c.execAllow) && c.execAllow.length ? c.execAllow : DEFAULT_EXEC_ALLOW
+  const deny = Array.isArray(c.execDeny) ? c.execDeny : []
   return {
     enabled: bool(process.env.ELLA2_ENABLED, c.enabled !== false),
     auto: bool(process.env.ELLA2_AUTO, c.auto !== false),
@@ -100,6 +125,9 @@ function cfg() {
     maxHistory: num(c.maxHistory, 2, HISTORY_MAX, 8),
     timeoutMs: num(c.timeoutMs, 5000, 180_000, 60_000),
     systemPrompt: String(c.systemPrompt || '').trim(),
+    exec: String(c.exec ?? 'admin').toLowerCase(),
+    execAllow: allow.map((s) => String(s).trim()).filter(Boolean),
+    execDeny: deny.map((s) => String(s).trim()).filter(Boolean),
   }
 }
 
@@ -175,6 +203,14 @@ function nowWIB() {
   } catch {
     return `${new Date().toISOString()} UTC`
   }
+}
+
+/** Siapa yang lagi nyuruh — dideteksi otomatis dari peran & admin grup. */
+function execRoleLabel(ctx, info) {
+  if (ctx.isOwner) return 'Owner bot'
+  if (ctx.isStaff) return 'Admin/Staff bot'
+  if (ctx.isGroup && info?.group?.isGroupAdmin) return 'Admin grup'
+  return 'Member'
 }
 
 async function contextFor(ctx) {
@@ -280,6 +316,33 @@ function admission(text) {
   return /\bgemma\b|\basisten\s+ai\b|\bmodel\s+(?:ai|bahasa)\b/i.test(t)
 }
 
+/**
+ * Proses penanda `[[RUN: ...]]` dari balasan AI.
+ * - `execOn` true  → validasi izin lalu jalankan command-nya (maks 3 aksi).
+ * - `execOn` false → penanda tetap dibuang biar gak bocor ke chat, tanpa eksekusi.
+ */
+async function applyRunMarkers(ctx, reply, { execOn = false, conf = cfg() } = {}) {
+  const { clean, actions } = parseRunMarkers(reply)
+  if (!actions.length) return { reply, note: '', results: [] }
+
+  if (!execOn) {
+    logger.info({ actions }, '[Ella2] aksi ditolak — pengirim bukan owner/staff/admin grup')
+    return { reply: clean || 'Aksi bot cuma bisa diminta owner / admin grup ya.', note: '', results: [], denied: true }
+  }
+
+  const results = []
+  for (const a of actions.slice(0, 3)) {
+    const res = await runBotCommand(ctx, a, { allow: conf.execAllow, deny: conf.execDeny })
+    logger.info({ cmd: a, ok: res.ok, err: res.error }, '[Ella2] aksi bot')
+    results.push(res.ok ? `✅ \`${res.used}\` dijalanin.` : `⚠️ ${res.error}.`)
+  }
+  return {
+    reply: clean || 'Oke, aku jalanin ya 👍',
+    note: results.length ? `\n\n${results.join('\n')}` : '',
+    results,
+  }
+}
+
 async function runChat(ctx, text, { mode = 'onlychat', hasImage = false } = {}) {
   const conf = cfg()
   const key = storeKey(ctx)
@@ -299,6 +362,8 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false } = {}) 
   }
 
   const info = await contextFor(ctx)
+  // Boleh nyuruh Ella ngejalanin command? (owner/staff/admin grup, sesuai config)
+  const execOn = mayExec(ctx, { mode: conf.exec, isGroupAdmin: info.group?.isGroupAdmin })
   const imageNote = hasImage
     ? '\n\n[CATATAN] Dia juga mengirim gambar/stiker, tapi kamu belum bisa melihat isinya. Jangan ngarang isi gambarnya; kalau perlu, bilang singkat belum bisa lihat.'
     : ''
@@ -315,6 +380,9 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false } = {}) 
     mode,
     time: nowWIB(),
     extra: conf.systemPrompt,
+    canExec: execOn,
+    execBlocked: !execOn && conf.exec !== 'off',
+    actionList: conf.execAllow,
     // Sisa ruang buat catatan gambar (system dipotong API di 3000 char).
     maxChars: hasImage ? 2700 : 3000,
   }) + imageNote
@@ -351,10 +419,16 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false } = {}) 
     if (admission(reply)) reply = SAFE_LINE
   }
 
+  // Aksi bot: model bisa nitip baris `[[RUN: ...]]` → divalidasi & dijalanin.
+  // Penanda selalu dibuang dari teks, termasuk kalau pengirim gak berhak.
+  const applied = await applyRunMarkers(ctx, reply, { execOn, conf })
+  reply = applied.reply
+  const execNote = applied.note
+
   pushTurn(h, 'user', text)
   pushTurn(h, 'assistant', reply)
   logger.debug({ ms: tookMs, chars: reply.length }, '[Ella2] balas')
-  return { ok: true, reply, tookMs }
+  return { ok: true, reply: `${reply}${execNote}`, tookMs }
 }
 
 /* ══════════════════════ auto (tag / bales / DM) ══════════════════════ */
@@ -408,12 +482,15 @@ async function onMention(ctx) {
 }
 
 /* ══════════════════════ teks status ══════════════════════ */
-function statusText(ctx) {
+function statusText(ctx, { groupAdmin = false } = {}) {
   const p = ctx.prefix || '.'
   const h = store.get(storeKey(ctx))
   const facts = factsFor(ctx.sender)
   const kind = kindOf(ctx)
   const on = hereOn(ctx)
+  const c = cfg()
+  const role = execRoleLabel(ctx, { group: { isGroupAdmin: groupAdmin } })
+  const boleh = mayExec(ctx, { mode: c.exec, isGroupAdmin: groupAdmin })
   return [
     '🤖 *ELLA v2* — jalur Gemma',
     '',
@@ -423,6 +500,7 @@ function statusText(ctx) {
     `> Auto   : ${on ? 'AKTIF ✅' : 'MATI 💤'} (${sourceOf(ctx)})`,
     `> Global : grup ${kindLabel(getGlobalKind('ella2', 'group'))} · pribadi ${kindLabel(getGlobalKind('ella2', 'private'))}`,
     `> Persona: ${ella2PersonaIsCustom() ? 'CUSTOM' : 'DEFAULT'}`,
+    `> Aksi   : ${String(c.exec).toLowerCase() === 'off' ? 'mati' : (boleh ? 'boleh ✅' : 'gak boleh ⛔')} — kamu ${role}`,
     `> Ingatan: ${facts.length} catatan · ${h?.msgs?.length || 0} pesan`,
     '',
     '> ℹ️ Beda dengan `.ella`: persona & riwayat terpisah, otaknya Gemma.',
@@ -432,6 +510,8 @@ function statusText(ctx) {
     '📌 *Cara pakai*',
     `> ${p}ella2 <teks> — ngobrol`,
     '> tag / bales pesan Ella v2 — auto balas (kalau auto nyala)',
+    '> owner/admin bisa minta aksi: _"tutup grup"_, _"buka grup"_, _"kick dia"_, dll',
+    `> ${p}ella2 aksi — daftar aksi yang bisa dijalanin`,
     '',
     '⚙️ *Atur*',
     `> ${p}ella2 on / off — auto di chat ini`,
@@ -601,9 +681,27 @@ async function handler(ctx) {
     return ctx.reply(`🧠 Oke, Ella v2 catat: _${isi}_`)
   }
 
+  /* daftar aksi bot yang bisa diminta */
+  if (['aksi', 'action', 'cmd', 'command'].includes(sub)) {
+    const e = cfg()
+    if (String(e.exec).toLowerCase() === 'off') {
+      return ctx.reply('⚙️ Fitur aksi Ella v2 lagi *dimatiin* owner.')
+    }
+    const groupAdmin = ctx.isGroup ? await withTimeout(isGroupAdmin(ctx), 2500, false) : false
+    const boleh = mayExec(ctx, { mode: e.exec, isGroupAdmin: groupAdmin })
+    const role = execRoleLabel(ctx, { group: { isGroupAdmin: groupAdmin } })
+    return ctx.reply(
+      `⚙️ *Aksi yang bisa diminta ke Ella v2*\n\n` +
+        e.execAllow.map((a) => `> \`${a}\``).join('\n') +
+        `\n\n> Cukup ngomong biasa, contoh: _"tutup grup"_, _"buka grup"_.\n` +
+        `> Kamu terdeteksi: *${role}* ${boleh ? '✅ boleh nyuruh aksi di sini' : '⛔ belum boleh nyuruh aksi di sini'}`
+    )
+  }
+
   /* status / bantuan */
   if (!rest || ['status', 'info', 'help', 'bantuan'].includes(sub)) {
-    return ctx.reply(statusText(ctx))
+    const groupAdmin = ctx.isGroup ? await withTimeout(isGroupAdmin(ctx), 2500, false) : false
+    return ctx.reply(statusText(ctx, { groupAdmin }))
   }
 
   /* ngobrol */
@@ -623,5 +721,6 @@ addMentionHandler('ella2', onMention, 20)
 export { pluginConfig as config, handler }
 export const _internals = {
   cfg, runChat, humanError, onMention, handler, hereOn, sourceOf, statusText, admission,
-  contextFor, nowWIB, store, STORE_FILE, loadStore,
+  contextFor, nowWIB, store, STORE_FILE, loadStore, execRoleLabel, applyRunMarkers,
+  mayExec, parseRunMarkers, runBotCommand, DEFAULT_EXEC_ALLOW,
 }

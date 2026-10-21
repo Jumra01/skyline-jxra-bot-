@@ -138,6 +138,25 @@ export default {
     maxHistory: 8,          // pesan terakhir yang dikirim ke API (maks 10)
     timeoutMs: 60_000,      // batas tunggu balasan (ms) — Gemma lambat
     systemPrompt: '',       // instruksi tambahan (opsional)
+
+    // Aksi bot (Ella bisa jalanin command beneran atas permintaan):
+    exec: 'admin',          // 'owner' | 'admin' (owner/staff/admin grup) | 'off'
+    execAllow: [            // command yang boleh dijalanin lewat Ella v2
+      'g open',
+      'g close',
+      'g link',
+      'g revoke',
+      'g setname <nama>',
+      'g setdesc <teks>',
+      'kick <tag/nomor>',
+      'promote <tag/nomor>',
+      'demote <tag/nomor>',
+      'tagall <teks>',
+      'hidetag <teks>',
+      'on <welcome|bye|antilink|game>',
+      'off <welcome|bye|antilink|game>',
+    ],
+    execDeny: [],           // tambahan yang diblokir (restart/updatesc udah hard-block)
   },
 
   /* ── MEDIA WORKER (WebSocket) ──────────────────────────── */
