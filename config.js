@@ -141,8 +141,10 @@ export default {
     systemPrompt: '',       // instruksi tambahan (opsional)
 
     // Aksi bot (Ella bisa jalanin command beneran atas permintaan):
+    // Owner/staff bot = bebas command apa pun (kecuali restart/updatesc/
+    // restore/clearcache). `execAllow` = daftar buat admin grup.
     exec: 'admin',          // 'owner' | 'admin' (owner/staff/admin grup) | 'off'
-    execAllow: [            // command yang boleh dijalanin lewat Ella v2
+    execAllow: [            // aksi grup yang boleh diminta admin grup
       'g open',
       'g close',
       'g link',

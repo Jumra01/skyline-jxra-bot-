@@ -16,7 +16,8 @@
  *   • AKSI BOT: owner/staff/admin grup bisa nyuruh aksi beneran lewat obrolan
  *     ("tutup grup", "buka grup", "kick dia", ...). Model menandai balasan
  *     dengan `[[RUN: <perintah>]]`, lalu `lib/commandExec.js` yang validasi
- *     izin + jalanin command aslinya. Daftar command di `config.ella2.execAllow`.
+ *     izin + jalanin command aslinya. Daftar aksi admin grup di
+ *     `config.ella2.execAllow`; owner/staff bot bebas minta command apa pun.
  *   • FITUR UMUM: siapa pun (termasuk member) bisa minta fitur bot lewat
  *     obrolan ("cariin foto kucing" → `.pinterest kucing`, "downloadin lagu X"
  *     → `.play X`). Daftar di `config.ella2.execUser`, tetap kena cooldown +
@@ -417,11 +418,12 @@ function admission(text) {
 
 /**
  * Proses penanda `[[RUN: ...]]` dari balasan AI.
- * - Aksi admin (`execAllow`) cuma jalan kalau `execOn` true.
- * - Fitur umum (`execUser`) jalan buat siapa saja, tetap kena cooldown/emerald.
+ * - Owner/staff bot (`open`) → bebas milih command apa pun (hard-deny tetap).
+ * - Admin grup (`execOn`) → aksi di `execAllow` + fitur umum `execUser`.
+ * - Member → fitur umum `execUser` saja.
  * - Penanda yang ditolak tetap dibuang biar gak bocor ke chat.
  */
-async function applyRunMarkers(ctx, reply, { execOn = false, conf = cfg() } = {}) {
+async function applyRunMarkers(ctx, reply, { execOn = false, open = false, conf = cfg() } = {}) {
   const { clean, actions } = parseRunMarkers(reply)
   if (!actions.length) return { reply, note: '', results: [] }
 
@@ -430,12 +432,14 @@ async function applyRunMarkers(ctx, reply, { execOn = false, conf = cfg() } = {}
   const denied = []
   for (const a of actions.slice(0, 3)) {
     const name = splitCommand(a).name
-    if (execOn || userSet.has(name)) runnable.push(a)
+    // Alias (`yts`, `ytmp3`, `pin`) diresolve ke nama asli dulu.
+    const canonical = String(getFeature(name)?.name || name).toLowerCase()
+    if (open || execOn || userSet.has(name) || userSet.has(canonical)) runnable.push(a)
     else denied.push(name)
   }
 
   if (denied.length) {
-    logger.info({ denied }, '[Ella2] aksi admin ditolak — pengirim bukan owner/staff/admin grup')
+    logger.info({ denied }, '[Ella2] aksi ditolak — pengirim bukan owner/staff/admin grup')
   }
 
   const results = []
@@ -444,6 +448,7 @@ async function applyRunMarkers(ctx, reply, { execOn = false, conf = cfg() } = {}
       allow: conf.execAllow,
       deny: conf.execDeny,
       userAllow: conf.execUser,
+      open,
     })
     logger.info({ cmd: a, ok: res.ok, tier: res.tier, err: res.error }, '[Ella2] aksi bot')
     results.push(res.ok ? `✅ \`${res.used}\` dijalanin.` : `⚠️ ${res.error}.`)
@@ -490,6 +495,8 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false } = {}) 
   const info = await contextFor(ctx)
   // Boleh nyuruh Ella ngejalanin command? (owner/staff/admin grup, sesuai config)
   const execOn = mayExec(ctx, { mode: conf.exec, isGroupAdmin: info.group?.isGroupAdmin })
+  // Owner/staff bot = bebas minta command apa pun; admin grup terikat daftar.
+  const openExec = Boolean(ctx.isOwner || ctx.isStaff)
   const imageNote = hasImage
     ? '\n\n[CATATAN] Dia juga mengirim gambar/stiker, tapi kamu belum bisa melihat isinya. Jangan ngarang isi gambarnya; kalau perlu, bilang singkat belum bisa lihat.'
     : ''
@@ -507,6 +514,7 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false } = {}) 
     time: nowWIB(),
     extra: conf.systemPrompt,
     canExec: execOn,
+    openExec,
     execBlocked: !execOn && conf.exec !== 'off',
     actionList: conf.execAllow,
     featureList: conf.execUser.length ? userCatalog(conf.execUser) : [],
@@ -563,7 +571,7 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false } = {}) 
 
   // Aksi bot: model bisa nitip baris `[[RUN: ...]]` → divalidasi & dijalanin.
   // Penanda selalu dibuang dari teks, termasuk kalau pengirim gak berhak.
-  const applied = await applyRunMarkers(ctx, reply, { execOn, conf })
+  const applied = await applyRunMarkers(ctx, reply, { execOn, open: openExec, conf })
   reply = applied.reply
   const execNote = applied.note
 
@@ -830,16 +838,20 @@ async function handler(ctx) {
     const e = cfg()
     const groupAdmin = ctx.isGroup ? await withTimeout(isGroupAdmin(ctx), 2500, false) : false
     const boleh = mayExec(ctx, { mode: e.exec, isGroupAdmin: groupAdmin })
+    const open = Boolean(ctx.isOwner || ctx.isStaff)
     const role = execRoleLabel(ctx, { group: { isGroupAdmin: groupAdmin } })
     const fitur = userCatalogDetailed(e.execUser)
     return ctx.reply(
       `⚙️ *Yang bisa diminta ke Ella v2*\n\n` +
+        (open
+          ? `*Owner/staff bot* — boleh minta command bot apa pun.\n> Pengecualian: \`restart\`, \`updatesc\`, \`restore\`, \`clearcache\`.\n\n`
+          : '') +
         `*Fitur umum* — siapa aja boleh minta:\n` +
         (fitur.length ? fitur.map((f) => `> \`${f}\``).join('\n') : '> _(kosong)_') +
-        `\n\n*Aksi admin* — ${String(e.exec).toLowerCase() === 'off' ? 'lagi dimatiin owner' : 'khusus owner/admin'}:\n` +
+        `\n\n*Aksi admin grup* — ${String(e.exec).toLowerCase() === 'off' ? 'lagi dimatiin owner' : 'khusus owner/admin'}:\n` +
         e.execAllow.map((a) => `> \`${a}\``).join('\n') +
         `\n\n> Cukup ngomong biasa, contoh: _"cariin foto kucing"_, _"downloadin lagu X"_.\n` +
-        `> Kamu terdeteksi: *${role}* ${boleh ? '✅ boleh nyuruh aksi admin di sini' : '⛔ cuma bisa minta fitur umum'}`
+        `> Kamu terdeteksi: *${role}* ${open ? '✅ bebas minta command' : boleh ? '✅ boleh nyuruh aksi admin di sini' : '⛔ cuma bisa minta fitur umum'}`
     )
   }
 
