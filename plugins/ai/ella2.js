@@ -53,7 +53,7 @@ import { getSetting, setSetting } from '../../core/groupSettings.js'
 import { getGroupConfig, setGroupConfig, disableGlobalAutoAI } from '../../lib/autoai.js'
 import { kindOf, kindOfJid, parseKind, KIND_LABEL, getGlobalKind, setGlobalKind, kindLabel } from '../../lib/aiScope.js'
 import { extractFacts, remember, factsFor, formatBlock, forget } from '../../lib/aiMemory.js'
-import { gemmaChat } from '../../scraper/SKYLINE.js'
+import { gemmaChat, aiChatSkyline, isConfigured as skylineReady } from '../../scraper/SKYLINE.js'
 import { isBotMentioned, stripMention, botIdentity, withTimeout, findImgNode } from '../../lib/aiTrigger.js'
 import { mayExec, parseRunMarkers, runBotCommand, allowNames, splitCommand } from '../../lib/commandExec.js'
 import { getFeature } from '../loader.js'
@@ -722,6 +722,37 @@ async function handler(ctx) {
   const rest = String(ctx.text || '').trim()
   const ON = ['on', 'nyala', 'hidup']
   const OFF = ['off', 'mati', 'matiin', 'matikan']
+
+  /* tes koneksi otak AI — buat tau server yang bermasalah atau key-nya */
+  if (['tes', 'test', 'cek', 'diag', 'diagnosa'].includes(sub)) {
+    if (!ctx.isOwner && !ctx.isStaff && !ctx.isAdmin) return ctx.reply('Khusus owner/staff bot ya.')
+    await ctx.react('🔍')
+    const t0 = Date.now()
+    let gemma
+    try {
+      const r = await gemmaChat({ message: 'tes koneksi: balas satu kata: ok', timeoutMs: 30000, retries: 0 })
+      gemma = `✅ ok (${Date.now() - t0} ms, model ${r.model})`
+    } catch (e) {
+      gemma = `❌ status ${e?.status || 0} — ${String(e?.message || e).slice(0, 140)}`
+    }
+    const t1 = Date.now()
+    let cadangan
+    try {
+      const r = await aiChatSkyline({ message: 'tes koneksi: balas satu kata: ok', timeoutMs: 30000 })
+      cadangan = `✅ ok (${Date.now() - t1} ms)`
+    } catch (e) {
+      cadangan = `❌ status ${e?.status || 0} — ${String(e?.message || e).slice(0, 140)}`
+    }
+    return ctx.reply(
+      '🔍 *TES OTAK ELLA v2*\n\n' +
+        `> Gemma    : ${gemma}\n` +
+        `> Cadangan : ${cadangan}\n` +
+        `> API key  : ${skylineReady() ? 'terisi ✅' : 'KOSONG ❌'}\n` +
+        `> Ruang    : ${ctx.isGroup ? 'grup' : 'pribadi'}\n` +
+        `> Auto     : ${hereOn(ctx) ? 'AKTIF' : 'MATI'}\n\n` +
+        '> Kalau Gemma ❌ 503 tapi Cadangan ✅ → nanti otomatis dijawab otak cadangan.'
+    )
+  }
 
   /* on / off per chat — bisa dipilih jenisnya (harus cocok sama chat ini) */
   const kindArg = parseKind(sub)
