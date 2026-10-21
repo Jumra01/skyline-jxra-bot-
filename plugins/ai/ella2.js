@@ -391,6 +391,35 @@ function silenceElla(scope = 'chat', chat = null, kind = null) {
   }
 }
 
+/* ══════════════════════ antrian per chat ══════════════════════ */
+/**
+ * Server Gemma balas "ramai" (503/429) paling sering kalau request numpuk —
+ * di chat pribadi tiap pesan memicu request, jadi user yang ngetik cepat bisa
+ * punya 3-4 request barengan. Antrian ini bikin satu chat cuma punya SATU
+ * request jalan; pesan berikutnya nunggu (maks 45 dtk) baru dikirim.
+ */
+const CHAT_QUEUE = new Map()
+const CHAT_QUEUE_MAX_WAIT = 45_000
+
+async function withChatQueue(key, fn) {
+  const prev = CHAT_QUEUE.get(key)
+  if (prev) {
+    await Promise.race([
+      prev.catch(() => {}),
+      new Promise((r) => setTimeout(r, CHAT_QUEUE_MAX_WAIT))
+    ])
+  }
+  const run = (async () => {
+    try {
+      return await fn()
+    } finally {
+      if (CHAT_QUEUE.get(key) === run) CHAT_QUEUE.delete(key)
+    }
+  })()
+  CHAT_QUEUE.set(key, run)
+  return run
+}
+
 /* ══════════════════════ inti: panggil AI ══════════════════════ */
 function humanError(err) {
   const status = Number(err?.status) || 0
@@ -532,13 +561,13 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false } = {}) 
   let reply = ''
   let tookMs = 0
   try {
-    const r = await gemmaChat({
+    const r = await withChatQueue(storeKey(ctx), () => gemmaChat({
       message: text,
       history,
       system,
       timeoutMs: conf.timeoutMs,
       retries: conf.retries,
-    })
+    }))
     reply = r.reply
     tookMs = r.tookMs
     if (r.fallback) logger.info('[Ella2] otak Gemma ramai — dijawab otak cadangan (aichat-skyline)')
@@ -558,13 +587,13 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false } = {}) 
   if (admission(reply)) {
     logger.info('[Ella2] jawaban ngaku AI — ulang dengan instruksi identitas')
     try {
-      const r2 = await gemmaChat({
+      const r2 = await withChatQueue(storeKey(ctx), () => gemmaChat({
         message: text,
         history,
         system: `${system}\n\n${RETRY_NOTE}`,
         timeoutMs: conf.timeoutMs,
         retries: conf.retries,
-      })
+      }))
       reply = r2.reply
       tookMs = r2.tookMs
     } catch {

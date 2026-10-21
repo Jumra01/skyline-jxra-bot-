@@ -557,12 +557,20 @@ export async function gemmaChat({ message, history = [], system = '', timeoutMs 
   }
   if (system) body.system = String(system).slice(0, 3000);
 
+  // Versi "ringan": tanpa riwayat + persona dipotong. Dipakai di percobaan
+  // terakhir kalau server bilang ramai — payload kecil lebih gampang diterima
+  // waktu server penuh / kena batas ukuran.
+  const liteBody = { message: teks.slice(0, 2000) };
+  if (apikey) liteBody.apikey = apikey;
+  if (system) liteBody.system = String(system).slice(0, 1200);
+
   const budget = Math.max(5000, Number(timeoutMs) || 60000);
   const deadline = Date.now() + budget;
   const maxAttempts = Math.max(1, Math.min(4, (Number(retries) || 0) + 1));
 
   let lastErr = null;
   let attempts = 0;
+  let liteNext = false;
 
   for (let i = 1; i <= maxAttempts; i += 1) {
     const sisa = deadline - Date.now();
@@ -570,7 +578,7 @@ export async function gemmaChat({ message, history = [], system = '', timeoutMs 
     attempts = i;
 
     try {
-      const { reply, json } = await gemmaOnce(body, website, Math.max(4000, sisa));
+      const { reply, json } = await gemmaOnce(liteNext ? liteBody : body, website, Math.max(4000, sisa));
 
       breakerOk('gemma');
       return {
@@ -588,8 +596,13 @@ export async function gemmaChat({ message, history = [], system = '', timeoutMs 
 
       if (!retryable || i >= maxAttempts) break;
 
-      // Jeda 0,6s → 1,2s (+ jitter) biar gak nabrak server di detik yang sama.
-      await sleep(Math.min(2000, 600 * i) + Math.floor(Math.random() * 250));
+      // Percobaan berikutnya = terakhir? Pakai payload ringan (khusus "ramai").
+      liteNext = busy && i >= maxAttempts - 1;
+
+      // Jeda: 0,9s → 1,8s, yang "ramai" 1,5s → 3s (+ jitter) biar server
+      // sempat lega — dulu cuma 0,6s/1,2s jadi sering nabrak lagi.
+      const base = busy ? 1500 * i : 600 * i;
+      await sleep(Math.min(3000, base) + Math.floor(Math.random() * 300));
     }
   }
 
