@@ -5,6 +5,7 @@
  * aurora.js — AURORA DECK: "AURORA — UR SPECIAL PLAYER"
  */
 
+import sharp from 'sharp';
 import config from '../../config.js';
 import { sendRichJH } from '../../lib/jhrich.js';
 import { logger } from '../../core/logger.js';
@@ -53,10 +54,18 @@ async function thumbDataUri(url) {
   try {
     const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
     if (!r.ok) return '';
-    const b = Buffer.from(await r.arrayBuffer());
-    if (!b.length) return '';
-    const ct = (r.headers.get('content-type') || 'image/jpeg').split(';')[0];
-    return 'data:' + ct + ';base64,' + b.toString('base64');
+    const raw = Buffer.from(await r.arrayBuffer());
+    if (!raw.length) return '';
+    // Kecilin dulu: thumbnail asli ~30-50 KB bikin payload HTML membengkak
+    // (base64 naik 4/3) dan kartu berat dirender webview.
+    let b = raw;
+    try {
+      b = await sharp(raw)
+        .resize({ width: 400, withoutEnlargement: true })
+        .jpeg({ quality: 62 })
+        .toBuffer();
+    } catch {}
+    return 'data:image/jpeg;base64,' + b.toString('base64');
   } catch { return ''; }
 }
 
@@ -69,18 +78,33 @@ const escapeHtmlJs = (value) =>
     .replace(/</g, '\\x3C');
 
 function buildHtml({ finalTitle, finalChannel, finalDuration, videoUrl, thumbnailb64, wsUrl }) {
+  const isAudio = /\.(mp3|m4a|aac|ogg|wav|flac)(\?|$)/i.test(String(videoUrl || ''));
   const cfg = {
     title: finalTitle,
     channel: finalChannel,
     duration: finalDuration,
     videoUrl,
     wsUrl,
+    isAudio,
     autoplay: false,
     volume: 0.8,
     loop: false
   };
 
-  const htmlPayload = `<style>
+  // Audio pakai <audio> (bukan <video>) — beberapa webview gak mau decode
+  // mp3 di elemen video. Cover tetap tampil lewat <img>.
+  const mediaTag = isAudio
+    ? `<audio id="videoPlayer" preload="auto"></audio>` +
+      (thumbnailb64 ? `<img class="cover-img" src="${thumbnailb64}" alt="">` : '')
+    : `<video id="videoPlayer" playsinline webkit-playsinline preload="auto" poster="${thumbnailb64}"></video>`;
+
+  const htmlPayload = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AURORA — ${escapeHtmlJs(finalTitle)}</title>
+<style>
 *{
 -webkit-tap-highlight-color:transparent;
 -webkit-user-select:none;
@@ -214,13 +238,15 @@ background:#000;
 box-shadow:0 12px 35px rgba(0,0,0,.45),0 0 0 1px rgba(34,211,238,.14);
 cursor:pointer
 }
-.video-frame video{
+.video-frame video,
+.video-frame img.cover-img{
 width:100%;
 height:100%;
 display:block;
 background:#000;
 object-fit:contain
 }
+.video-frame img.cover-img{object-fit:cover}
 .big-play{
 position:absolute;
 inset:0;
@@ -478,6 +504,7 @@ to{background-position:300% 0}
 75%{transform:scale(1.2)}
 }
 </style>
+</head>
 
 <body>
 	<div class="player-wrap">
@@ -503,7 +530,7 @@ to{background-position:300% 0}
 				</div>
 
 				<div class="video-frame" id="videoFrame" onclick="toggleVideo()">
-					<video id="videoPlayer" playsinline webkit-playsinline preload="none" poster="${thumbnailb64}"></video>
+					${mediaTag}
 					<div class="big-play" id="bigPlay">
 						<button class="big-btn" type="button" onclick="event.stopPropagation();toggleVideo()">
 							<svg id="playIcon" viewBox="0 0 24 24">
@@ -631,6 +658,7 @@ window.VIDEO_CONFIG = {
 	duration: "${escapeHtmlJs(cfg.duration)}",
 	videoUrl: "${escapeHtmlJs(cfg.videoUrl)}",
 	wsUrl: "${escapeHtmlJs(cfg.wsUrl)}",
+	isAudio: ${cfg.isAudio},
 	autoplay: ${cfg.autoplay},
 	volume: ${cfg.volume},
 	loop: ${cfg.loop}
@@ -692,11 +720,47 @@ function updateUI() {
 	}
 }
 
+function ensureDirectSource() {
+	if (!directMode) return;
+	var url = config.videoUrl || "";
+	if (!url) return;
+	// Pasang ulang src saat user benar-benar menekan play: browser baru
+	// mulai fetch media setelah ada gesture, jadi tidak menunggu halaman.
+	if (video.readyState === 0 || video.src !== url) {
+		video.src = url;
+		video.load();
+	}
+}
+
+var directWatchdog = null;
+
+function armDirectWatchdog() {
+	if (!directMode || streamStarted || !config.wsUrl) return;
+	if (directWatchdog) clearTimeout(directWatchdog);
+	directWatchdog = setTimeout(function() {
+		directWatchdog = null;
+		if (directMode && video.readyState === 0) {
+			directMode = false;
+			startWsFallback("timeout 15s");
+		}
+	}, 15000);
+}
+
 function playVideo() {
+	ensureDirectSource();
 	var result = video.play();
 	if (result && result.catch) {
-		result.catch(function() {});
+		result.catch(function() {
+			// coba sekali lagi setelah gesture berikutnya
+			setTimeout(function() {
+				if (video.paused) {
+					try { video.load(); } catch (e) {}
+					video.play().catch(function() {});
+				}
+			}, 400);
+		});
 	}
+	armDirectWatchdog();
 	updateUI();
 }
 
@@ -959,8 +1023,61 @@ function startVideoStream(cfg) {
 	});
 }
 
-startVideoStream(config);
-</script>`;
+// [UPDATE] Putar langsung dari URL API (progressive / Range 206) biar audio
+// bisa bunyi dalam hitungan detik. Dulu seluruh file (9-45 MB) harus diunduh
+// lewat WebSocket + ditampung di array memori baru bisa play — di HP lambat
+// itu berjam-jam terasa seperti "lagu gak bisa diputar". WS sekarang cuma
+// fallback kalau URL langsung gagal (403/CORS/blokir).
+var streamStarted = false;
+var directMode = false;
+
+function startWsFallback(reason) {
+	if (streamStarted) return;
+	streamStarted = true;
+	writeLog("Direct gagal (" + reason + ") — pakai WebSocket");
+	try {
+		video.removeAttribute("src");
+		video.load();
+	} catch (e) {}
+	startVideoStream(config);
+}
+
+function attachDirectSource() {
+	var url = config.videoUrl || "";
+	if (!url) {
+		startWsFallback("URL kosong");
+		return;
+	}
+	directMode = true;
+	writeLog("Direct stream: " + url.slice(-32));
+	video.preload = config.isAudio ? "auto" : "metadata";
+	video.src = url;
+	video.load();
+	setWsState("DIRECT");
+}
+
+video.addEventListener("loadedmetadata", function() {
+	if (!directMode) return;
+	setWsState("DIRECT");
+	var mimeEl = document.getElementById("dbgMime");
+	if (mimeEl) mimeEl.textContent = config.isAudio ? "audio" : "video";
+	writeLog("Siap | durasi " + formatTime(video.duration));
+});
+
+video.addEventListener("error", function() {
+	if (!directMode || streamStarted) return;
+	if (!config.wsUrl) {
+		setWsState("ERROR");
+		return;
+	}
+	directMode = false;
+	startWsFallback("kode " + (video.error ? video.error.code : "?"));
+});
+
+attachDirectSource();
+</script>
+</body>
+</html>`;
 
   return htmlPayload;
 }
