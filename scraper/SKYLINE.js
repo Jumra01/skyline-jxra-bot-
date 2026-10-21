@@ -604,6 +604,118 @@ export async function omniEdit({ image, prompt, timeout = 180000, retries = 1 } 
   );
 }
 
+/* ══════════════ AI gambar: Nanobana (edit) & Super HD (upscale) ══════════════
+ *
+ *   GET /api/ai/nanobana?url=<gambar_publik>&prompt=<teks>&apikey=<key>
+ *   GET /api/ai/superhd?url=<gambar_publik>&apikey=<key>
+ *
+ * Keduanya balikin BINER gambar (bukan JSON). Sama seperti fitur Skyline lain,
+ * request lewat gerbang `skylineSchedule()` + retry status ramai, dan butuh
+ * gambar yang bisa diakses publik (pakai `lib/uploadImage.js` dulu).
+ */
+export const NANO_BANANA_PATH = '/api/ai/nanobana';
+export const SUPER_HD_PATH = '/api/ai/superhd';
+
+async function imageApi(path, params, timeout) {
+  const { website, apikey } = skylineCreds();
+  if (!apikey) throw new SkylineKeyError(website);
+
+  const qs = new URLSearchParams({ ...params, apikey }).toString();
+  let res;
+  try {
+    res = await skylineSchedule(() =>
+      fetch(`${website}${path}?${qs}`, {
+        headers: { Accept: 'image/*', 'User-Agent': UA },
+        signal: AbortSignal.timeout(timeout)
+      })
+    );
+  } catch (err) {
+    const msg = err?.name === 'TimeoutError'
+      ? 'Server AI gambar kelamaan (timeout)'
+      : `Gagal konek API Skyline (${err?.message || err})`;
+    throw new SkylineApiError(msg, 0);
+  }
+
+  const ct = String(res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+  if (res.ok && ct.startsWith('image/')) {
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (!buf.length) throw new SkylineApiError('Hasil gambar kosong dari server', res.status);
+    return { buffer: buf, mimetype: ct };
+  }
+
+  const body = await res.text().catch(() => '');
+  throw new SkylineApiError(parseApiError(body) || `Gagal ngolah gambar (HTTP ${res.status})`, res.status, body);
+}
+
+/* ══════════════ Upload CDN (buat gambar yang butuh URL publik) ══════════════
+ *
+ *   POST /api/tools/cdn-upload  (multipart: file) + Authorization: Bearer <key>
+ *   → { data: { url: '/uploads/<file>' } }  → dijadikan URL absolut.
+ *
+ * Nanobana & Super HD butuh URL gambar publik; upload lewat server sendiri
+ * (satu pintu, sama kayak fitur Skyline lain) lebih awet daripada hosting luar.
+ */
+export const CDN_UPLOAD_PATH = '/api/tools/cdn-upload';
+
+export async function uploadImage(buffer, { mimetype = 'image/jpeg', filename = 'image.jpg', timeout = 60000 } = {}) {
+  const { website, apikey } = skylineCreds();
+  if (!apikey) throw new SkylineKeyError(website);
+  if (!buffer?.length) throw new SkylineApiError('File kosong', 400);
+
+  const form = new FormData();
+  const name = /\.[a-z0-9]{2,5}$/i.test(filename)
+    ? filename
+    : `${filename}${mimetype.includes('png') ? '.png' : mimetype.includes('webp') ? '.webp' : mimetype.includes('gif') ? '.gif' : '.jpg'}`;
+  form.append('file', new Blob([buffer], { type: mimetype }), name);
+
+  let res;
+  try {
+    res = await skylineSchedule(() =>
+      fetch(`${website}${CDN_UPLOAD_PATH}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apikey}`, Accept: 'application/json', 'User-Agent': UA },
+        body: form,
+        signal: AbortSignal.timeout(timeout)
+      })
+    );
+  } catch (err) {
+    const msg = err?.name === 'TimeoutError'
+      ? 'Upload CDN kelamaan (timeout)'
+      : `Gagal konek upload CDN (${err?.message || err})`;
+    throw new SkylineApiError(msg, 0);
+  }
+
+  const body = await res.text().catch(() => '');
+  let json = null;
+  try { json = JSON.parse(body); } catch { /* bukan JSON */ }
+
+  const url = json?.data?.url;
+  if (!res.ok || !url) {
+    throw new SkylineApiError(parseApiError(body) || `Upload CDN gagal (HTTP ${res.status})`, res.status, body);
+  }
+  return absUrl(website, url);
+}
+
+/** Edit gambar pakai AI Nanobana. `image` = URL publik. */
+export async function nanoBanana({ image, prompt, timeout = 180000, retries = 1 } = {}) {
+  const img = String(image || '').trim();
+  const text = String(prompt || '').trim();
+  if (!img) throw new SkylineApiError('Gambar kosong', 400);
+  if (!text) throw new SkylineApiError('Prompt kosong', 400);
+  return withRetry(
+    'nanobana',
+    () => imageApi(NANO_BANANA_PATH, { url: img, prompt: text.slice(0, 1000) }, timeout),
+    retries
+  );
+}
+
+/** Naikin kualitas gambar (AI upscale). `image` = URL publik. */
+export async function superHd({ image, timeout = 180000, retries = 1 } = {}) {
+  const img = String(image || '').trim();
+  if (!img) throw new SkylineApiError('Gambar kosong', 400);
+  return withRetry('superhd', () => imageApi(SUPER_HD_PATH, { url: img }, timeout), retries);
+}
+
 /* ══════════════ AI chat (Ella) ══════════════ */
 
 /**
@@ -889,6 +1001,9 @@ export default {
   aiChatSkyline,
   gemmaChat,
   omniEdit,
+  nanoBanana,
+  superHd,
+  uploadImage,
   skylineSchedule,
   keyHint,
   MAX_AUDIO_BYTES,

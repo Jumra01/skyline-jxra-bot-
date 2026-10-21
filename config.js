@@ -53,7 +53,7 @@ export default {
   ],
 
   /* ── GRUP ──────────────────────────────────────────────── */
-  toggleable: ['welcome', 'bye', 'antilink', 'game'], // on/off per grup
+  toggleable: ['welcome', 'bye', 'antilink', 'game', 'antidelete'], // on/off per grup
   antilink: {
     defaultBlacklist: 'wa.me,chat.whatsapp.com,t.me,telegram.me',
   },

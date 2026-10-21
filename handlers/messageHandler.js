@@ -17,6 +17,7 @@ import { sendUsageCard, getNotifyGlobal } from '../lib/emeraldCard.js'
 import { sendTyping, markRead } from '../core/presence.js'
 import { getGlobal } from '../core/groupSettings.js'
 import { getMentionHandler } from '../core/mentionTrigger.js'
+import { runMessageHooks } from '../core/liveHooks.js'
 import { reactTo } from '../core/react.js'
 
 const richHandlers = new Map()
@@ -157,6 +158,11 @@ export async function route(client, event) {
   }
 
   const ctx = buildContext(client, event)
+
+  // Hook "semua pesan" (dipakai .afk & .antidelete). Fire-and-forget biar
+  // nggak nahan pemrosesan command.
+  void runMessageHooks(ctx)
+
   const who = `${ctx.pushName || 'Anonim'} +${ctx.senderNumber}`
   const where = ctx.isGroup ? 'GRUP' : 'PRIV'
 

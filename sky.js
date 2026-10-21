@@ -31,6 +31,7 @@ import { maintenance } from './core/rpg.js'
 import { runEval } from './core/evalRunner.js'
 import { runExec } from './core/execRunner.js'
 import { reactTo } from './core/react.js'
+import { runProtocolHooks } from './core/liveHooks.js'
 
 const EVAL_PREFIX = /^=?> /
 const EXEC_PREFIX = /^\$/
@@ -200,6 +201,11 @@ async function main() {
   setInterval(maintenance, 6 * 60 * 60 * 1000)
 
   setupOwnerMetaHandler(client)
+
+  // protocolMessage (mis. pesan dihapus/revoke) — dipakai `.antidelete`.
+  client.on('message_protocol', (event) => {
+    void runProtocolHooks(client, event)
+  })
 
   client.on('message', (event) => {
     void checkAntilink(client, event)
