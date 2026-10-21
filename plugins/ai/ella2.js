@@ -53,7 +53,7 @@ import { getSetting, setSetting } from '../../core/groupSettings.js'
 import { getGroupConfig, setGroupConfig, disableGlobalAutoAI } from '../../lib/autoai.js'
 import { kindOf, kindOfJid, parseKind, KIND_LABEL, getGlobalKind, setGlobalKind, kindLabel } from '../../lib/aiScope.js'
 import { extractFacts, remember, factsFor, formatBlock, forget } from '../../lib/aiMemory.js'
-import { gemmaChat, isConfigured as skylineReady } from '../../scraper/SKYLINE.js'
+import { gemmaChat, isConfigured as skylineReady, keyTag } from '../../scraper/SKYLINE.js'
 import { isBotMentioned, stripMention, botIdentity, withTimeout, findImgNode } from '../../lib/aiTrigger.js'
 import { mayExec, parseRunMarkers, runBotCommand, allowNames, splitCommand } from '../../lib/commandExec.js'
 import { getFeature } from '../loader.js'
@@ -603,6 +603,7 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false } = {}) 
       {
         status: err?.status || 0,
         attempts: err?.attempts || 1,
+        key: keyTag(),
         err: String(err?.message || err).slice(0, 160),
       },
       '[Ella2] AI gagal'
@@ -770,10 +771,20 @@ async function handler(ctx) {
     } catch (e) {
       gemma = `❌ status ${e?.status || 0} — ${String(e?.message || e).slice(0, 140)}`
     }
+    // IP keluar bot — kalau server membatasi per-IP (bukan per-key), ini buktinya.
+    let ipBot = '-'
+    try {
+      const res = await fetch('https://api.ipify.org?format=json', { signal: AbortSignal.timeout(6000) })
+      const j = await res.json().catch(() => null)
+      ipBot = j?.ip || '-'
+    } catch {
+      ipBot = 'gagal dicek'
+    }
     return ctx.reply(
       '🔍 *TES OTAK ELLA v2*\n\n' +
         `> Gemma     : ${gemma}\n` +
-        `> API key  : ${skylineReady() ? 'terisi ✅' : 'KOSONG ❌'}\n` +
+        `> IP bot    : ${ipBot}\n` +
+        `> API key  : ${skylineReady() ? `terisi ✅ ${keyTag()}` : 'KOSONG ❌'}\n` +
         `> Ruang    : ${ctx.isGroup ? 'grup' : 'pribadi'}\n` +
         `> Auto     : ${hereOn(ctx) ? 'AKTIF' : 'MATI'}\n\n` +
         '> Ella v2 cuma pakai otak Gemma (tanpa cadangan).'

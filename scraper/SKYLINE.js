@@ -70,6 +70,17 @@ export function isConfigured() {
   return !!skylineCreds().apikey;
 }
 
+/**
+ * Sidik jari API key buat log/tes: cukup buat mastiin key mana yang kepakai
+ * (mis. `sky_ol19bo2…of1rl`), sengaja bukan key utuh.
+ */
+export function keyTag() {
+  const k = String(skylineCreds().apikey || '');
+  if (!k) return 'kosong';
+  if (k.length <= 14) return `${k.slice(0, 4)}…${k.slice(-2)}`;
+  return `${k.slice(0, 11)}…${k.slice(-4)} (${k.length} char)`;
+}
+
 /* ══════════════ breaker (biar gak nunggu tiap request kalau API down) ══════════════ */
 const BREAKER_LIMIT = 3;
 const BREAKER_MS = 5 * 60 * 1000;
@@ -637,6 +648,7 @@ export function keyHint(ctx) {  const { website } = skylineCreds();
 export default {
   skylineCreds,
   isConfigured,
+  keyTag,
   ytSearch,
   ytInfo,
   downloadAudio,
