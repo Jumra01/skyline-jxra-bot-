@@ -6,6 +6,7 @@
  * open/close/setname/setdesc/link/revoke — semua method resmi zapo.
  */
 import { isGroupAdmin } from '../../core/permission.js'
+import { waErrText, waErrorCode } from '../../lib/waGroup.js'
 
 const pluginConfig = {
   name: "g",
@@ -60,14 +61,38 @@ async function handler(ctx) {
           await ctx.reply(`✅ Nama grup diganti jadi "${rest}".`)
           return
 
-        case 'setdesc':
+        case 'setdesc': {
           if (!rest) {
             await ctx.reply(`Format: ${ctx.prefix}g setdesc <deskripsi baru>`)
             return
           }
-          await g.setDescription(ctx.chat, rest)
+          if (rest.length > 512) {
+            await ctx.reply(`⚠️ Deskripsi kepanjangan (${rest.length}/512 karakter).`)
+            return
+          }
+
+          // `prev` = id deskripsi yang sekarang: tanpa itu WhatsApp kadang
+          // nolak dengan `409 conflict` (dianggap bentrok sama versi lama).
+          let meta = null
+          try {
+            meta = await g.queryGroupMetadata(ctx.chat)
+          } catch { /* lanjut tanpa prev */ }
+
+          if (meta && (meta.desc ?? '') === rest) {
+            await ctx.reply('ℹ️ Deskripsi grup udah sama kayak gitu.')
+            return
+          }
+
+          try {
+            await g.setDescription(ctx.chat, rest, meta?.descId)
+          } catch (err) {
+            if (waErrorCode(err) !== 409) throw err
+            // 409 bisa juga muncul kalau id deskripsi basi → ulang tanpa prev.
+            await g.setDescription(ctx.chat, rest)
+          }
           await ctx.reply('✅ Deskripsi grup diperbarui.')
           return
+        }
 
         case 'link': {
           const code = await g.queryInviteCode(ctx.chat)
@@ -92,7 +117,7 @@ async function handler(ctx) {
           )
       }
     } catch (err) {
-      await ctx.reply(`😵 Gagal: ${String(err.message).slice(0, 120)}`)
+      await ctx.reply(`😵 Gagal: ${waErrText(err)}`)
     }
   }
 

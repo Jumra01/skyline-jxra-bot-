@@ -72,6 +72,8 @@ const DEFAULT_EXEC_ALLOW = [
   'g revoke',
   'g setname <nama>',
   'g setdesc <teks>',
+  'setwelcome <teks>',
+  'setbye <teks>',
   'kick <tag/nomor>',
   'promote <tag/nomor>',
   'demote <tag/nomor>',
