@@ -9,6 +9,12 @@ import sharp from 'sharp';
 import config from '../../config.js';
 import { sendRichJH } from '../../lib/jhrich.js';
 import { logger } from '../../core/logger.js';
+import {
+  ytSearch as skylineSearch,
+  ytInfo as skylineInfo,
+  isConfigured as skylineReady
+} from '../../scraper/SKYLINE.js';
+import { jhydl } from '../../scraper/YT-DL.js';
 
 const API_BASE = 'https://api.jhx.my.id';
 const API_HEADERS = {
@@ -49,10 +55,89 @@ async function ytDownload(url, format) {
   return json.data;
 }
 
+const AUDIO_FORMAT = /^(mp3|m4a|aac|ogg|wav|flac)$/i;
+const YTDL_QUALITIES = ['4k', '1440', '1080', '720', '480', '320', '240', '144'];
+
+/** Samakan nama format dengan yang didukung YT-DL (savenow). */
+function ytdlFormat(format) {
+  const f = String(format || 'mp3').toLowerCase();
+  if (AUDIO_FORMAT.test(f)) return f;
+  if (f === '2160') return '4k';
+  if (f === '360') return '480';
+  return YTDL_QUALITIES.includes(f) ? f : '720';
+}
+
+/** Pilih quality video paling dekat dengan yang diminta (default: tertinggi). */
+function pickQuality(list, height) {
+  const arr = (Array.isArray(list) ? list : []).filter((q) => q?.url);
+  if (!arr.length) return null;
+  if (!height) {
+    return arr.slice().sort((a, b) => (Number(b.height) || 0) - (Number(a.height) || 0))[0];
+  }
+  const exact = arr.find((q) => Number(q.height) === Number(height));
+  if (exact) return exact;
+  return arr.slice().sort(
+    (a, b) => Math.abs((Number(a.height) || 0) - height) - Math.abs((Number(b.height) || 0) - height)
+  )[0];
+}
+
+/**
+ * Ambil link media buat player.
+ * Urutan sama seperti `.play`: API Skyline (skyline.web.id) dulu — link-nya
+ * sudah bawa apikey, jadi bisa langsung di-stream webview tanpa unduh penuh —
+ * lalu YT-DL (savenow, sumber cadangan `.play`), terakhir API lama
+ * `api.jhx.my.id` yang sering gagal/expired.
+ */
+async function resolveSource(info, format) {
+  const wantAudio = AUDIO_FORMAT.test(String(format || 'mp3'));
+
+  if (skylineReady()) {
+    try {
+      const meta = await skylineInfo(info.url);
+      const title = meta.title || info.title;
+      const thumbnail = meta.thumbnail || info.thumbnail;
+      const duration = meta.duration || info.duration || '';
+      const url = wantAudio
+        ? meta.audioUrl
+        : (pickQuality(meta.qualities, Number(format))?.url || meta.videoUrl);
+      if (url) return { url, title, thumbnail, duration, via: 'skyline' };
+      logger.warn('[Aurora] Skyline gak ngasih link ' + (wantAudio ? 'audio' : 'video') + ' — pakai sumber cadangan');
+    } catch (err) {
+      logger.warn('[Aurora] Skyline gagal (' + (err?.message || err) + ') — pakai sumber cadangan');
+    }
+  }
+
+  // YT-DL / savenow — jalur cadangan yang dipakai `.play`.
+  try {
+    const res = await jhydl.download(info.url, ytdlFormat(format));
+    if (res?.download_url) {
+      return {
+        url: res.download_url,
+        title: res.title || info.title,
+        thumbnail: res.image || info.thumbnail,
+        duration: info.duration || '',
+        via: 'ytdl'
+      };
+    }
+    if (res?.error) logger.warn('[Aurora] YT-DL: ' + res.error);
+  } catch (err) {
+    logger.warn('[Aurora] YT-DL gagal (' + (err?.message || err) + ')');
+  }
+
+  const data = await ytDownload(info.url, format);
+  return {
+    url: data.url,
+    title: data.title || info.title,
+    thumbnail: data.thumbnail || info.thumbnail,
+    duration: data.duration || info.duration || '',
+    via: 'legacy'
+  };
+}
+
 async function thumbDataUri(url) {
   if (!url) return '';
   try {
-    const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    const r = await fetch(url, { signal: AbortSignal.timeout(10000) });
     if (!r.ok) return '';
     const raw = Buffer.from(await r.arrayBuffer());
     if (!raw.length) return '';
@@ -77,8 +162,12 @@ const escapeHtmlJs = (value) =>
     .replace(/\$\{/g, '\\${')
     .replace(/</g, '\\x3C');
 
-function buildHtml({ finalTitle, finalChannel, finalDuration, videoUrl, thumbnailb64, wsUrl }) {
-  const isAudio = /\.(mp3|m4a|aac|ogg|wav|flac)(\?|$)/i.test(String(videoUrl || ''));
+function buildHtml({ finalTitle, finalChannel, finalDuration, videoUrl, thumbnailb64, wsUrl, isAudio: audioHint }) {
+  // URL dari YT-DL/savenow gak punya ekstensi (`/api/v2/download/<hash>`),
+  // jadi jenis media ditentukan dari format yang diminta, bukan dari URL.
+  const isAudio = typeof audioHint === 'boolean'
+    ? audioHint
+    : /\.(mp3|m4a|aac|ogg|wav|flac)(\?|$)/i.test(String(videoUrl || ''));
   const cfg = {
     title: finalTitle,
     channel: finalChannel,
@@ -91,12 +180,10 @@ function buildHtml({ finalTitle, finalChannel, finalDuration, videoUrl, thumbnai
     loop: false
   };
 
-  // Audio pakai <audio> (bukan <video>) — beberapa webview gak mau decode
-  // mp3 di elemen video. Cover tetap tampil lewat <img>.
-  const mediaTag = isAudio
-    ? `<audio id="videoPlayer" preload="auto"></audio>` +
-      (thumbnailb64 ? `<img class="cover-img" src="${thumbnailb64}" alt="">` : '')
-    : `<video id="videoPlayer" playsinline webkit-playsinline preload="auto" poster="${thumbnailb64}"></video>`;
+  // Selalu pakai <video>: elemen <audio> tanpa kotak render sering diabaikan
+  // webview WhatsApp (kartu tampil, tapi suara gak pernah keluar). Untuk mp3,
+  // poster thumbnail dipakai sebagai cover.
+  const mediaTag = `<video id="videoPlayer" playsinline webkit-playsinline preload="auto" poster="${thumbnailb64}"></video>`;
 
   const htmlPayload = `<!DOCTYPE html>
 <html>
@@ -247,6 +334,16 @@ background:#000;
 object-fit:contain
 }
 .video-frame img.cover-img{object-fit:cover}
+.player-status{
+margin-top:6px;
+font-size:11px;
+line-height:1.35;
+letter-spacing:.3px;
+color:rgba(234,255,245,.55);
+min-height:15px
+}
+.player-status.warn{color:#fbbf24}
+.player-status.err{color:#f87171}
 .big-play{
 position:absolute;
 inset:0;
@@ -547,6 +644,7 @@ to{background-position:300% 0}
 				<div class="info">
 					<div class="song-title" id="songTitle">Unknown Video</div>
 					<div class="artist" id="artist">Unknown Channel</div>
+					<div class="player-status" id="playerStatus">Tekan play buat mulai</div>
 				</div>
 
 				<div class="progress">
@@ -708,6 +806,13 @@ function formatTime(seconds) {
 	return min + ":" + sec;
 }
 
+function setStatus(text, kind) {
+	var el = document.getElementById("playerStatus");
+	if (!el) return;
+	el.textContent = text;
+	el.className = "player-status" + (kind ? " " + kind : "");
+}
+
 function updateUI() {
 	if (video.paused) {
 		smallPlayIcon.style.display = "block";
@@ -741,25 +846,37 @@ function armDirectWatchdog() {
 		directWatchdog = null;
 		if (directMode && video.readyState === 0) {
 			directMode = false;
-			startWsFallback("timeout 15s");
+			startWsFallback("timeout 8s");
 		}
-	}, 15000);
+	}, 8000);
+}
+
+// Webview WA kadang cuma ngizinin audio mulai dalam keadaan mute
+// (kebijakan autoplay). Coba normal dulu, kalau ditolak mute sebentar
+// lalu unmute lagi — biar user tetap dengar suaranya.
+function safePlay() {
+	var p = video.play();
+	if (!p || !p.catch) return;
+	p.catch(function(err) {
+		writeLog("play() ditolak: " + ((err && err.name) || "?"));
+		video.muted = true;
+		var p2 = video.play();
+		if (!p2 || !p2.then) return;
+		p2.then(function() {
+			setTimeout(function() {
+				video.muted = false;
+			}, 350);
+		}).catch(function(e2) {
+			writeLog("play() gagal: " + ((e2 && e2.name) || "?"));
+			setWsState("BLOCKED");
+		});
+	});
 }
 
 function playVideo() {
+	setStatus("Menyambung ke sumber audio…", "");
 	ensureDirectSource();
-	var result = video.play();
-	if (result && result.catch) {
-		result.catch(function() {
-			// coba sekali lagi setelah gesture berikutnya
-			setTimeout(function() {
-				if (video.paused) {
-					try { video.load(); } catch (e) {}
-					video.play().catch(function() {});
-				}
-			}, 400);
-		});
-	}
+	safePlay();
 	armDirectWatchdog();
 	updateUI();
 }
@@ -888,6 +1005,7 @@ function updateWsProgress() {
 		if (el) el.textContent = pct.toFixed(1) + "%";
 		el = document.getElementById("dbgBarFill");
 		if (el) el.style.width = pct.toFixed(1) + "%";
+		if (streamStarted && !wsDone) setStatus("Mengunduh " + pct.toFixed(0) + "% — jangan tutup kartu", "warn");
 	}
 	el = document.getElementById("dbgChunks");
 	if (el) el.textContent = String(wsChunks.length);
@@ -910,6 +1028,7 @@ function finishWsDownload(cfg) {
 	video.src = wsObjectUrl;
 	video.load();
 	writeLog("Player ready");
+	setStatus("Siap — memutar", "");
 	if (wsVideo) {
 		try {
 			wsVideo.close();
@@ -1035,6 +1154,7 @@ function startWsFallback(reason) {
 	if (streamStarted) return;
 	streamStarted = true;
 	writeLog("Direct gagal (" + reason + ") — pakai WebSocket");
+	setStatus("Sumber lambat — ngambil lewat WebSocket…", "warn");
 	try {
 		video.removeAttribute("src");
 		video.load();
@@ -1056,16 +1176,36 @@ function attachDirectSource() {
 	setWsState("DIRECT");
 }
 
+video.addEventListener("playing", function() {
+	setStatus("Memutar", "");
+});
+
+video.addEventListener("waiting", function() {
+	setStatus("Buffering… tunggu sinyal", "warn");
+});
+
+video.addEventListener("stalled", function() {
+	setStatus("Koneksi lambat — masih buffering", "warn");
+});
+
 video.addEventListener("loadedmetadata", function() {
 	if (!directMode) return;
 	setWsState("DIRECT");
+	setStatus("Siap — durasi " + formatTime(video.duration), "");
 	var mimeEl = document.getElementById("dbgMime");
 	if (mimeEl) mimeEl.textContent = config.isAudio ? "audio" : "video";
 	writeLog("Siap | durasi " + formatTime(video.duration));
 });
 
 video.addEventListener("error", function() {
-	if (!directMode || streamStarted) return;
+	var code = video.error ? video.error.code : 0;
+	var msg = video.error && video.error.message ? " | " + video.error.message : "";
+	writeLog("Media error " + code + msg);
+	setStatus("Gagal memutar (kode " + code + ") — coba tekan play lagi", "err");
+	if (!directMode || streamStarted) {
+		if (code) setWsState("ERROR " + code);
+		return;
+	}
 	if (!config.wsUrl) {
 		setWsState("ERROR");
 		return;
@@ -1122,24 +1262,49 @@ async function handler(ctx) {
       let info;
       if (/^https?:\/\//i.test(query)) {
         info = { url: query, title: 'Aurora Stream', artist: 'skyline-JXRA Stream', thumbnail: '' };
-      } else {
+      } else if (skylineReady()) {
+        try {
+          const results = await skylineSearch(query, 8);
+          const v = results[0];
+          if (v?.url) {
+            info = {
+              url: v.url,
+              title: v.title || 'Unknown',
+              artist: v.artist || v.channel || 'skyline-JXRA Stream',
+              thumbnail: v.thumbnail || ''
+            };
+          }
+        } catch (err) {
+          logger.warn('[Aurora] Skyline search gagal (' + (err?.message || err) + ') — pakai API cadangan');
+        }
+      }
+      if (!info?.url) {
         const results = await ytSearch(query);
         const v = results[0];
         info = { url: v.url, title: v.title || 'Unknown', artist: v.artist || 'skyline-JXRA Stream', thumbnail: v.thumbnail || '' };
       }
       if (!info?.url) throw new Error('URL YouTube gak ketemu');
 
-      const data = await ytDownload(info.url, format);
-      if (!data?.url) throw new Error('Link final gak dapet');
+      const media = await resolveSource(info, format);
+      if (!media?.url) throw new Error('Link final gak dapet');
 
-      const finalTitle = data.title || info.title || 'Unknown Video';
+      const finalTitle = media.title || info.title || 'Unknown Video';
       const finalChannel = info.artist || 'Unknown Channel';
-      const finalDuration = data.duration || '';
-      const thumbnailb64 = await thumbDataUri(data.thumbnail || info.thumbnail);
+      const finalDuration = media.duration || '';
+      // Thumbnail bisa dari sumber mana saja yang hidup — coba dua-duanya
+      // paralel biar gak nambah waktu tunggu.
+      const [thumbA, thumbB] = await Promise.all([
+        thumbDataUri(media.thumbnail),
+        thumbDataUri(info.thumbnail)
+      ]);
+      const thumbnailb64 = thumbA || thumbB;
 
-      const wsUrl = WS_WORKER + '?url=' + encodeURIComponent(data.url);
+      logger.debug('[Aurora] sumber media: ' + media.via + ' | ' + format + ' | ' + media.url.slice(0, 80));
 
-      const htmlPayload = buildHtml({ finalTitle, finalChannel, finalDuration, videoUrl: data.url, thumbnailb64, wsUrl });
+      const wsMime = AUDIO_FORMAT.test(String(format || 'mp3')) ? 'audio/mpeg' : 'video/mp4';
+      const wsUrl = WS_WORKER + '?url=' + encodeURIComponent(media.url) + '&mime=' + encodeURIComponent(wsMime);
+
+      const htmlPayload = buildHtml({ finalTitle, finalChannel, finalDuration, videoUrl: media.url, thumbnailb64, wsUrl, isAudio: AUDIO_FORMAT.test(String(format || 'mp3')) });
 
       const sent = await sendRichJH(ctx, htmlPayload);
 
