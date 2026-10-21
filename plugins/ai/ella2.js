@@ -5,8 +5,8 @@
  * ella2.js — AI chat **Ella v2** (otak: model Gemma di skyline.web.id).
  *
  *   • Otak: `POST /api/ai/gemma` (lihat `scraper/SKYLINE.js` → `gemmaChat`).
- *     API key opsional — pakai key yang sama dengan `.play`/`.ella`, kalau
- *     kosong tetap jalan (dihitung per IP).
+ *     Endpoint ini WAJIB apikey — pakai key yang sama dengan `.play`/`.ella`
+ *     (`api.skyline.apikey` / env SKYLINE_API_KEY).
  *   • Persona: baru & terpisah dari `.ella` — bisa diubah `.ella2 persona`.
  *   • Ingatan: riwayat per nomor (`data/ella2-chat.json`) + fakta penting
  *     bersama `lib/aiMemory.js` (sama seperti `.bot`/`.ella`).
@@ -17,10 +17,14 @@
  *     ("tutup grup", "buka grup", "kick dia", ...). Model menandai balasan
  *     dengan `[[RUN: <perintah>]]`, lalu `lib/commandExec.js` yang validasi
  *     izin + jalanin command aslinya. Daftar command di `config.ella2.execAllow`.
+ *   • FITUR UMUM: siapa pun (termasuk member) bisa minta fitur bot lewat
+ *     obrolan ("cariin foto kucing" → `.pinterest kucing`, "downloadin lagu X"
+ *     → `.play X`). Daftar di `config.ella2.execUser`, tetap kena cooldown +
+ *     potongan emerald seperti command manual.
  *
  * Perintah:
  *   `.ella2 <teks>`           chat
- *   `.ella2 aksi`             lihat command yang bisa diminta
+ *   `.ella2 aksi`             lihat fitur umum + aksi admin yang bisa diminta
  *   `.ella2 on|off`           auto di chat ini (admin grup / DM sendiri)
  *   `.ella2 grup|pribadi on|off`  eksplisit per jenis chat
  *   `.ella2 global on|off`    auto di semua chat (owner) — bisa dipisah:
@@ -50,7 +54,8 @@ import { kindOf, kindOfJid, parseKind, KIND_LABEL, getGlobalKind, setGlobalKind,
 import { extractFacts, remember, factsFor, formatBlock, forget } from '../../lib/aiMemory.js'
 import { gemmaChat } from '../../scraper/SKYLINE.js'
 import { isBotMentioned, stripMention, botIdentity, withTimeout, findImgNode } from '../../lib/aiTrigger.js'
-import { mayExec, parseRunMarkers, runBotCommand } from '../../lib/commandExec.js'
+import { mayExec, parseRunMarkers, runBotCommand, allowNames, splitCommand } from '../../lib/commandExec.js'
+import { getFeature } from '../loader.js'
 import { isAdmission } from '../../lib/ella.js'
 import {
   buildElla2System, readElla2Persona, writeElla2Persona, ella2PersonaIsCustom,
@@ -83,11 +88,74 @@ const DEFAULT_EXEC_ALLOW = [
   'off <welcome|bye|antilink|game>',
 ]
 
+/**
+ * FITUR UMUM yang boleh dijalanin Ella v2 atas nama siapa pun (bukan aksi
+ * admin). Yang di sini tetap kena cooldown + potongan emerald seperti kalau
+ * user ngetik command-nya sendiri.
+ */
+const DEFAULT_EXEC_USER = [
+  'pinterest',
+  'play',
+  'yta',
+  'ytv',
+  'ytsearch',
+  'tiktok',
+  'ig',
+  'fb',
+  'twitter',
+  'spotify',
+  'sticker',
+  'toimg',
+  'brat',
+  'smeme',
+  'iqc',
+  'omniedit',
+  'hd',
+  'unblur',
+  'removebg',
+  'tomp3',
+  'tourl',
+  'ping',
+  'menu',
+  'balance',
+  'daily',
+]
+
+/** Label pendek buat prompt (command → contoh pakai + kegunaan). */
+const USER_HINTS = {
+  pinterest: 'pinterest <kata kunci> — cari gambar',
+  play: 'play <judul> — cari & kirim lagu',
+  yta: 'yta <judul/link> — audio YouTube',
+  ytv: 'ytv <judul/link> — video YouTube',
+  ytsearch: 'ytsearch <kata kunci> — cari video YouTube',
+  tiktok: 'tiktok <link> — download TikTok',
+  ig: 'ig <link> — download Instagram',
+  fb: 'fb <link> — download Facebook',
+  twitter: 'twitter <link> — download X/Twitter',
+  spotify: 'spotify <judul> — cari & download lagu Spotify',
+  sticker: 'sticker — gambar/video yang dibalas jadi stiker',
+  toimg: 'toimg — stiker yang dibalas jadi gambar',
+  brat: 'brat <teks> — stiker teks ala brat',
+  smeme: 'smeme <atas> | <bawah> — stiker meme dari gambar',
+  iqc: 'iqc <teks> — gambar quote ala iPhone',
+  omniedit: 'omniedit <perintah edit> — edit gambar pakai AI',
+  hd: 'hd — jernihkan gambar yang dibalas',
+  unblur: 'unblur — perbaiki foto buram',
+  removebg: 'removebg — hapus background gambar',
+  tomp3: 'tomp3 — video/voice note jadi MP3',
+  tourl: 'tourl — media yang dibalas jadi link',
+  ping: 'ping — cek latensi bot',
+  menu: 'menu — daftar semua fitur bot',
+  balance: 'balance — cek saldo emerald',
+  daily: 'daily — klaim emerald harian',
+}
+
+
 const pluginConfig = {
   name: 'ella2',
   alias: ['ellav2', 'ella-2'],
   category: 'ai',
-  description: 'Chat AI Ella v2 (Gemma skyline.web.id) — persona baru, inget obrolan, bisa auto saat di-tag + jalanin command grup',
+  description: 'Chat AI Ella v2 (Gemma skyline.web.id) — persona baru, inget obrolan, auto saat di-tag, bisa jalanin fitur bot & aksi grup',
   usage: '.ella2 <teks>  |  .ella2 on|off  |  .ella2 aksi  |  .ella2 fakta  |  .ella2 reset',
   example: '.ella2 tutup grup',
   isOwner: false,
@@ -116,6 +184,7 @@ function num(v, min, max, def) {
 function cfg() {
   const c = config.ella2 || {}
   const allow = Array.isArray(c.execAllow) && c.execAllow.length ? c.execAllow : DEFAULT_EXEC_ALLOW
+  const userAllow = Array.isArray(c.execUser) ? c.execUser : DEFAULT_EXEC_USER
   const deny = Array.isArray(c.execDeny) ? c.execDeny : []
   return {
     enabled: bool(process.env.ELLA2_ENABLED, c.enabled !== false),
@@ -130,8 +199,29 @@ function cfg() {
     retries: num(c.retries, 0, 3, 2),
     exec: String(c.exec ?? 'admin').toLowerCase(),
     execAllow: allow.map((s) => String(s).trim()).filter(Boolean),
+    execUser: userAllow.map((s) => String(s).trim()).filter(Boolean),
     execDeny: deny.map((s) => String(s).trim()).filter(Boolean),
   }
+}
+
+/** Katalog ringkas buat prompt: `pinterest <kata kunci>`. */
+function userCatalog(names = cfg().execUser) {
+  return names.map((n) => {
+    const hint = USER_HINTS[n]
+    if (hint) return hint.split(' — ')[0]
+    return n
+  })
+}
+
+/** Katalog versi enak dibaca (buat `.ella2 aksi`). */
+function userCatalogDetailed(names = cfg().execUser) {
+  return names.map((n) => {
+    const hint = USER_HINTS[n]
+    if (hint) return hint
+    const f = getFeature(n)
+    const desc = String(f?.description || '').replace(/\s+/g, ' ').replace(/[.\s]+$/, '').slice(0, 55)
+    return desc ? `${n} — ${desc}` : n
+  })
 }
 
 /* ══════════════════════ riwayat (per nomor) ══════════════════════ */
@@ -327,28 +417,55 @@ function admission(text) {
 
 /**
  * Proses penanda `[[RUN: ...]]` dari balasan AI.
- * - `execOn` true  → validasi izin lalu jalankan command-nya (maks 3 aksi).
- * - `execOn` false → penanda tetap dibuang biar gak bocor ke chat, tanpa eksekusi.
+ * - Aksi admin (`execAllow`) cuma jalan kalau `execOn` true.
+ * - Fitur umum (`execUser`) jalan buat siapa saja, tetap kena cooldown/emerald.
+ * - Penanda yang ditolak tetap dibuang biar gak bocor ke chat.
  */
 async function applyRunMarkers(ctx, reply, { execOn = false, conf = cfg() } = {}) {
   const { clean, actions } = parseRunMarkers(reply)
   if (!actions.length) return { reply, note: '', results: [] }
 
-  if (!execOn) {
-    logger.info({ actions }, '[Ella2] aksi ditolak — pengirim bukan owner/staff/admin grup')
-    return { reply: clean || 'Aksi bot cuma bisa diminta owner / admin grup ya.', note: '', results: [], denied: true }
+  const userSet = new Set(allowNames(conf.execUser))
+  const runnable = []
+  const denied = []
+  for (const a of actions.slice(0, 3)) {
+    const name = splitCommand(a).name
+    if (execOn || userSet.has(name)) runnable.push(a)
+    else denied.push(name)
+  }
+
+  if (denied.length) {
+    logger.info({ denied }, '[Ella2] aksi admin ditolak — pengirim bukan owner/staff/admin grup')
   }
 
   const results = []
-  for (const a of actions.slice(0, 3)) {
-    const res = await runBotCommand(ctx, a, { allow: conf.execAllow, deny: conf.execDeny })
-    logger.info({ cmd: a, ok: res.ok, err: res.error }, '[Ella2] aksi bot')
+  for (const a of runnable) {
+    const res = await runBotCommand(ctx, a, {
+      allow: conf.execAllow,
+      deny: conf.execDeny,
+      userAllow: conf.execUser,
+    })
+    logger.info({ cmd: a, ok: res.ok, tier: res.tier, err: res.error }, '[Ella2] aksi bot')
     results.push(res.ok ? `✅ \`${res.used}\` dijalanin.` : `⚠️ ${res.error}.`)
   }
+
+  const notes = [...results]
+  if (denied.length) {
+    notes.push(`⛔ \`${denied.join('`, `')}\` cuma bisa diminta owner/admin grup.`)
+  }
+
+  let text = clean
+  // Model sempat ngaku "udah dikerjain" padahal semuanya ditolak → ganti jujur.
+  if (!runnable.length && denied.length) {
+    text = 'Aksi admin kayak gitu cuma bisa diminta owner atau admin grup ya.'
+  }
+  if (!text) text = runnable.length ? 'Oke, aku jalanin ya 👍' : 'Oke.'
+
   return {
-    reply: clean || 'Oke, aku jalanin ya 👍',
-    note: results.length ? `\n\n${results.join('\n')}` : '',
+    reply: text,
+    note: notes.length ? `\n\n${notes.join('\n')}` : '',
     results,
+    denied,
   }
 }
 
@@ -392,8 +509,9 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false } = {}) 
     canExec: execOn,
     execBlocked: !execOn && conf.exec !== 'off',
     actionList: conf.execAllow,
+    featureList: conf.execUser.length ? userCatalog(conf.execUser) : [],
     // Sisa ruang buat catatan gambar (system dipotong API di 3000 char).
-    maxChars: hasImage ? 2700 : 3000,
+    maxChars: hasImage ? 2800 : 3000,
   }) + imageNote
 
   const history = h.msgs
@@ -534,8 +652,10 @@ function statusText(ctx, { groupAdmin = false } = {}) {
     '📌 *Cara pakai*',
     `> ${p}ella2 <teks> — ngobrol`,
     '> tag / bales pesan Ella v2 — auto balas (kalau auto nyala)',
+    '> tag + _"cariin foto kucing"_ — Ella jalanin `.pinterest kucing`',
+    '> tag + _"downloadin lagu X"_ — Ella jalanin `.play X`',
     '> owner/admin bisa minta aksi: _"tutup grup"_, _"buka grup"_, _"kick dia"_, dll',
-    `> ${p}ella2 aksi — daftar aksi yang bisa dijalanin`,
+    `> ${p}ella2 aksi — daftar fitur & aksi yang bisa dijalanin`,
     '',
     '⚙️ *Atur*',
     `> ${p}ella2 on / off — auto di chat ini`,
@@ -708,17 +828,18 @@ async function handler(ctx) {
   /* daftar aksi bot yang bisa diminta */
   if (['aksi', 'action', 'cmd', 'command'].includes(sub)) {
     const e = cfg()
-    if (String(e.exec).toLowerCase() === 'off') {
-      return ctx.reply('⚙️ Fitur aksi Ella v2 lagi *dimatiin* owner.')
-    }
     const groupAdmin = ctx.isGroup ? await withTimeout(isGroupAdmin(ctx), 2500, false) : false
     const boleh = mayExec(ctx, { mode: e.exec, isGroupAdmin: groupAdmin })
     const role = execRoleLabel(ctx, { group: { isGroupAdmin: groupAdmin } })
+    const fitur = userCatalogDetailed(e.execUser)
     return ctx.reply(
-      `⚙️ *Aksi yang bisa diminta ke Ella v2*\n\n` +
+      `⚙️ *Yang bisa diminta ke Ella v2*\n\n` +
+        `*Fitur umum* — siapa aja boleh minta:\n` +
+        (fitur.length ? fitur.map((f) => `> \`${f}\``).join('\n') : '> _(kosong)_') +
+        `\n\n*Aksi admin* — ${String(e.exec).toLowerCase() === 'off' ? 'lagi dimatiin owner' : 'khusus owner/admin'}:\n` +
         e.execAllow.map((a) => `> \`${a}\``).join('\n') +
-        `\n\n> Cukup ngomong biasa, contoh: _"tutup grup"_, _"buka grup"_.\n` +
-        `> Kamu terdeteksi: *${role}* ${boleh ? '✅ boleh nyuruh aksi di sini' : '⛔ belum boleh nyuruh aksi di sini'}`
+        `\n\n> Cukup ngomong biasa, contoh: _"cariin foto kucing"_, _"downloadin lagu X"_.\n` +
+        `> Kamu terdeteksi: *${role}* ${boleh ? '✅ boleh nyuruh aksi admin di sini' : '⛔ cuma bisa minta fitur umum'}`
     )
   }
 
@@ -747,4 +868,5 @@ export const _internals = {
   cfg, runChat, humanError, onMention, handler, hereOn, sourceOf, statusText, admission,
   contextFor, nowWIB, store, STORE_FILE, loadStore, execRoleLabel, applyRunMarkers,
   mayExec, parseRunMarkers, runBotCommand, DEFAULT_EXEC_ALLOW,
+  DEFAULT_EXEC_USER, USER_HINTS, userCatalog, userCatalogDetailed,
 }

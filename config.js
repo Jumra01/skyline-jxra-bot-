@@ -124,8 +124,8 @@ export default {
   },
 
   /* ── ELLA v2 (AI chat Gemma skyline.web.id) ────────────── */
-  // Otak: POST /api/ai/gemma (model gemma-4-31b). API key opsional —
-  // kalau `api.skyline.apikey` kosong request tetap jalan (limit per IP).
+  // Otak: POST /api/ai/gemma (model gemma-4-31b). Endpoint ini WAJIB apikey —
+  // isi `api.skyline.apikey` atau env SKYLINE_API_KEY (tanpa key = 401).
   // Modelnya besar: balasan bisa 10-25 detik, timeout sengaja lega.
   // Auto-nya OPT-IN (`.ella2 on`) biar gak rebutan sama `.ella`/`.autoai`.
   ella2: {
@@ -160,6 +160,15 @@ export default {
       'off <welcome|bye|antilink|game>',
     ],
     execDeny: [],           // tambahan yang diblokir (restart/updatesc udah hard-block)
+
+    // Fitur umum yang boleh dijalanin Ella v2 atas nama SIAPA AJA (member juga).
+    // Gak ikut saklar `exec` di atas; tetap kena cooldown + potongan emerald,
+    // sama seperti kalau user ngetik command-nya sendiri.
+    execUser: [
+      'pinterest', 'play', 'yta', 'ytv', 'ytsearch', 'tiktok', 'ig', 'fb', 'twitter',
+      'spotify', 'sticker', 'toimg', 'brat', 'smeme', 'iqc', 'omniedit', 'hd', 'unblur',
+      'removebg', 'tomp3', 'tourl', 'ping', 'menu', 'balance', 'daily',
+    ],
   },
 
   /* ── MEDIA WORKER (WebSocket) ──────────────────────────── */
