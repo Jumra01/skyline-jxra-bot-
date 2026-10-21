@@ -137,15 +137,43 @@ function parseApiError(body) {
   }
 }
 
-async function request(kind, path, params, { timeout = 30000 } = {}) {
-  const { website, apikey } = skylineCreds();
-  if (!apikey) throw new SkylineKeyError(website);
+/* ══════════════ gerbang global (anti-limit) ══════════════ */
+/**
+ * Semua request ke skyline.web.id lewat gerbang ini: waktu MULAI tiap request
+ * dijatah minimal `GATE_MIN_GAP` ms biar nggak nembak barengan (itu pemicu
+ * 429/503 "AI is busy"), tapi request tetap boleh jalan paralel.
+ */
+const GATE_MIN_GAP = 350;
+let gateNextSlot = 0;
 
-  breakerCheck(kind);
+const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
 
-  const qs = new URLSearchParams({ ...params, apikey });
-  const url = `${website}${path}?${qs.toString()}`;
+export function skylineSchedule(fn) {
+  const now = Date.now();
+  const slot = Math.max(now, gateNextSlot);
+  gateNextSlot = slot + GATE_MIN_GAP;
+  const delay = slot - now;
+  return (delay > 0 ? sleepMs(delay) : Promise.resolve()).then(fn);
+}
 
+/** Request yang identik & barengan cukup sekali (2 user `.play` lagu sama). */
+const inflight = new Map();
+function dedupe(key, fn) {
+  const cur = inflight.get(key);
+  if (cur) return cur;
+  const p = fn();
+  inflight.set(key, p);
+  const clear = () => {
+    if (inflight.get(key) === p) inflight.delete(key);
+  };
+  p.then(clear, clear);
+  return p;
+}
+
+/** Status yang artinya "coba lagi", bukan "rusak". */
+const RETRY_CODES = new Set([429, 502, 503, 504]);
+
+async function requestOnce(url, { timeout = 30000 } = {}) {
   let res;
   try {
     res = await fetch(url, {
@@ -153,7 +181,6 @@ async function request(kind, path, params, { timeout = 30000 } = {}) {
       signal: AbortSignal.timeout(timeout)
     });
   } catch (err) {
-    breakerFail(kind);
     const msg = err?.name === 'TimeoutError' ? 'Timeout nunggu API Skyline' : `Gagal konek API Skyline (${err?.message || err})`;
     throw new SkylineApiError(msg, 0);
   }
@@ -161,14 +188,12 @@ async function request(kind, path, params, { timeout = 30000 } = {}) {
   const text = await res.text();
 
   if (res.status === 401) {
-    // key kosong/ditolak = bukan gangguan server, jangan bikin breaker muter
     throw new SkylineApiError(parseApiError(text) || 'API key Skyline kosong', res.status, text);
   }
   if (res.status === 403) {
     throw new SkylineApiError(parseApiError(text) || 'API key Skyline ditolak', res.status, text);
   }
   if (!res.ok) {
-    breakerFail(kind);
     throw new SkylineApiError(parseApiError(text) || `HTTP ${res.status}`, res.status, text);
   }
 
@@ -176,17 +201,53 @@ async function request(kind, path, params, { timeout = 30000 } = {}) {
   try {
     json = JSON.parse(text);
   } catch {
-    breakerFail(kind);
     throw new SkylineApiError('Balasan API Skyline gak bisa dibaca', res.status, text);
   }
 
   if (json?.status === false || json?.success === false) {
-    breakerFail(kind);
     throw new SkylineApiError(parseApiError(text) || 'API Skyline nolak request', res.status, text);
   }
 
-  breakerOk(kind);
-  return { json, website, apikey };
+  return json;
+}
+
+/**
+ * Jalanin `fn` dengan breaker + retry untuk status "ramai" (429/502/503/504).
+ * Breaker sengaja TIDAK dihitung untuk status ramai — biar 503 sesaat nggak
+ * bikin fitur mati 5 menit.
+ */
+async function withRetry(kind, fn, retries = 2) {
+  breakerCheck(kind);
+  let lastErr = null;
+  for (let i = 0; i <= retries; i += 1) {
+    try {
+      const out = await fn();
+      breakerOk(kind);
+      return out;
+    } catch (err) {
+      lastErr = err;
+      const code = Number(err?.status) || 0;
+      if (RETRY_CODES.has(code) && i < retries) {
+        await sleepMs(800 * (i + 1) + Math.floor(Math.random() * 300));
+        continue;
+      }
+      if (code !== 401 && code !== 403 && !RETRY_CODES.has(code)) breakerFail(kind);
+      throw err;
+    }
+  }
+  throw lastErr;
+}
+
+async function request(kind, path, params, { timeout = 30000, retries = 2 } = {}) {
+  const { website, apikey } = skylineCreds();
+  if (!apikey) throw new SkylineKeyError(website);
+
+  const qs = new URLSearchParams({ ...params, apikey });
+  const url = `${website}${path}?${qs.toString()}`;
+
+  return dedupe(url, () =>
+    withRetry(kind, () => skylineSchedule(() => requestOnce(url, { timeout })), retries)
+  ).then((json) => ({ json, website, apikey }));
 }
 
 async function fetchBinary(url, { timeout = 180000, maxBytes = MAX_VIDEO_BYTES } = {}) {
@@ -195,11 +256,13 @@ async function fetchBinary(url, { timeout = 180000, maxBytes = MAX_VIDEO_BYTES }
 
   let res;
   try {
-    res = await fetch(target, {
-      headers: { Accept: '*/*', 'User-Agent': UA },
-      signal: AbortSignal.timeout(timeout),
-      redirect: 'follow'
-    });
+    res = await skylineSchedule(() =>
+      fetch(target, {
+        headers: { Accept: '*/*', 'User-Agent': UA },
+        signal: AbortSignal.timeout(timeout),
+        redirect: 'follow'
+      })
+    );
   } catch (err) {
     const msg = err?.name === 'TimeoutError' ? 'Timeout / server kelamaan nyiapin file' : `Gagal ambil file (${err?.message || err})`;
     throw new SkylineApiError(msg, 0);
@@ -414,6 +477,57 @@ export async function downloadVideo(url, quality, { info, timeout = 180000, maxB
   };
 }
 
+/* ══════════════ Omni Editor (edit gambar) ══════════════ */
+/**
+ * POST /api/ai/omniedit — body `{ image_url, prompt, apikey }`, balasan binary
+ * gambar (atau JSON error). Dipakai `.omniedit`, jadi edit gambar ikut gerbang
+ * + retry yang sama dengan fitur Skyline lain.
+ */
+export const OMNI_EDIT_PATH = '/api/ai/omniedit';
+
+export async function omniEdit({ image, prompt, timeout = 180000, retries = 1 } = {}) {
+  const { website, apikey } = skylineCreds();
+  if (!apikey) throw new SkylineKeyError(website);
+
+  const img = String(image || '').trim();
+  const text = String(prompt || '').trim();
+  if (!img) throw new SkylineApiError('Gambar kosong', 400);
+  if (!text) throw new SkylineApiError('Prompt kosong', 400);
+
+  return withRetry(
+    'omniedit',
+    async () => {
+      let res;
+      try {
+        res = await skylineSchedule(() =>
+          fetch(`${website}${OMNI_EDIT_PATH}`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', Accept: 'image/*', 'User-Agent': UA },
+            body: JSON.stringify({ image_url: img, prompt: text.slice(0, 2000), apikey }),
+            signal: AbortSignal.timeout(timeout)
+          })
+        );
+      } catch (err) {
+        const msg = err?.name === 'TimeoutError'
+          ? 'Server Omni Editor kelamaan (timeout)'
+          : `Gagal konek API Skyline (${err?.message || err})`;
+        throw new SkylineApiError(msg, 0);
+      }
+
+      const ct = String(res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+      if (res.ok && ct.startsWith('image/')) {
+        const buf = Buffer.from(await res.arrayBuffer());
+        if (!buf.length) throw new SkylineApiError('Hasil edit kosong dari server', res.status);
+        return { buffer: buf, mimetype: ct };
+      }
+
+      const body = await res.text().catch(() => '');
+      throw new SkylineApiError(parseApiError(body) || `Gagal ngolah gambar (HTTP ${res.status})`, res.status, body);
+    },
+    retries
+  );
+}
+
 /* ══════════════ AI chat (Ella) ══════════════ */
 
 /**
@@ -448,12 +562,14 @@ export async function aiChatSkyline({ message, history = [], system = '', timeou
 
   let res;
   try {
-    res = await fetch(`${website}${AI_CHAT_PATH}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', Accept: 'application/json', 'User-Agent': UA },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(timeoutMs)
-    });
+    res = await skylineSchedule(() =>
+      fetch(`${website}${AI_CHAT_PATH}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', Accept: 'application/json', 'User-Agent': UA },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(timeoutMs)
+      })
+    );
   } catch (err) {
     breakerFail('aichat');
     const msg = err?.name === 'TimeoutError'
@@ -519,12 +635,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function gemmaOnce(body, website, timeoutMs) {
   let res;
   try {
-    res = await fetch(`${website}${AI_GEMMA_PATH}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', Accept: 'application/json', 'User-Agent': UA },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(timeoutMs)
-    });
+    res = await skylineSchedule(() =>
+      fetch(`${website}${AI_GEMMA_PATH}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', Accept: 'application/json', 'User-Agent': UA },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(timeoutMs)
+      })
+    );
   } catch (err) {
     const msg = err?.name === 'TimeoutError'
       ? 'Ella v2 kelamaan mikir (timeout)'
@@ -667,6 +785,8 @@ export default {
   downloadVideo,
   aiChatSkyline,
   gemmaChat,
+  omniEdit,
+  skylineSchedule,
   keyHint,
   MAX_AUDIO_BYTES,
   MAX_VIDEO_BYTES,

@@ -10,7 +10,7 @@
  */
 import axios from 'axios'
 import { downloadMediaMessage, resolveMediaPayload } from 'zapo-js'
-import { skylineCreds } from '../../scraper/SKYLINE.js'
+import { skylineCreds, omniEdit } from '../../scraper/SKYLINE.js'
 import { logger } from '../../core/logger.js'
 
 const MAX_IMAGE = 10 * 1024 * 1024
@@ -93,17 +93,6 @@ async function downloadAsBuffer(url) {
   return { buf, mime: String(headers?.['content-type'] || 'image/jpeg').split(';')[0] || 'image/jpeg' }
 }
 
-function parseErrBody(data) {
-  if (!data) return ''
-  try {
-    const obj = JSON.parse(Buffer.isBuffer(data) ? data.toString('utf8') : String(data))
-    return String(obj.error || obj.detail || obj.message || '').trim()
-  } catch {
-    const raw = Buffer.isBuffer(data) ? data.toString('utf8') : String(data)
-    return String(raw).trim().slice(0, 160)
-  }
-}
-
 const HELP = (p) =>
   '🖼️ *OMNI EDITOR*\n\n' +
   'Edit gambar pake AI! Ganti background, style, outfit, dll.\n\n' +
@@ -171,39 +160,28 @@ async function handler(ctx) {
       dataUrl = bufferToDataUrl(source.buf, source.mime || 'image/jpeg')
     }
 
-    const res = await axios.post(
-      `${website}/api/ai/omniedit`,
-      { image_url: dataUrl, prompt: text, apikey },
-      { responseType: 'arraybuffer', timeout: 180000, validateStatus: () => true }
+    // Satu pintu dengan fitur Skyline lain: gerbang anti-limit + retry.
+    const out = await omniEdit({ image: dataUrl, prompt: text })
+
+    await ctx.react('🎨')
+    return ctx.client.message.send(
+      ctx.chat,
+      {
+        type: 'image',
+        media: out.buffer,
+        mimetype: out.mimetype || 'image/jpeg',
+        caption: `🎨 *Omni Editor — Selesai!*\n\n📝 *Prompt:* ${text}`
+      },
+      { quote: event }
     )
-
-    const ct = String(res.headers?.['content-type'] || '').trim()
-    if (res.status === 200 && ct.startsWith('image/')) {
-      const out = Buffer.from(res.data)
-      if (!out.length) throw new Error('hasil kosong dari server')
-      await ctx.react('🎨')
-      return ctx.client.message.send(
-        ctx.chat,
-        {
-          type: 'image',
-          media: out,
-          mimetype: ct.split(';')[0] || 'image/jpeg',
-          caption: `🎨 *Omni Editor — Selesai!*\n\n📝 *Prompt:* ${text}`
-        },
-        { quote: event }
-      )
-    }
-
-    throw new Error(parseErrBody(res.data) || `HTTP ${res.status}`)
   } catch (e) {
     const msg = String(e?.message || e)
     logger.warn({ err: msg.slice(0, 300) }, '[OmniEdit] gagal')
     await ctx.react('❎')
 
-    if (e?.code === 'ECONNABORTED' || /timeout/i.test(msg)) {
+    if (e?.code === 'ECONNABORTED' || /timeout|kelamaan/i.test(msg)) {
       return ctx.reply('⏱️ Timeout — server Omni Editor terlalu lama merespons. Coba lagi nanti.')
     }
-    if (e?.response?.data) return ctx.reply('❌ Gagal ngolah gambar: ' + parseErrBody(e.response.data))
     return ctx.reply('❌ Gagal ngolah gambar: ' + msg.slice(0, 160))
   }
 }
