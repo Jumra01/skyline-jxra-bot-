@@ -600,30 +600,50 @@ async function sendAuroraAudio(ctx, info, format) {
         }
         return { html: h, shrink: sh, audioDataUri };
       };
-      const recompress = async (why) => {
+      const recompress = async (why, maxB64) => {
         logger.warn(`[Aurora] audio: ${why} — kompres otomatis`);
         return prepareEmbeddedAudio(audio.buffer, durToSeconds(duration) || 0, {
-          maxB64: embedBudgetBytes(),
+          maxB64: maxB64 || embedBudgetBytes(),
           preferOriginal: false,
           mimetype: audio.mimetype
         });
       };
       let used = embed;
       let card = mkCard(used);
-      if (used?.original && payloadB64Len(card.html) * 3 > WA_FRAME_MAX) {
-        used = await recompress(`audio asli estimasi frame ${Math.round(payloadB64Len(card.html) * 3 / 1048576)}MB > 16MB`);
+      /* Gerbang estimasi frame (frame ≈ payloadB64 × 3 ≈ html × 4, kalibrasi
+       * dari kasus asli). Berlaku buat SEMUA embed — audio opus sekarang juga
+       * bisa gede (budget 3,4MB), bukan cuma asli. Kecilin budget separuh
+       * bertahap sampai estimasi muat. */
+      let budgetStep = embedBudgetBytes();
+      for (let i = 0; i < 2 && used && payloadB64Len(card.html) * 3 > WA_FRAME_MAX; i += 1) {
+        const est = (payloadB64Len(card.html) * 3 / 1048576).toFixed(1);
+        budgetStep = Math.floor(budgetStep / 2);
+        used = await recompress(`estimasi frame ${est}MB > 16MB — kecilin budget embed`, budgetStep);
         card = mkCard(used);
-        card.shrink += ' • asli→kompres (batas frame WA)';
+        card.shrink += ` • kecilin budget (est frame ${est}MB)`;
       }
-      try {
-        await sendNativeHtml(ctx.client, ctx.chat, card.html);
-      } catch (err) {
-        if (!/frame is too large/i.test(String(err?.message || err)) || !used?.original) throw err;
-        // Frame nolak padahal estimasi muat → kalibrasi meleset; kompres & ulang.
-        used = await recompress('frame WA nolak audio asli');
-        card = mkCard(used);
-        card.shrink += ' • asli→kompres (frame nolak)';
-        await sendNativeHtml(ctx.client, ctx.chat, card.html);
+      /* Kirim; kalau frame tetap nolak (kalibrasi meleset), kompres ulang
+       * budget separuh & coba lagi (maks 3×) — terakhir: kartu TANPA embed
+       * biar user tetap dapat kartu, bukan gagal total. */
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          await sendNativeHtml(ctx.client, ctx.chat, card.html);
+          break;
+        } catch (err) {
+          if (!/frame is too large/i.test(String(err?.message || err))) throw err;
+          budgetStep = Math.floor(budgetStep / 2);
+          if (attempt >= 2 || budgetStep < 200_000) {
+            used = null;
+            card = mkCard(null);
+            card.shrink += ' • frame nolak — kartu tanpa audio';
+            await sendNativeHtml(ctx.client, ctx.chat, card.html);
+            break;
+          }
+          logger.warn(`[Aurora] audio: frame WA nolak (payload ±${payloadB64Len(card.html)}B) — kompres ulang budget ${Math.round(budgetStep / 1024)}KB`);
+          used = await recompress('frame nolak — kompres ulang', budgetStep);
+          card = mkCard(used);
+          card.shrink += ' • frame nolak → kompres ulang';
+        }
       }
       cardSent = true;
       logger.info(
