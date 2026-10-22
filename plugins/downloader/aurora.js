@@ -18,6 +18,10 @@ import {
 import { fetchThumbBuffer } from '../../lib/ytUi.js';
 import { embedAudioCover } from '../../lib/audioCover.js';
 import { fetchLyrics, capLyrics } from '../../lib/lyrics.js';
+import { spawn } from 'node:child_process';
+import { writeFile, readFile, unlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 /* AURORA v3 — SEMUA lewat skyline.web.id (ga ada API pihak ketiga lagi):
  *   • audio  → unduh lewat `downloadAudio()` (jalur yang sama dengan `.yta`),
@@ -29,6 +33,116 @@ import { fetchLyrics, capLyrics } from '../../lib/lyrics.js';
 const UA = 'Mozilla/5.0 (Linux; Android 13; 23021RAA2Y Build/TKQ1.221114.001) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.7922.199 Mobile Safari/537.36';
 
 const AUDIO_FORMAT = /^(mp3|m4a|aac|ogg|wav|flac)$/i;
+
+/* ── Audio EMBEDDED di kartu (jalur WebAudio — trik play2) ───────────────────
+ * Hasil .richlab di HP owner: <audio>/<video>/fetch/WS mati di WebView kartu
+ * WA, TAPI WebAudio hidup (#11 oscillator + #12 decodeAudioData data-URI bunyi).
+ * Jadi lagu dikompres ke Opus (ffmpeg, mono 48k) lalu ditanam sebagai data: URI
+ * di dalam HTML kartu → kartu decode sendiri → AudioContext yang muter.
+ * Rantai bitrate 24k → 16k → 12k; kalau masih kegedean lagu dipotong (trim)
+ * — MAX_EMBED_B64 800KB = batas yang sama dengan play2 (terbukti ke-render
+ * & bunyi di HP). Kompres gagal / tetap kegedean → kartu tetap mode visual
+ * + pesan audio native (jalur yang dijamin jalan), bukan kartu rusak. */
+const OPUS_CHAIN = ['24k', '16k', '12k'];
+const MAX_EMBED_B64 = 800_000;
+
+/** Jalankan ffmpeg sekali → { code, stderr } (gak nge-throw biar gampang dirantai). */
+function runFfmpeg(args) {
+  return new Promise((resolve) => {
+    let stderr = '';
+    let ff;
+    try { ff = spawn('ffmpeg', args); } catch (e) { resolve({ code: -1, stderr: String(e?.message || e) }); return; }
+    ff.stderr?.on('data', (d) => { stderr += d.toString(); });
+    ff.on('error', (e) => resolve({ code: -1, stderr: String(e?.message || e) }));
+    ff.on('close', (code) => resolve({ code: code ?? -1, stderr }));
+  });
+}
+
+/** Buffer audio (mp3 dst) → Opus webm mono 48k. `trimSec` = potong dari awal. */
+async function compressOpus(inputBuffer, { bitrate, trimSec = 0, label = 'aurora' } = {}) {
+  const safe = String(label).replace(/[^a-zA-Z0-9]/g, '') || 'aurora';
+  const stamp = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const inPath = join(tmpdir(), `au_in_${safe}_${stamp}.tmp`);
+  const outPath = join(tmpdir(), `au_out_${safe}_${stamp}.webm`);
+  const cleanup = async () => {
+    try { await unlink(inPath); } catch { /* skip */ }
+    try { await unlink(outPath); } catch { /* skip */ }
+  };
+  try { await writeFile(inPath, inputBuffer); }
+  catch (e) { throw new Error(`tulis input ffmpeg: ${e?.message || e}`); }
+  const args = [
+    '-y', '-i', inPath,
+    ...(trimSec > 0 ? ['-t', String(trimSec)] : []),
+    '-vn', '-ac', '1', '-ar', '48000',
+    // constrained VBR, BUKAN plain VBR: `-vbr on` di ffmpeg 6 nembak jauh di
+    // atas target (24k → 38,9kbps terukur) → payload embed meleset dari
+    // perkiraan. Constrained nempel (24k → 25,5kbps terukur).
+    '-c:a', 'libopus', '-b:a', bitrate, '-vbr', 'constrained',
+    '-application', 'audio', '-frame_duration', '40', '-compression_level', '10',
+    outPath
+  ];
+  const r = await runFfmpeg(args);
+  if (r.code !== 0) {
+    await cleanup();
+    throw new Error(`ffmpeg exit ${r.code}: ${r.stderr.slice(-220).replace(/\s+/g, ' ')}`);
+  }
+  try {
+    const out = await readFile(outPath);
+    if (!out?.byteLength) throw new Error('output kosong');
+    return out;
+  } finally { await cleanup(); }
+}
+
+/** Budget embed audio dari config (`aurora.maxEmbedKb`, default 800KB). */
+function embedBudgetBytes() {
+  const kb = Number(config.aurora?.maxEmbedKb);
+  return Number.isFinite(kb) && kb >= 64 ? Math.floor(kb * 1024) : MAX_EMBED_B64;
+}
+
+/**
+ * Siapkan audio siap-embed buat kartu: { buf, b64len, bitrate, trimSec } atau
+ * null kalau gagal/kegedean — NULL BUKAN ERROR: kartu jalan tanpa pemutar.
+ */
+async function prepareEmbeddedAudio(buffer, durationSec = 0, { maxB64 = MAX_EMBED_B64 } = {}) {
+  if (!buffer?.length) return null;
+  try {
+    let best = null;
+    for (const bitrate of OPUS_CHAIN) {
+      const buf = await compressOpus(buffer, { bitrate });
+      const b64len = Math.ceil(buf.length * 4 / 3);
+      best = { buf, b64len, bitrate, trimSec: 0 };
+      logger.info(`[Aurora] audio: opus ${bitrate} → ${Math.round(b64len / 1024)}KB base64`);
+      if (b64len <= maxB64) return best;
+    }
+    // Semua bitrate masih kegedean (umumnya lagu > 6,5 menit) → potong lagu.
+    // Ukur langsung dari budget: b64/detik @24k = 24000bps ÷ 8 × 4/3 = 4000.
+    // (Rumus "rasio" gaya play2 ngitung dari ukuran 12k tapi nge-encode 24k
+    // → hasilnya ~1,8× budget, gak bakal pernah lolos — jadi jangan ditiru.)
+    const dur = Number(durationSec) || 0;
+    if (dur < 60) {
+      logger.warn('[Aurora] audio: embed kegedean & durasi nggak diketahui — kartu dikirim tanpa pemutar');
+      return null;
+    }
+    const B64_PER_SEC = { '24k': 4000, '16k': 2667, '12k': 2000 };
+    const bitrate = OPUS_CHAIN[0];
+    const trimSec = Math.min(dur - 5, Math.floor((maxB64 * 0.9) / B64_PER_SEC[bitrate]));
+    if (trimSec < 30) {
+      logger.warn('[Aurora] audio: trim gak masuk akal — tanpa embed');
+      return null;
+    }
+    const buf = await compressOpus(buffer, { bitrate, trimSec });
+    const b64len = Math.ceil(buf.length * 4 / 3);
+    logger.info(`[Aurora] audio: trim ${trimSec}s @ ${bitrate} → ${Math.round(b64len / 1024)}KB base64`);
+    if (b64len > maxB64) {
+      logger.warn('[Aurora] audio: masih kegedean setelah trim — tanpa embed');
+      return null;
+    }
+    return { buf, b64len, bitrate, trimSec };
+  } catch (err) {
+    logger.warn(`[Aurora] audio: kompres embed gagal — ${err?.message || err}`);
+    return null;
+  }
+}
 
 /** Pilih quality video paling dekat dengan yang diminta (default: tertinggi). */
 function pickQuality(list, height) {
@@ -285,7 +399,9 @@ async function sendAuroraAudio(ctx, info, format) {
    * Lirik (LRCLIB) diambil PARALEL sama cover biar nambah nol waktu tunggu. */
   let cover = null;
   const wantLyrics = String(info.title || '') !== 'Aurora Stream'; // input URL manual = judul palsu
-  const [coverRes, lyricRes] = await Promise.all([
+  /* Embed audio (WebAudio) ikut PARALEL — ffmpeg jalan di local, nol jaringan,
+   * jadi nambah nol waktu tunggu. Gagal = null → kartu mode visual biasa. */
+  const [coverRes, lyricRes, embedRes] = await Promise.all([
     fetchThumbBuffer(info.thumbnail, { width: 640 }).then(
       (c) => {
         logger.info(`[Aurora] audio: cover ${c ? `OK ${Math.round(c.buffer.length / 1024)}KB` : 'kosong'}`);
@@ -309,10 +425,20 @@ async function sendAuroraAudio(ctx, info, format) {
             return null;
           }
         )
-      : Promise.resolve(null)
+      : Promise.resolve(null),
+    prepareEmbeddedAudio(audio.buffer, durToSeconds(duration) || 0, { maxB64: embedBudgetBytes() })
   ]);
   cover = coverRes;
   const lyricCard = lyricRes;
+  const embed = embedRes || null;
+  if (embed) {
+    logger.info(
+      `[Aurora] audio: embed WebAudio siap — opus ${embed.bitrate} • ` +
+      `${Math.round(embed.b64len / 1024)}KB base64${embed.trimSec ? ` • trim ${embed.trimSec}s` : ''}`
+    );
+  } else {
+    logger.info('[Aurora] audio: tanpa embed — kartu mode visual (tombol play = hint), audio tetap di pesan native');
+  }
   if (lyricCard) {
     logger.info(
       `[Aurora] audio: lirik siap — ${lyricCard.s ? `synced ${lyricCard.l.length} baris` : `plain ${String(lyricCard.p).split('\n').length} baris`}`
@@ -331,9 +457,9 @@ async function sendAuroraAudio(ctx, info, format) {
   let cardSent = false;
   let thumbB64 = '';
   /* Cover di kartu lirik dibikin kecil (2,4KB) — markup panel lirik ikut
-   * nambah payload, dan payload base64 wajib tetap ≤ ±26KB (AGENTS §9.2).
-   * thumbDataUri() sekarang nurut budget (turun sampai 90px kalau perlu). */
-  try { thumbB64 = await thumbDataUri(info.thumbnail, lyricCard ? { maxB64: 2400 } : {}); } catch { /* tanpa cover */ }
+   * nambah payload. KECUALI ada audio embed: kartu masuk regime play2
+   * (payload ratusan KB terbukti render di HP), jadi cover boleh 9KB. */
+  try { thumbB64 = await thumbDataUri(info.thumbnail, lyricCard && !embed ? { maxB64: 2400 } : {}); } catch { /* tanpa cover */ }
 
   if (config.aurora && config.aurora.playerCard) {
     /* Kartu player (opt-in). WebView kartu WA offline, tapi WebSocket JALAN —
@@ -361,33 +487,49 @@ async function sendAuroraAudio(ctx, info, format) {
       logger.warn(`[Aurora] audio: kartu player gagal — ${err?.message || err}`);
     }
   } else {
-    /* DEFAULT: kartu visual (tanpa <audio>) — WebView kartu WA di banyak HP
-     * offline (media nggak bisa diputar), jadi kartu dibuat ringan + cantik,
-     * lagunya tetap diputar dari pesan audio native di bawahnya. */
+    /* DEFAULT: kartu AURORA deck. Kalau embed sukses → pemutar WebAudio
+     * beneran di dalam kartu (jalur play2 — WebView mati buat <audio> remote,
+     * tapi AudioContext + data URI hidup). Kalau embed null → kartu visual
+     * biasa, lagu tetap di pesan audio native di bawahnya. */
     try {
+      const audioDataUri = embed ? `data:audio/webm;codecs=opus;base64,${embed.buf.toString('base64')}` : '';
       const base = {
         title: clean,
         channel: info.artist || 'Unknown Artist',
         duration,
         thumbnailb64: thumbB64,
         accent: accent || '#1DB954',
-        note: 'Lagu diputar dari pesan audio di bawah kartu.'
+        audioDataUri,
+        audioMeta: embed,
+        note: audioDataUri
+          ? (embed.trimSec
+              ? `Audio kartu dipotong ±${embed.trimSec}s biar muat — lagu penuh di pesan audio bawah.`
+              : 'Tekan ▶ buat putar langsung di kartu — versi HQ di pesan audio bawah.')
+          : 'Lagu diputar dari pesan audio di bawah kartu.'
       };
+      /* Budget payload:
+       * • TANPA audio → aturan lama ±25,6KB (regime kartu kecil, terbukti
+       *   render di HP).
+       * • DENGAN embed → regime play2: total ~1MB terbukti ke-render & bunyi
+       *   di HP yang sama, jadi markup dikasih 60KB (cover 9KB + lirik 40
+       *   baris + script player muat) di luar porsi audio. Angka 26KB lama
+       *   cuma 2 data point sempit (avatar 31KB "gagal") — play2 membuktikan
+       *   batas aslinya jauh di atas itu. */
+      const audioPart = audioDataUri ? Math.ceil(audioDataUri.length * 4 / 3) : 0;
+      const payBudget = audioDataUri ? 60000 + audioPart : 25600;
       let html = buildSpotifyHtml({ ...base, lyrics: lyricCard });
       let shrink = '';
-      /* Jaga-jaga: payload base64 unifiedResponse wajib ≤ ±26KB biar kartu
-       * tetap ke-render (25,6KB = batas; 25,0KB pernah terbukti ke-render).
-       * Kalau kartu + lirik kegedean, pangkas bertahap: timestamp dibuang
-       * (panel jadi biasa) → potong baris → buang lirik (cover tetap). */
-      if (lyricCard && payloadB64Len(html) > 25600) {
+      /* Jaga-jaga: kalau kartu + lirik kegedean, pangkas bertahap: timestamp
+       * dibuang (panel jadi biasa) → potong baris → buang lirik (cover tetap). */
+      if (lyricCard && payloadB64Len(html) > payBudget) {
         let ly = { s: false, l: [], p: lyricCard.l.map((x) => x[1]).join('\n') || lyricCard.p };
         html = buildSpotifyHtml({ ...base, lyrics: ly });
         shrink = ' • lirik polos';
-        if (payloadB64Len(html) > 25600) {
+        if (payloadB64Len(html) > payBudget) {
           ly = { s: false, l: [], p: String(ly.p).split('\n').slice(0, 18).join('\n') };
           html = buildSpotifyHtml({ ...base, lyrics: ly });
           shrink = ' • lirik dipangkas';
-          if (payloadB64Len(html) > 25600) {
+          if (payloadB64Len(html) > payBudget) {
             // Step terakhir: buang LIRIK aja — cover jangan, biar kartu tetap
             // komplit. (Dulu keduanya dibuang barengan → kartu telanjang.)
             html = buildSpotifyHtml({ ...base, lyrics: null });
@@ -399,7 +541,7 @@ async function sendAuroraAudio(ctx, info, format) {
       cardSent = true;
       logger.info(
         `[Aurora] audio: kartu cover terkirim • ${html.length}B • payload±${payloadB64Len(html)}B ` +
-        `(playerCard=false${lyricCard ? ' +lirik' : ''})${shrink}`
+        `(playerCard=false${lyricCard ? ' +lirik' : ''}${audioDataUri ? ' +audio-embed' : ''})${shrink}`
       );
     } catch (err) {
       logger.warn(`[Aurora] audio: kartu cover gagal — ${err?.message || err}`);
@@ -526,12 +668,15 @@ function buildLyricPanelHtml(lyrics, synced) {
  * Panel lirik muncul lewat tombol di baris judul; kalau synced, ada mode
  * karaoke (tap ▶ kira-kira pas lagu mulai di pesan audio) + auto-highlight.
  */
-function buildSpotifyHtml({ title, channel, duration, thumbnailb64, accent = '#1DB954', note, lyrics = null }) {
+function buildSpotifyHtml({ title, channel, duration, thumbnailb64, accent = '#1DB954', note, lyrics = null, audioDataUri = '', audioMeta = null }) {
   const dur = String(duration || '').trim();
   const hits = /^\d+:\d{2}(:\d{2})?$/.test(dur) ? dur : '';
   const safeTitle = escHtml(title || 'Tanpa Judul');
   const safeChannel = escHtml(channel || 'Unknown Artist');
-  const safeNote = escHtml(note || 'Lagu juga dikirim sebagai pesan audio — putar dari situ kalau tombol play rewel.');
+  const hasAudio = Boolean(audioDataUri);
+  const safeNote = escHtml(note || (hasAudio
+    ? 'Tekan ▶ buat putar langsung di kartu — versi HQ di pesan audio bawah.'
+    : 'Lagu juga dikirim sebagai pesan audio — putar dari situ kalau tombol play rewel.'));
   const hasLyrics = Boolean(lyrics && (lyrics.p || (Array.isArray(lyrics.l) && lyrics.l.length)));
   const lyrSynced = hasLyrics && Array.isArray(lyrics.l) && lyrics.l.length > 0;
   const art = thumbnailb64
@@ -679,7 +824,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-s
   </div>
 
   <div class="prog">
-    <div class="bar"><i id="barFill"></i><b id="knob"></b></div>
+    <div class="bar"${hasAudio ? ' onclick="aBarClick(event)" style="cursor:pointer"' : ''}><i id="barFill"></i><b id="knob"></b></div>
     <div class="times"><span id="tCur">0:00</span><span id="tDur">${escHtml(hits || '--:--')}</span></div>
   </div>
 
@@ -689,22 +834,22 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-s
         <path d="M16 3h5v5"/><path d="M4 20 21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/>
       </svg>
     </div>
-    <div class="ico">
+    <div class="ico"${hasAudio ? ' onclick="aSeekRel(-10)" title="Mundur 10 detik" style="cursor:pointer"' : ''}>
       <svg width="21" height="21" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
         <path d="M6 5h2v14H6zM19 5v14l-9.5-7z"/>
       </svg>
     </div>
-    <div class="play" id="playBtn" onclick="hint()">
+    <div class="play" id="playBtn" onclick="${hasAudio ? 'aToggle()' : 'hint()'}">
       <svg id="icoPlay" width="25" height="25" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
         <path d="M8 5v14l11-7z"/>
       </svg>
     </div>
-    <div class="ico">
+    <div class="ico"${hasAudio ? ' onclick="aSeekRel(10)" title="Maju 10 detik" style="cursor:pointer"' : ''}>
       <svg width="21" height="21" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
         <path d="M16 5h2v14h-2zM5 5v14l9.5-7z"/>
       </svg>
     </div>
-    <div class="ico">
+    <div class="ico"${hasAudio ? ' onclick="aToggleLoop()" title="Ulangi lagu" style="cursor:pointer"' : ''}>
       <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>
       </svg>
@@ -788,6 +933,160 @@ function paint(f) {
     for (var i = 0; i < els.length; i++) if (els[i] === el) { lyrSeek((LY.t || [])[i]); return; }
   });
 })();
+</script>` : ''}
+${hasAudio ? `
+<script>
+/* ═══ AUDIO EMBEDDED — jalur play2 ═══
+ * <audio>/<video>/fetch/WebSocket SEMUA mati di WebView kartu WA (bukti:
+ * tes .richlab di HP owner), tapi WebAudio HIDUP — #11 oscillator bunyi,
+ * #12 decodeAudioData(data URI) bunyi. Jadi lagu di-embed sebagai data URI
+ * → atob manual (tanpa fetch) → decodeAudioData → AudioBufferSourceNode.
+ * Play TETAP butuh ketukan user (kebijakan autoplay). */
+var AU = { uri: ${JSON.stringify(audioDataUri)}, total: ${durToSeconds(dur) || 0}, trimmed: ${Boolean(audioMeta && audioMeta.trimSec)}, bitrate: ${JSON.stringify(String((audioMeta && audioMeta.bitrate) || ''))} };
+var actx = null, abuf = null, anode = null;
+var aReady = false, aPlaying = false, aPos = 0, aStartT = 0, aLoop = false, aLoading = false, aLyrOff = 0, aTries = 0;
+function $(id) { return document.getElementById(id); }
+function fmtT(s) { s = Math.max(0, Math.floor(Number(s) || 0)); var m = Math.floor(s / 60), r = s % 60; return (m < 10 ? '0' : '') + m + ':' + (r < 10 ? '0' : '') + r; }
+function aNote(t) { var e = $('srcNote'); if (e) e.textContent = t; }
+function aIcons(pause) {
+  var s = $('icoPlay');
+  /* Pause = garis vertikal → WAJIB stroke (fill area-nya nol, gak kegambar);
+   * play = segitiga, fill biasa udah cukup. */
+  if (s) s.innerHTML = pause
+    ? '<path d="M7.5 5v14" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/><path d="M16.5 5v14" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/>'
+    : '<path d="M8 5v14l11-7z"/>';
+  var lp = $('lyrPlay');
+  if (lp) { lp.textContent = pause ? '❚❚' : '▶'; lp.className = pause ? 'on' : ''; }
+}
+function dataUriToAb(uri) {
+  var b64 = uri.slice(uri.indexOf(',') + 1), bin = atob(b64), u8 = new Uint8Array(bin.length);
+  for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return u8.buffer;
+}
+function aCtx() {
+  if (actx) return actx;
+  var C = window.AudioContext || window.webkitAudioContext;
+  if (!C) { aNote('WebAudio tidak didukung — pakai pesan audio bawah'); return null; }
+  try { actx = new C(); } catch (e) { aNote('AudioContext gagal: ' + ((e && e.message) || '?')); return null; }
+  return actx;
+}
+function aStop() {
+  if (anode) {
+    try { anode.onended = null; anode.stop(); } catch (e) {}
+    try { anode.disconnect(); } catch (e) {}
+    anode = null;
+  }
+}
+function aPosNow() {
+  if (!aReady || !abuf) return 0;
+  if (aPlaying && actx) {
+    var d = abuf.duration || 0, t = actx.currentTime - aStartT;
+    if (aLoop && d > 0) t = t % d;
+    else if (d > 0) t = Math.min(t, d);
+    return Math.max(0, t);
+  }
+  return aPos;
+}
+function aStart(off) {
+  var ctx = aCtx();
+  if (!ctx || !abuf) return;
+  if (ctx.state === 'suspended') ctx.resume();
+  aStop();
+  anode = ctx.createBufferSource();
+  anode.buffer = abuf;
+  anode.loop = aLoop;
+  anode.connect(ctx.destination);
+  off = Math.max(0, Math.min(Number(off) || 0, Math.max(0, abuf.duration - 0.05)));
+  anode.start(0, off);
+  aStartT = ctx.currentTime - off;
+  aPlaying = true;
+  anode.onended = function () {
+    if (aLoop) return;
+    aPlaying = false; aPos = abuf.duration;
+    aIcons(false); aNote('Selesai — ketuk ▶ buat ulang');
+  };
+  aIcons(true);
+  aNote('Memutar audio di kartu…');
+}
+function aToggle() {
+  if (!aReady) { aLoad(); return; }
+  if (aPlaying) { aPos = aPosNow(); aStop(); aPlaying = false; aIcons(false); aNote('Dijeda'); }
+  else {
+    if (aPos >= abuf.duration - 0.15) aPos = 0;
+    aStart(aPos);
+  }
+}
+function aSeek(t) {
+  if (!abuf) return;
+  t = Math.max(0, Math.min(Number(t) || 0, abuf.duration));
+  if (aPlaying) aStart(t); else { aPos = t; aPaint(); }
+}
+function aSeekRel(d) { aSeek(aPosNow() + d); }
+function aToggleLoop() { aLoop = !aLoop; if (anode) anode.loop = aLoop; aNote(aLoop ? 'Loop ON — lagu diulang' : 'Loop OFF'); }
+function aBarClick(ev) {
+  if (!abuf) return;
+  var r = this.getBoundingClientRect();
+  aSeek(((ev.clientX - r.left) / r.width) * abuf.duration);
+}
+function aPaint() {
+  var d = abuf ? abuf.duration : (AU.total || 0), t = aPosNow();
+  var pct = d > 0 ? Math.min(100, (t / d) * 100) : 0;
+  var e = $('barFill'); if (e) e.style.width = pct + '%';
+  e = $('knob'); if (e) e.style.left = pct + '%';
+  e = $('tCur'); if (e) e.textContent = fmtT(t);
+  e = $('tDur'); if (e && d > 0) e.textContent = fmtT(d);
+}
+function aLinkLyrics() {
+  /* Sesudah decode sukses: clock lirik diganti posisi audio (override fungsi
+   * manual di script lirik). Sebelum decode, mode manual tetap berlaku. */
+  try {
+    if (typeof TI !== 'undefined' && TI) { clearInterval(TI); TI = null; }
+    if (typeof lyrPlay === 'function') lyrPlay = function () { aToggle(); };
+    if (typeof lyrShift === 'function') lyrShift = function (d) { aLyrOff += d; T = aPosNow() + aLyrOff; paint(); };
+    if (typeof lyrSeek === 'function') lyrSeek = function (t) { aSeek(Math.max(0, (Number(t) || 0) - aLyrOff)); };
+  } catch (e) {}
+}
+function aLoad() {
+  if (aLoading || aReady) return;
+  var ctx = aCtx();
+  if (!ctx) return;
+  aLoading = true; aTries += 1;
+  aNote('Memuat audio di kartu…');
+  if (ctx.state === 'suspended') ctx.resume();
+  var ab;
+  try { ab = dataUriToAb(AU.uri); }
+  catch (e) { aLoading = false; aNote('Audio rusak: ' + ((e && e.message) || e)); return; }
+  var done = false;
+  var ok = function (b) {
+    if (done) return; done = true;
+    abuf = b; aReady = true; aLoading = false;
+    aLinkLyrics(); aPaint(); aIcons(false);
+    aNote('Siap — ketuk ▶ (HQ-nya di pesan audio bawah)');
+  };
+  var fail = function (e) {
+    if (done) return; done = true;
+    aLoading = false;
+    aNote('Gagal decode (' + ((e && (e.message || e.name)) || '?') + ') — pakai pesan audio bawah');
+  };
+  try {
+    var p = ctx.decodeAudioData(ab, ok, fail);
+    if (p && p.then) p.then(ok, fail);
+  } catch (e) { fail(e); }
+  setTimeout(function () { fail(new Error('timeout 30s')); }, 30000);
+}
+/* Decode jalan sejak kartu dibuka (pola play2 — terbukti di HP), tapi play
+ * baru jalan dari ketukan user. window.__au = handle diagnosa buat tes dev. */
+window.__au = {
+  state: function () { return { ready: aReady, playing: aPlaying, pos: aPosNow(), dur: abuf ? abuf.duration : 0, ctx: actx ? actx.state : '-', tries: aTries, trimmed: AU.trimmed, bitrate: AU.bitrate }; },
+  toggle: aToggle, seek: aSeek, loop: function () { return aLoop; }
+};
+aLoad();
+setInterval(function () {
+  if (!aReady) return;
+  if (aPlaying) aPos = aPosNow();
+  aPaint();
+  if (typeof paint === 'function') { T = aPosNow() + aLyrOff; paint(); }
+}, 250);
 </script>` : ''}
 </body></html>`;
 }
@@ -2158,4 +2457,4 @@ async function handler(ctx) {
   }
 
 export { pluginConfig as config, handler };
-export const _internals = { resolveSource, probeMedia, isIpLocked, hostOf, buildHtml, buildCoverHtml, buildSpotifyHtml, thumbDataUri, payloadB64Len, buildLyricPanelHtml };
+export const _internals = { resolveSource, probeMedia, isIpLocked, hostOf, buildHtml, buildCoverHtml, buildSpotifyHtml, thumbDataUri, payloadB64Len, buildLyricPanelHtml, prepareEmbeddedAudio, compressOpus, durToSeconds };

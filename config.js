@@ -197,6 +197,13 @@ export default {
   // true  = kartu player WebSocket (butuh WS; sebagian WebView WA nolak media).
   aurora: {
     playerCard: false,
+    // Batas audio yang di-embed di dalam kartu (KB base64). Kosong = 800 =
+    // angka play2 yang udah kebukti ke-render + bunyi di HP. Naikkan (mis.
+    // '1500' / '2000') kalau HP muat: lagu jadi bisa penuh + bitrate lebih
+    // tinggi, tapi kartu makin berat & makin dekat ke batas render WA.
+    // Dikutip sebagai string ('...') biar nilai user kebackup pas .updatesc
+    // (KEEP_FIELDS cuma membaca nilai string).
+    maxEmbedKb: '',
   },
 
   emerald: {
