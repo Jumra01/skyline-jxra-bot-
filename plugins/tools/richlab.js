@@ -19,12 +19,12 @@ const UA = 'Mozilla/5.0 (Linux; Android 13; 23021RAA2Y Build/TKQ1.221114.001) Ap
 /** Video pendek buat sumber tes (Janji Suci — 3:14). */
 const TEST_VIDEO = 'https://www.youtube.com/watch?v=hQ-wYw4hP84';
 
-/** Beep 440 Hz, WAV 4 kHz mono 8-bit 0.6 dtk → base64.
+/** Beep 440 Hz, WAV 4 kHz mono 8-bit 0.3 dtk → base64.
  *  Sample rate 4 kHz sengaja (beep 440Hz tetap jelas, Nyquist aman) —
- *  kartu lab harus tetap muat di payload FOA, dan beep ini ±3KB bukan ±11KB. */
+ *  kartu lab harus tetap muat di payload FOA, dan beep ini ±1.6KB. */
 function beepDataUri() {
   const rate = 4000;
-  const n = Math.round(rate * 0.6);
+  const n = Math.round(rate * 0.3);
   const buf = Buffer.alloc(44 + n);
   buf.write('RIFF', 0);
   buf.writeUInt32LE(36 + n, 4);
@@ -54,7 +54,7 @@ const esc = (v) => String(v ?? '')
   .replace(/\$\{/g, '\\${')
   .replace(/</g, '\\x3C');
 
-function buildLabHtml({ remoteImg, remoteAudio, wsUrl, pagesWsUrl = '', beep, label }) {
+function buildLabHtml({ remoteImg, remoteAudio, wsUrl, pagesWsUrl = '', imgstream = '', beep, label }) {
   return `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>RICH LAB</title>
@@ -125,6 +125,9 @@ audio,video{width:100%;margin-top:8px;border-radius:8px}
 <div class="row"><div class="name">15. WS langsung ke pages.dev (lewatatin apex)</div>
 <button class="btn" onclick="tWsPages()">Tes</button><div class="res" id="r15">-</div></div>
 
+<div class="row"><div class="name">16. PIKSEL: imgstream → canvas → decode → play</div>
+<button class="btn" onclick="tImgStream()">Tes</button><div class="res" id="r16">-</div></div>
+
 <div id="sum"></div>
 
 <script>
@@ -132,6 +135,7 @@ var REMOTE_IMG = "${esc(remoteImg)}";
 var REMOTE_AUDIO = "${esc(remoteAudio)}";
 var WS_URL = "${esc(wsUrl)}";
 var PAGES_WS = "${esc(pagesWsUrl || '')}";
+var IMGSTREAM = "${esc(imgstream || '')}";
 var BEEP = "${esc(beep)}";
 var R = {};
 var UA_STR = navigator.userAgent;
@@ -353,8 +357,8 @@ function tWebAudioOsc() {
     osc.connect(g);
     g.connect(ctx.destination);
     osc.start();
-    osc.stop(ctx.currentTime + 0.6);
-    set(11, 'wait', 'beep oscillator 0.6 dtk terjadwal…');
+    osc.stop(ctx.currentTime + 0.3);
+    set(11, 'wait', 'beep oscillator 0.3 dtk terjadwal…');
     setTimeout(function () {
       if (ctx.state === 'running') set(11, 'ok', 'WebAudio jalan (state=running) — BUNYI BEEP kedengaran?');
       else set(11, 'no', 'state=' + ctx.state + ' — output diblok (gak kedengaran)');
@@ -515,6 +519,79 @@ function tWsPages() {
   setTimeout(function () { try { ws.close(); } catch (e) {} }, 25000);
 }
 
+/* ── Jalur PIKSEL (plan B): bytes audio disembunyiin server di piksel PNG,
+ *    kartu muat lewat <img> (satu-satunya jalur network yang masih hidup di
+ *    WebView offline), canvas getImageData baca balik, rakit → decode → play.
+ *    Protokol piksel lihat functions/api/tools/imgstream.js (web-cf). ── */
+
+function imgChunk(i) {
+  return new Promise(function (res, rej) {
+    var im = new Image();
+    im.crossOrigin = 'anonymous';
+    var to = setTimeout(function () { rej(new Error('timeout 15s chunk ' + i)); }, 15000);
+    im.onload = function () {
+      clearTimeout(to);
+      try {
+        var c = document.createElement('canvas');
+        c.width = im.width; c.height = im.height;
+        var g = c.getContext('2d');
+        g.drawImage(im, 0, 0);
+        var d = g.getImageData(0, 0, c.width, c.height).data;
+        /* Server nulis stream sebagai RGB (3 byte/piksel); canvas balikin
+         * RGBA (4 byte/piksel) — jadi SEMUA byte stream (termasuk header)
+         * harus dibaca lewat piksel s/3, channel s%3. Kalau dibaca kontigu,
+         * byte ke-3 kena alpha (255) dan header rusak. */
+        var rd = function (i) { return d[((i / 3) | 0) * 4 + (i % 3)]; };
+        var total = (rd(0) << 24 | rd(1) << 16 | rd(2) << 8 | rd(3)) >>> 0;
+        var crc = rd(4), count = (rd(5) << 16 | rd(6) << 8 | rd(7)) >>> 0;
+        var out = new Uint8Array(count);
+        var sum = 0;
+        for (var k = 0; k < count; k++) {
+          var v = rd(8 + k);
+          out[k] = v; sum = (sum + v) & 255;
+        }
+        if (sum !== crc) { rej(new Error('checksum salah (piksel rusak)')); return; }
+        res({ total: total, data: out });
+      } catch (e) { rej(new Error('canvas: ' + ((e && e.name) || '?') + ' ' + ((e && e.message) || ''))); }
+    };
+    im.onerror = function () { clearTimeout(to); rej(new Error('img onerror (imgstream belum ke-deploy?)')); };
+    im.src = IMGSTREAM + '&off=' + (i * 65536) + '&len=65536&r=' + Math.random();
+  });
+}
+
+function tImgStream() {
+  var ctx = getCtx(16);
+  if (!ctx) return;
+  if (!IMGSTREAM) { set(16, 'no', 'URL imgstream kosong'); return; }
+  set(16, 'wait', 'unduh chunk 1…');
+  var parts = [], got = 0, total = 0, i = 0, t0 = Date.now();
+  var play = function () {
+    var ab = new Uint8Array(got), off = 0;
+    for (var j = 0; j < parts.length; j++) { ab.set(parts[j], off); off += parts[j].length; }
+    set(16, 'wait', Math.round(got / 1024) + 'KB byte COCOK ✓ (' + ((Date.now() - t0) / 1000).toFixed(1) + 's) — decode…');
+    var done = false;
+    var cb = function (buf) {
+      if (done) return; done = true;
+      var src = ctx.createBufferSource();
+      src.buffer = buf; src.connect(ctx.destination); src.start();
+      set(16, 'ok', 'PIPELINE PENUH OK — ' + buf.duration.toFixed(1) + 's audio dari PIKSEL gambar — DENGAR LAGU?');
+    };
+    var fail = function (e) { if (done) return; done = true; set(16, 'no', 'decode GAGAL: ' + ((e && (e.message || e.name)) || '?')); };
+    try { var p = ctx.decodeAudioData(ab.buffer, cb, fail); if (p && p.then) p.then(cb, fail); } catch (e) { fail(e); }
+  };
+  var next = function () {
+    if (i >= 3 || (total && got >= Math.min(total, 3 * 65536))) { play(); return; }
+    imgChunk(i).then(function (r) {
+      i++;
+      if (!total) total = r.total;
+      parts.push(r.data); got += r.data.length;
+      set(16, 'wait', 'unduh ' + Math.round(got / 1024) + 'KB ✓ — chunk ' + (i + 1) + '…');
+      next();
+    }, function (e) { set(16, 'no', 'chunk ' + (i + 1) + ' GAGAL: ' + ((e && e.message) || '?')); });
+  };
+  next();
+}
+
 renderSum();
 </script>
 </body></html>`;
@@ -552,6 +629,8 @@ async function handler(ctx) {
   /* Host Pages origin langsung — buat ngetes apex skyline.web.id yang record
    * A-nya pernah nunjuk tunnel lama (tes #15). */
   const pagesWsUrl = `wss://skyline-27v.pages.dev/api/tools/ws-audio?url=${encodeURIComponent(audioUrl)}`;
+  /* Jalur piksel (plan B) — bytes audio disembunyiin di PNG (tes #16). */
+  const imgstreamUrl = `${website}/api/tools/imgstream?url=${encodeURIComponent(audioUrl)}`;
   const remoteImg = 'https://i.ytimg.com/vi/hQ-wYw4hP84/hqdefault.jpg';
 
   const html = buildLabHtml({
@@ -559,6 +638,7 @@ async function handler(ctx) {
     remoteAudio: audioUrl,
     wsUrl,
     pagesWsUrl,
+    imgstream: imgstreamUrl,
     beep: beepDataUri(),
     label: `host=${website} • key=${apikey.slice(0, 8)}…`
   });
