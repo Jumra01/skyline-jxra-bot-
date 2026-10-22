@@ -197,10 +197,11 @@ export default {
   // true  = kartu player WebSocket (butuh WS; sebagian WebView WA nolak media).
   aurora: {
     playerCard: false,
-    // Batas audio yang di-embed di dalam kartu (KB base64). Kosong = 800 =
-    // angka play2 yang udah kebukti ke-render + bunyi di HP. Naikkan (mis.
-    // '1500' / '2000') kalau HP muat: lagu jadi bisa penuh + bitrate lebih
-    // tinggi, tapi kartu makin berat & makin dekat ke batas render WA.
+    // Batas audio yang di-embed di dalam kartu (KB base64). Kosong = 3400 =
+    // maks yang disarankan (≈ file 2,5MB — masih di bawah hard-cap frame WA
+    // ±4000KB, jadi lagu ±4 menit muat penuh di opus 64k, kualitas mendekati
+    // asli). Isi angka lebih kecil (mis. '800') buat hemat payload, atau
+    // lebih besar sampai '3900' kalau HP muat — jangan lewat 4000 (hard-cap).
     // Dikutip sebagai string ('...') biar nilai user kebackup pas .updatesc
     // (KEEP_FIELDS cuma membaca nilai string).
     maxEmbedKb: '',
