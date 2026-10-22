@@ -12,7 +12,7 @@ import { logger } from '../../core/logger.js';
 import {
   ytSearch as skylineSearch,
   ytInfo as skylineInfo,
-  downloadAudio as skylineAudio,
+  skylineCreds,
   isConfigured as skylineReady
 } from '../../scraper/SKYLINE.js';
 import { fetchThumbBuffer } from '../../lib/ytUi.js';
@@ -125,42 +125,74 @@ async function resolveSource(info, format) {
 }
 
 /**
- * AUDIO: unduh lewat skyline (jalur `.yta`) lalu kirim sebagai audio WhatsApp.
- * Gak pakai pemutar HTML sama sekali — pemutar native WA pasti jalan.
+ * AUDIO: cukup pakai hasil SEARCH skyline + endpoint `/api/tools/ytdl/audio`.
+ * Tanpa `ytInfo()` — server yang resolve audio pas endpoint itu dipanggil,
+ * jadi lebih cepat & satu langkah lebih sedikit yang bisa gagal.
  */
+async function downloadAudioViaSearch(videoUrl, { timeoutMs = 180000, maxBytes = 60 * 1024 * 1024 } = {}) {
+  const { website, apikey } = skylineCreds();
+  if (!apikey) throw new Error('API key skyline.web.id belum diisi');
+  const link =
+    `${website}/api/tools/ytdl/audio?url=${encodeURIComponent(videoUrl)}` +
+    `&apikey=${encodeURIComponent(apikey)}&mode=stream`;
+  const host = hostOf(link);
+  const t0 = Date.now();
+  let res;
+  try {
+    res = await fetch(link, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(timeoutMs) });
+  } catch (err) {
+    throw new Error(`koneksi ke ${host} gagal (${err?.name || 'Error'}: ${err?.message || err})`);
+  }
+  const type = (res.headers.get('content-type') || '').toLowerCase();
+  if (!res.ok) {
+    let body = '';
+    try { body = (await res.text()).slice(0, 160).replace(/\s+/g, ' '); } catch { /* ignore */ }
+    throw Object.assign(new Error(`HTTP ${res.status} • ${type || '-'} • body="${body}"`), { status: res.status });
+  }
+  if (!/^audio\//.test(type)) {
+    let body = '';
+    try { body = (await res.text()).slice(0, 160).replace(/\s+/g, ' '); } catch { /* ignore */ }
+    throw Object.assign(new Error(`bukan audio (content-type ${type || '-'}) • body="${body}"`), { status: res.status });
+  }
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (!buf.length) throw new Error('audio kosong (0 byte)');
+  if (buf.length > maxBytes) throw new Error(`audio kegedean (${(buf.length / 1048576).toFixed(1)}MB > ${(maxBytes / 1048576).toFixed(0)}MB)`);
+  logger.info(`[Aurora] audio: ${type} • ${(buf.length / 1048576).toFixed(2)}MB • ${((Date.now() - t0) / 1000).toFixed(1)}s • host=${host}`);
+  return { buffer: buf, mimetype: type.split(';')[0].trim() || 'audio/mpeg', ext: /mp4|m4a/.test(type) ? 'm4a' : 'mp3' };
+}
+
 async function sendAuroraAudio(ctx, info, format) {
   const t0 = Date.now();
   let audio = null;
   let lastErr = null;
 
   for (let attempt = 1; attempt <= 2; attempt += 1) {
-    const ta = Date.now();
     try {
-      logger.info(`[Aurora] audio: unduh (percobaan ${attempt}/2) "${String(info.title || '').slice(0, 70)}"`);
-      audio = await skylineAudio(info.url);
-      logger.info(`[Aurora] audio: OK ${(audio.buffer.length / 1048576).toFixed(2)}MB • ${audio.mimetype} • ${((Date.now() - ta) / 1000).toFixed(1)}s`);
+      logger.info(`[Aurora] audio: unduh via /api/tools/ytdl/audio (percobaan ${attempt}/2) "${String(info.title || '').slice(0, 70)}"`);
+      audio = await downloadAudioViaSearch(info.url);
       break;
     } catch (err) {
       lastErr = err;
       logger.warn(
-        `[Aurora] audio: GAGAL (percobaan ${attempt}/2) — HTTP ${err?.status || 0} • kode=${err?.code || '-'} • ` +
-        `pesan=${String(err?.message || err).slice(0, 160)}`
+        `[Aurora] audio: GAGAL (percobaan ${attempt}/2) — status=${err?.status || 0} • ` +
+        `pesan=${String(err?.message || err).slice(0, 180)}`
       );
       if (attempt < 2) await new Promise((r) => setTimeout(r, 1500));
     }
   }
   if (!audio) {
     throw new Error(
-      `Gagal unduh audio lewat skyline${lastErr?.status ? ` (HTTP ${lastErr.status})` : ''}: ` +
-      String(lastErr?.message || lastErr || 'tanpa detail').slice(0, 160)
+      `Gagal unduh audio dari skyline${lastErr?.status ? ` (HTTP ${lastErr.status})` : ''}: ` +
+      String(lastErr?.message || lastErr || 'tanpa detail').slice(0, 170)
     );
   }
 
-  const clean = String(audio.title || info.title || 'Audio').replace(/[\\/:*?"<>|]/g, '').slice(0, 90);
+  const clean = String(info.title || 'Audio').replace(/[\\/:*?"<>|]/g, '').slice(0, 90);
+  const duration = String(info.duration || '');
 
   let cover = null;
   try {
-    cover = await fetchThumbBuffer(audio.thumbnail || info.thumbnail, { width: 640 });
+    cover = await fetchThumbBuffer(info.thumbnail, { width: 640 });
     logger.info(`[Aurora] audio: cover ${cover ? `OK ${Math.round(cover.buffer.length / 1024)}KB` : 'kosong'}`);
   } catch (err) {
     logger.warn(`[Aurora] audio: cover gagal — ${err?.message || err}`);
@@ -172,7 +204,7 @@ async function sendAuroraAudio(ctx, info, format) {
         type: 'image',
         media: cover.buffer,
         mimetype: 'image/jpeg',
-        caption: `*${clean}*\n\n> ${audio.duration || info.duration || ''} • AURORA 🎧`
+        caption: `*${clean}*\n\n> ${duration} • AURORA 🎧`
       });
       logger.info('[Aurora] audio: cover terkirim');
     } catch (err) {
@@ -1365,7 +1397,8 @@ async function handler(ctx) {
               url: v.url,
               title: v.title || 'Unknown',
               artist: v.artist || v.channel || 'skyline-JXRA Stream',
-              thumbnail: v.thumbnail || ''
+              thumbnail: v.thumbnail || '',
+              duration: v.duration || ''
             };
           }
         } catch (err) {
