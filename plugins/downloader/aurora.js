@@ -24,6 +24,7 @@ const API_HEADERS = {
 };
 
 const WS_WORKER = config.wsWorkerUrl || 'wss://audio.jhx.my.id/wss/audio';
+const UA = API_HEADERS['User-Agent'];
 
 async function ytSearch(query) {
   const res = await fetch(API_BASE + '/yt-search', {
@@ -88,50 +89,142 @@ function pickQuality(list, height) {
  * lalu YT-DL (savenow, sumber cadangan `.play`), terakhir API lama
  * `api.jhx.my.id` yang sering gagal/expired.
  */
+function hostOf(url) {
+  try { return new URL(url).host; } catch { return '-'; }
+}
+
+/** Link googlevideo yang punya `&ip=` cuma valid dari IP yang minta URL-nya.
+ * Bot minta URL dari IP panel → HP (IP beda) bakal dapat 403 dan lagu gak bunyi. */
+function isIpLocked(url) {
+  return /[?&]ip=/i.test(String(url || ''));
+}
+
+/**
+ * Cek cepat apakah URL bisa diputar: ambil 2 KB pertama pakai Range, lalu
+ * cancel. HASILNYA DICATAT ke log — ini yang bikin "kartu muncul tapi lagu
+ * gak jalan" langsung ketahuan penyebabnya (403 / HTML / IP-locked / lambat).
+ */
+async function probeMedia(url, label) {
+  const host = hostOf(url);
+  const locked = isIpLocked(url);
+  const t0 = Date.now();
+  try {
+    const r = await fetch(url, {
+      headers: { Range: 'bytes=0-2047', 'User-Agent': UA },
+      signal: AbortSignal.timeout(12000)
+    });
+    const type = (r.headers.get('content-type') || '-').toLowerCase();
+    const range = r.headers.get('content-range') || '';
+    const total = r.headers.get('content-length') || '?';
+    let first = 0;
+    let snippet = '';
+    try {
+      const reader = r.body?.getReader();
+      if (reader) {
+        const chunk = await reader.read();
+        first = chunk?.value?.byteLength || 0;
+        if (chunk?.value && first) {
+          snippet = Buffer.from(chunk.value).subarray(0, 160).toString('utf8').replace(/\s+/g, ' ').trim();
+        }
+        await reader.cancel();
+      }
+    } catch { /* cuma butuh status + header */ }
+    const ok = (r.status === 200 || r.status === 206) && /^(audio|video)\//.test(type);
+    // Body-nya dibuang untuk media; kalau gagal (403/HTML/JSON error) cuplikannya
+    // ikut dicatat biar sebabnya kelihatan tanpa buka DevTools.
+    const tail = ok ? '' : ` • body="${snippet.slice(0, 140)}"`;
+    const line = `[Aurora] probe ${label} → HTTP ${r.status} • ${type} • range=${range || 'TIDAK didukung'} • ${first}B/${total}B • ${Date.now() - t0}ms • host=${host}${locked ? ' • ⚠ IP-LOCKED' : ''}${tail}`;
+    if (ok) logger.info(line); else logger.warn(line);
+    return { ok, status: r.status, type, ranges: Boolean(range), bytes: first, host, locked };
+  } catch (err) {
+    logger.warn(`[Aurora] probe ${label} GAGAL — ${err?.name || 'Error'}: ${err?.message || err} • host=${host}${locked ? ' • ⚠ IP-LOCKED' : ''}`);
+    return { ok: false, status: 0, type: '', ranges: false, bytes: 0, host, locked, error: err?.name || 'Error' };
+  }
+}
+
+/**
+ * Ambil link media buat player.
+ * Urutan: Skyline (paling cepat) → YT-DL/savenow → API lama.
+ * Link yang IP-locked (bukan buat HP) DITOLAK buat diputar langsung; kalau
+ * semua sumber begitu, player tetap jalan lewat fallback WebSocket.
+ */
 async function resolveSource(info, format) {
   const wantAudio = AUDIO_FORMAT.test(String(format || 'mp3'));
+  let lockedFallback = null;
+
+  const accept = async (cand) => {
+    const probe = await probeMedia(cand.url, cand.via);
+    const item = { ...cand, probe, preview: `Sumber ${cand.via} • ${probe.type || 'media'}${probe.ranges ? ' • seek OK' : ''}` };
+    if (probe.ok && !probe.locked) return item;
+    if (!lockedFallback) lockedFallback = item;
+    if (probe.locked) logger.warn(`[Aurora] ${cand.via} di-skip buat diputar langsung — URL terkunci ke IP bot (HP bakal 403)`);
+    else logger.warn(`[Aurora] ${cand.via} di-skip — probe gagal (HTTP ${probe.status || 0}${probe.error ? ' ' + probe.error : ''})`);
+    return null;
+  };
 
   if (skylineReady()) {
     try {
       const meta = await skylineInfo(info.url);
-      const title = meta.title || info.title;
-      const thumbnail = meta.thumbnail || info.thumbnail;
-      const duration = meta.duration || info.duration || '';
       const url = wantAudio
         ? meta.audioUrl
         : (pickQuality(meta.qualities, Number(format))?.url || meta.videoUrl);
-      if (url) return { url, title, thumbnail, duration, via: 'skyline' };
-      logger.warn('[Aurora] Skyline gak ngasih link ' + (wantAudio ? 'audio' : 'video') + ' — pakai sumber cadangan');
+      if (!url) {
+        logger.warn('[Aurora] Skyline gak ngasih link ' + (wantAudio ? 'audio' : 'video') + ' — pakai sumber cadangan');
+      } else {
+        const ok = await accept({
+          url,
+          title: meta.title || info.title,
+          thumbnail: meta.thumbnail || info.thumbnail,
+          duration: meta.duration || info.duration || '',
+          via: 'skyline'
+        });
+        if (ok) return ok;
+      }
     } catch (err) {
       logger.warn('[Aurora] Skyline gagal (' + (err?.message || err) + ') — pakai sumber cadangan');
     }
   }
 
-  // YT-DL / savenow — jalur cadangan yang dipakai `.play`.
+  // YT-DL / savenow — jalur cadangan yang dipakai `.play` (URL-nya gak IP-locked).
   try {
     const res = await jhydl.download(info.url, ytdlFormat(format));
     if (res?.download_url) {
-      return {
+      const ok = await accept({
         url: res.download_url,
         title: res.title || info.title,
         thumbnail: res.image || info.thumbnail,
         duration: info.duration || '',
         via: 'ytdl'
-      };
+      });
+      if (ok) return ok;
+    } else if (res?.error) {
+      logger.warn('[Aurora] YT-DL: ' + res.error);
     }
-    if (res?.error) logger.warn('[Aurora] YT-DL: ' + res.error);
   } catch (err) {
     logger.warn('[Aurora] YT-DL gagal (' + (err?.message || err) + ')');
   }
 
-  const data = await ytDownload(info.url, format);
-  return {
-    url: data.url,
-    title: data.title || info.title,
-    thumbnail: data.thumbnail || info.thumbnail,
-    duration: data.duration || info.duration || '',
-    via: 'legacy'
-  };
+  if (!lockedFallback) {
+    try {
+      const data = await ytDownload(info.url, format);
+      const ok = await accept({
+        url: data.url,
+        title: data.title || info.title,
+        thumbnail: data.thumbnail || info.thumbnail,
+        duration: data.duration || info.duration || '',
+        via: 'legacy'
+      });
+      if (ok) return ok;
+    } catch (err) {
+      logger.warn('[Aurora] legacy api.jhx gagal (' + (err?.message || err) + ')');
+    }
+  }
+
+  if (lockedFallback) {
+    logger.warn(`[Aurora] semua sumber langsung gagal/terkunci — pakai ${lockedFallback.via} + fallback WebSocket (suara baru keluar setelah unduhan selesai)`);
+    return lockedFallback;
+  }
+  throw new Error('Semua sumber media gagal (skyline, savenow, legacy) — lihat log [Aurora] probe di atas');
 }
 
 async function thumbDataUri(url) {
@@ -162,7 +255,7 @@ const escapeHtmlJs = (value) =>
     .replace(/\$\{/g, '\\${')
     .replace(/</g, '\\x3C');
 
-function buildHtml({ finalTitle, finalChannel, finalDuration, videoUrl, thumbnailb64, wsUrl, isAudio: audioHint }) {
+function buildHtml({ finalTitle, finalChannel, finalDuration, videoUrl, thumbnailb64, wsUrl, isAudio: audioHint, sourceNote = '' }) {
   // URL dari YT-DL/savenow gak punya ekstensi (`/api/v2/download/<hash>`),
   // jadi jenis media ditentukan dari format yang diminta, bukan dari URL.
   const isAudio = typeof audioHint === 'boolean'
@@ -644,7 +737,7 @@ to{background-position:300% 0}
 				<div class="info">
 					<div class="song-title" id="songTitle">Unknown Video</div>
 					<div class="artist" id="artist">Unknown Channel</div>
-					<div class="player-status" id="playerStatus">Tekan play buat mulai</div>
+					<div class="player-status" id="playerStatus">${escapeHtmlJs(sourceNote || 'Tekan play buat mulai')}</div>
 				</div>
 
 				<div class="progress">
@@ -1299,16 +1392,34 @@ async function handler(ctx) {
       ]);
       const thumbnailb64 = thumbA || thumbB;
 
-      logger.debug('[Aurora] sumber media: ' + media.via + ' | ' + format + ' | ' + media.url.slice(0, 80));
+      const probe = media.probe || {};
+      logger.info(
+        `[Aurora] sumber dipakai: ${media.via} • host=${probe.host || '-'} • ${probe.type || '?'} • ` +
+        `range=${probe.ranges ? 'ya' : 'tidak'} • ${probe.bytes || 0}B • locked=${probe.locked ? 'YA' : 'tidak'} • format=${format}`
+      );
+      if (probe.locked) {
+        logger.warn('[Aurora] URL final IP-locked — HP bakal 403 kalau main langsung; kartu akan jatuh ke WebSocket (unduh dulu, baru bunyi)');
+      }
+      if (!probe.ok) {
+        logger.warn(`[Aurora] URL final gagal probe (HTTP ${probe.status || 0}) — player kemungkinan gagal; cek log probe di atas`);
+      }
 
       const wsMime = AUDIO_FORMAT.test(String(format || 'mp3')) ? 'audio/mpeg' : 'video/mp4';
       const wsUrl = WS_WORKER + '?url=' + encodeURIComponent(media.url) + '&mime=' + encodeURIComponent(wsMime);
 
-      const htmlPayload = buildHtml({ finalTitle, finalChannel, finalDuration, videoUrl: media.url, thumbnailb64, wsUrl, isAudio: AUDIO_FORMAT.test(String(format || 'mp3')) });
+      const sourceNote = media.preview
+        ? `${media.preview} — tekan play`
+        : 'Tekan play buat mulai';
+      const htmlPayload = buildHtml({
+        finalTitle, finalChannel, finalDuration,
+        videoUrl: media.url, thumbnailb64, wsUrl,
+        isAudio: AUDIO_FORMAT.test(String(format || 'mp3')),
+        sourceNote
+      });
 
       const sent = await sendRichJH(ctx, htmlPayload);
 
-      logger.debug('[Aurora] sent via jhrich | id=' + (sent?.id || '?'));
+      logger.info('[Aurora] kartu terkirim | id=' + (sent?.id || '?') + ' | sumber=' + media.via + (media.probe?.locked ? ' (locked → WS)' : ''));
       await ctx.react('🎛️');
     } catch (e) {
       await ctx.react('❎');
@@ -1317,3 +1428,4 @@ async function handler(ctx) {
   }
 
 export { pluginConfig as config, handler };
+export const _internals = { resolveSource, probeMedia, isIpLocked, hostOf, buildHtml };
