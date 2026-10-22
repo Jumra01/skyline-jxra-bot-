@@ -12,61 +12,22 @@ import { logger } from '../../core/logger.js';
 import {
   ytSearch as skylineSearch,
   ytInfo as skylineInfo,
+  downloadAudio as skylineAudio,
   isConfigured as skylineReady
 } from '../../scraper/SKYLINE.js';
-import { jhydl } from '../../scraper/YT-DL.js';
+import { fetchThumbBuffer } from '../../lib/ytUi.js';
+import { embedAudioCover } from '../../lib/audioCover.js';
 
-const API_BASE = 'https://api.jhx.my.id';
-const API_HEADERS = {
-  'Content-Type': 'application/json',
-  'User-Agent': 'Mozilla/5.0 (Linux; Android 13; 23021RAA2Y Build/TKQ1.221114.001) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.7922.199 Mobile Safari/537.36',
-  'Referer': 'https://jhx.my.id/ytdl/'
-};
+/* AURORA v3 — SEMUA lewat skyline.web.id (ga ada API pihak ketiga lagi):
+ *   • audio  → unduh lewat `downloadAudio()` (jalur yang sama dengan `.yta`),
+ *              lalu dikirim sebagai AUDIO WhatsApp asli + cover. Pemutar
+ *              WhatsApp native, jadi gak ada lagi drama webview nolak play.
+ *   • video  → tetap kartu HTML, tapi link-nya dari skyline & wajib lolos probe.
+ */
 
-const WS_WORKER = config.wsWorkerUrl || 'wss://audio.jhx.my.id/wss/audio';
-const UA = API_HEADERS['User-Agent'];
-
-async function ytSearch(query) {
-  const res = await fetch(API_BASE + '/yt-search', {
-    method: 'POST', headers: API_HEADERS,
-    body: JSON.stringify({ q: query }),
-    signal: AbortSignal.timeout(30000)
-  });
-  const text = await res.text();
-  let json = null;
-  try { json = JSON.parse(text); } catch {}
-  if (!res.ok || !json || !json.Status || !Array.isArray(json.data) || !json.data.length) {
-    throw new Error(`Search gagal: HTTP ${res.status} ${text.slice(0, 120)}`);
-  }
-  return json.data;
-}
-
-async function ytDownload(url, format) {
-  const res = await fetch(API_BASE + '/yt-download', {
-    method: 'POST', headers: API_HEADERS,
-    body: JSON.stringify({ url, format }),
-    signal: AbortSignal.timeout(120000)
-  });
-  const text = await res.text();
-  let json = null;
-  try { json = JSON.parse(text); } catch {}
-  if (!res.ok || !json || !json.Status || !json.data || !json.data.url) {
-    throw new Error(`Download format "${format}" gagal: HTTP ${res.status} ${text.slice(0, 140)}`);
-  }
-  return json.data;
-}
+const UA = 'Mozilla/5.0 (Linux; Android 13; 23021RAA2Y Build/TKQ1.221114.001) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.7922.199 Mobile Safari/537.36';
 
 const AUDIO_FORMAT = /^(mp3|m4a|aac|ogg|wav|flac)$/i;
-const YTDL_QUALITIES = ['4k', '1440', '1080', '720', '480', '320', '240', '144'];
-
-/** Samakan nama format dengan yang didukung YT-DL (savenow). */
-function ytdlFormat(format) {
-  const f = String(format || 'mp3').toLowerCase();
-  if (AUDIO_FORMAT.test(f)) return f;
-  if (f === '2160') return '4k';
-  if (f === '360') return '480';
-  return YTDL_QUALITIES.includes(f) ? f : '720';
-}
 
 /** Pilih quality video paling dekat dengan yang diminta (default: tertinggi). */
 function pickQuality(list, height) {
@@ -82,25 +43,16 @@ function pickQuality(list, height) {
   )[0];
 }
 
-/**
- * Ambil link media buat player.
- * Urutan sama seperti `.play`: API Skyline (skyline.web.id) dulu — link-nya
- * sudah bawa apikey, jadi bisa langsung di-stream webview tanpa unduh penuh —
- * lalu YT-DL (savenow, sumber cadangan `.play`), terakhir API lama
- * `api.jhx.my.id` yang sering gagal/expired.
- */
 function hostOf(url) {
   try { return new URL(url).host; } catch { return '-'; }
 }
 
-/** Link googlevideo yang punya `&ip=` cuma valid dari IP yang minta URL-nya.
- * Bot minta URL dari IP panel → HP (IP beda) bakal dapat 403 dan lagu gak bunyi. */
+/** Link googlevideo yang punya `&ip=` cuma valid dari IP yang minta URL-nya. */
 function isIpLocked(url) {
   return /[?&]ip=/i.test(String(url || ''));
 }
 
-/** URL proxy di skyline.web.id dikasih `mode=stream` supaya dikirim inline
- * (bukan `attachment`) — sebagian webview nolak media ber-disposition attachment. */
+/** URL proxy skyline dikasih `mode=stream` (inline) kalau endpoint-nya dukung. */
 function withInlineMode(url) {
   try {
     const u = new URL(String(url || ''));
@@ -110,22 +62,20 @@ function withInlineMode(url) {
 }
 
 /**
- * Cek cepat apakah URL bisa diputar: ambil 2 KB pertama pakai Range, lalu
- * cancel. HASILNYA DICATAT ke log — ini yang bikin "kartu muncul tapi lagu
- * gak jalan" langsung ketahuan penyebabnya (403 / HTML / IP-locked / lambat).
+ * Cek cepat apakah URL bisa diputar: ambil 2 KB pertama pakai Range lalu cancel.
+ * Semua hasilnya dicatat, jadi kalau gagal sebabnya langsung kelihatan.
  */
-async function probeMedia(url, label) {
+async function probeMedia(url, label, { timeoutMs = 12000 } = {}) {
   const host = hostOf(url);
   const locked = isIpLocked(url);
   const t0 = Date.now();
   try {
     const r = await fetch(url, {
       headers: { Range: 'bytes=0-2047', 'User-Agent': UA },
-      signal: AbortSignal.timeout(12000)
+      signal: AbortSignal.timeout(timeoutMs)
     });
     const type = (r.headers.get('content-type') || '-').toLowerCase();
     const range = r.headers.get('content-range') || '';
-    const disp = (r.headers.get('content-disposition') || '').toLowerCase();
     const total = r.headers.get('content-length') || '?';
     let first = 0;
     let snippet = '';
@@ -134,112 +84,119 @@ async function probeMedia(url, label) {
       if (reader) {
         const chunk = await reader.read();
         first = chunk?.value?.byteLength || 0;
-        if (chunk?.value && first) {
-          snippet = Buffer.from(chunk.value).subarray(0, 160).toString('utf8').replace(/\s+/g, ' ').trim();
-        }
+        if (chunk?.value && first) snippet = Buffer.from(chunk.value).subarray(0, 160).toString('utf8').replace(/\s+/g, ' ').trim();
         await reader.cancel();
       }
-    } catch { /* cuma butuh status + header */ }
-    // `attachment` cuma dicatat: ternyata skyline DAN savenow dua-duanya
-    // ngirim header itu, dan Chrome tetap bisa muter — bukan penyebab utama.
-    const attachment = /attachment/i.test(disp);
+    } catch { /* cukup header */ }
     const ok = (r.status === 200 || r.status === 206) && /^(audio|video)\//.test(type);
-    // Body-nya dibuang untuk media; kalau gagal (403/HTML/JSON error) cuplikannya
-    // ikut dicatat biar sebabnya kelihatan tanpa buka DevTools.
     const tail = ok ? '' : ` • body="${snippet.slice(0, 140)}"`;
-    const line = `[Aurora] probe ${label} → HTTP ${r.status} • ${type} • range=${range || 'TIDAK didukung'} • ${first}B/${total}B • ${Date.now() - t0}ms • host=${host}${locked ? ' • ⚠ IP-LOCKED' : ''}${attachment ? ' • ⚠ attachment' : ''}${tail}`;
+    const line = `[Aurora] probe ${label} → HTTP ${r.status} • ${type} • range=${range || 'TIDAK didukung'} • ${first}B/${total}B • ${Date.now() - t0}ms • host=${host}${locked ? ' • ⚠ IP-LOCKED' : ''}${tail}`;
     if (ok) logger.info(line); else logger.warn(line);
-    return { ok, status: r.status, type, ranges: Boolean(range), bytes: first, host, locked, attachment };
+    return { ok, status: r.status, type, ranges: Boolean(range), bytes: first, host, locked };
   } catch (err) {
     logger.warn(`[Aurora] probe ${label} GAGAL — ${err?.name || 'Error'}: ${err?.message || err} • host=${host}${locked ? ' • ⚠ IP-LOCKED' : ''}`);
     return { ok: false, status: 0, type: '', ranges: false, bytes: 0, host, locked, error: err?.name || 'Error' };
   }
 }
 
-/**
- * Ambil link media buat player.
- * Urutan: Skyline (paling cepat) → YT-DL/savenow → API lama.
- * Link yang IP-locked (bukan buat HP) DITOLAK buat diputar langsung; kalau
- * semua sumber begitu, player tetap jalan lewat fallback WebSocket.
- */
+/** Link media video dari skyline (audio ga lewat sini — lihat sendAuroraAudio). */
 async function resolveSource(info, format) {
-  const wantAudio = AUDIO_FORMAT.test(String(format || 'mp3'));
-  let lockedFallback = null;
-
-  const accept = async (cand) => {
-    cand = { ...cand, url: withInlineMode(cand.url) };
-    const probe = await probeMedia(cand.url, cand.via);
-    const item = { ...cand, probe, preview: `Sumber ${cand.via} • ${probe.type || 'media'}${probe.ranges ? ' • seek OK' : ''}` };
-    if (probe.ok && !probe.locked) return item;
-    if (!lockedFallback) lockedFallback = item;
-    if (probe.locked) logger.warn(`[Aurora] ${cand.via} di-skip buat diputar langsung — URL terkunci ke IP bot (HP bakal 403)`);
-    else logger.warn(`[Aurora] ${cand.via} di-skip — probe gagal (HTTP ${probe.status || 0}${probe.error ? ' ' + probe.error : ''})`);
-    return null;
+  if (!skylineReady()) throw new Error('API key skyline.web.id belum diisi — Aurora butuh itu');
+  const meta = await skylineInfo(info.url);
+  const url = pickQuality(meta.qualities, Number(format))?.url || meta.videoUrl;
+  if (!url) throw new Error('Skyline gak ngasih link video buat kualitas ' + format);
+  const finalUrl = withInlineMode(url);
+  logger.info(`[Aurora] video: kualitas ${format}p → ${hostOf(finalUrl)}`);
+  // Video di-resolve on-demand di server (bisa 20-40 dtk), jadi timeout-nya lebih lega.
+  const probe = await probeMedia(finalUrl, 'skyline-video', { timeoutMs: 45000 });
+  if (!probe.ok) {
+    const why = probe.error ? probe.error : `HTTP ${probe.status || 0}${probe.type ? ' ' + probe.type : ''}`;
+    throw new Error(`Link video skyline gagal diputar (${why}) — cek log [Aurora] probe`);
+  }
+  return {
+    url: finalUrl,
+    title: meta.title || info.title,
+    thumbnail: meta.thumbnail || info.thumbnail,
+    duration: meta.duration || info.duration || '',
+    via: 'skyline',
+    probe,
+    preview: `Sumber skyline • ${probe.type}`
   };
+}
 
-  if (skylineReady()) {
+/**
+ * AUDIO: unduh lewat skyline (jalur `.yta`) lalu kirim sebagai audio WhatsApp.
+ * Gak pakai pemutar HTML sama sekali — pemutar native WA pasti jalan.
+ */
+async function sendAuroraAudio(ctx, info, format) {
+  const t0 = Date.now();
+  let audio = null;
+  let lastErr = null;
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const ta = Date.now();
     try {
-      const meta = await skylineInfo(info.url);
-      const url = wantAudio
-        ? meta.audioUrl
-        : (pickQuality(meta.qualities, Number(format))?.url || meta.videoUrl);
-      if (!url) {
-        logger.warn('[Aurora] Skyline gak ngasih link ' + (wantAudio ? 'audio' : 'video') + ' — pakai sumber cadangan');
-      } else {
-        const ok = await accept({
-          url,
-          title: meta.title || info.title,
-          thumbnail: meta.thumbnail || info.thumbnail,
-          duration: meta.duration || info.duration || '',
-          via: 'skyline'
-        });
-        if (ok) return ok;
-      }
+      logger.info(`[Aurora] audio: unduh (percobaan ${attempt}/2) "${String(info.title || '').slice(0, 70)}"`);
+      audio = await skylineAudio(info.url);
+      logger.info(`[Aurora] audio: OK ${(audio.buffer.length / 1048576).toFixed(2)}MB • ${audio.mimetype} • ${((Date.now() - ta) / 1000).toFixed(1)}s`);
+      break;
     } catch (err) {
-      logger.warn('[Aurora] Skyline gagal (' + (err?.message || err) + ') — pakai sumber cadangan');
+      lastErr = err;
+      logger.warn(
+        `[Aurora] audio: GAGAL (percobaan ${attempt}/2) — HTTP ${err?.status || 0} • kode=${err?.code || '-'} • ` +
+        `pesan=${String(err?.message || err).slice(0, 160)}`
+      );
+      if (attempt < 2) await new Promise((r) => setTimeout(r, 1500));
     }
   }
+  if (!audio) {
+    throw new Error(
+      `Gagal unduh audio lewat skyline${lastErr?.status ? ` (HTTP ${lastErr.status})` : ''}: ` +
+      String(lastErr?.message || lastErr || 'tanpa detail').slice(0, 160)
+    );
+  }
 
-  // YT-DL / savenow — jalur cadangan yang dipakai `.play` (URL-nya gak IP-locked).
+  const clean = String(audio.title || info.title || 'Audio').replace(/[\\/:*?"<>|]/g, '').slice(0, 90);
+
+  let cover = null;
   try {
-    const res = await jhydl.download(info.url, ytdlFormat(format));
-    if (res?.download_url) {
-      const ok = await accept({
-        url: res.download_url,
-        title: res.title || info.title,
-        thumbnail: res.image || info.thumbnail,
-        duration: info.duration || '',
-        via: 'ytdl'
-      });
-      if (ok) return ok;
-    } else if (res?.error) {
-      logger.warn('[Aurora] YT-DL: ' + res.error);
-    }
+    cover = await fetchThumbBuffer(audio.thumbnail || info.thumbnail, { width: 640 });
+    logger.info(`[Aurora] audio: cover ${cover ? `OK ${Math.round(cover.buffer.length / 1024)}KB` : 'kosong'}`);
   } catch (err) {
-    logger.warn('[Aurora] YT-DL gagal (' + (err?.message || err) + ')');
+    logger.warn(`[Aurora] audio: cover gagal — ${err?.message || err}`);
   }
 
-  if (!lockedFallback) {
+  if (cover) {
     try {
-      const data = await ytDownload(info.url, format);
-      const ok = await accept({
-        url: data.url,
-        title: data.title || info.title,
-        thumbnail: data.thumbnail || info.thumbnail,
-        duration: data.duration || info.duration || '',
-        via: 'legacy'
+      await ctx.client.message.send(ctx.chat, {
+        type: 'image',
+        media: cover.buffer,
+        mimetype: 'image/jpeg',
+        caption: `*${clean}*\n\n> ${audio.duration || info.duration || ''} • AURORA 🎧`
       });
-      if (ok) return ok;
+      logger.info('[Aurora] audio: cover terkirim');
     } catch (err) {
-      logger.warn('[Aurora] legacy api.jhx gagal (' + (err?.message || err) + ')');
+      logger.warn(`[Aurora] audio: cover gagal dikirim — ${err?.message || err}`);
     }
   }
 
-  if (lockedFallback) {
-    logger.warn(`[Aurora] semua sumber langsung gagal/terkunci — pakai ${lockedFallback.via} + fallback WebSocket (suara baru keluar setelah unduhan selesai)`);
-    return lockedFallback;
+  let media = audio.buffer;
+  try {
+    const emb = await embedAudioCover(audio.buffer, audio.mimetype, cover?.buffer);
+    media = emb.buffer;
+    logger.info(`[Aurora] audio: cover ditanam=${emb.embedded ? 'ya' : 'tidak'}`);
+  } catch (err) {
+    logger.warn(`[Aurora] audio: tanam cover gagal — ${err?.message || err}`);
   }
-  throw new Error('Semua sumber media gagal (skyline, savenow, legacy) — lihat log [Aurora] probe di atas');
+
+  const fileName = `${clean}.${audio.ext || 'mp3'}`;
+  await ctx.client.message.send(ctx.chat, {
+    type: 'audio',
+    media,
+    mimetype: audio.mimetype,
+    fileName
+  });
+  logger.info(`[Aurora] audio: terkirim | ${fileName} • ${(media.length / 1048576).toFixed(2)}MB • total ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 }
 
 async function thumbDataUri(url) {
@@ -1412,15 +1369,20 @@ async function handler(ctx) {
             };
           }
         } catch (err) {
-          logger.warn('[Aurora] Skyline search gagal (' + (err?.message || err) + ') — pakai API cadangan');
+          logger.warn('[Aurora] Skyline search GAGAL — HTTP ' + (err?.status || 0) + ' • ' + (err?.message || err));
         }
       }
       if (!info?.url) {
-        const results = await ytSearch(query);
-        const v = results[0];
-        info = { url: v.url, title: v.title || 'Unknown', artist: v.artist || 'skyline-JXRA Stream', thumbnail: v.thumbnail || '' };
+        // Tanpa API cadangan: kalau skyline ga bisa, ya error jujur.
+        throw new Error('Lagu/video gak ketemu lewat skyline.web.id (search kosong)');
       }
-      if (!info?.url) throw new Error('URL YouTube gak ketemu');
+
+      // AUDIO → jalur `.yta`: unduh lewat skyline lalu kirim audio WhatsApp asli.
+      if (AUDIO_FORMAT.test(format)) {
+        await sendAuroraAudio(ctx, info, format);
+        await ctx.react('🎛️');
+        return;
+      }
 
       const media = await resolveSource(info, format);
       if (!media?.url) throw new Error('Link final gak dapet');
@@ -1448,8 +1410,8 @@ async function handler(ctx) {
         logger.warn(`[Aurora] URL final gagal probe (HTTP ${probe.status || 0}) — player kemungkinan gagal; cek log probe di atas`);
       }
 
-      const wsMime = AUDIO_FORMAT.test(String(format || 'mp3')) ? 'audio/mpeg' : 'video/mp4';
-      const wsUrl = WS_WORKER + '?url=' + encodeURIComponent(media.url) + '&mime=' + encodeURIComponent(wsMime);
+      // Video: tanpa WebSocket pihak ketiga — cuma link skyline.
+      const wsUrl = '';
 
       const sourceNote = media.preview
         ? `${media.preview} — tekan play`
@@ -1466,6 +1428,10 @@ async function handler(ctx) {
       logger.info('[Aurora] kartu terkirim | id=' + (sent?.id || '?') + ' | sumber=' + media.via + (media.probe?.locked ? ' (locked → WS)' : ''));
       await ctx.react('🎛️');
     } catch (e) {
+      logger.error(
+        `[Aurora] GAGAL — ${e?.name || 'Error'} • status=${e?.status || 0} • kode=${e?.code || '-'} • ` +
+        `pesan=${String(e?.message || e).slice(0, 200)}`
+      );
       await ctx.react('❎');
       ctx.reply('*Aurora Error:* ' + String(e.message || e).slice(0, 250));
     }
