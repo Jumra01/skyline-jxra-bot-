@@ -599,13 +599,16 @@ async function applyRunMarkers(ctx, reply, { execOn = false, open = false, conf 
     if (res.ok && res.charged > 0) {
       try {
         const mode = config.emerald?.notify
-        const allowed =
-          mode !== false &&
-          isEmeraldNotifyOn(ctx.sender) &&
-          getNotifyGlobal() &&
-          (mode !== 'private' || !ctx.isGroup)
-        if (allowed) {
+        const blocked = []
+        if (mode === false) blocked.push('config.emerald.notify=false')
+        if (!isEmeraldNotifyOn(ctx.sender)) blocked.push('.notife off')
+        if (!getNotifyGlobal()) blocked.push('notif global off')
+        if (mode === 'private' && ctx.isGroup) blocked.push("mode 'private'")
+        if (blocked.length) {
+          logger.info(`[Ella2] kartu emerald dilewati — ${blocked.join(', ')}`)
+        } else {
           const desc = String(getFeature(splitCommand(a).name)?.description || '')
+          logger.info(`[Ella2] kartu emerald dikirim — ${res.used} (-${res.charged}, sisa ${res.balance})`)
           void sendUsageCard(ctx, {
             command: `${ctx.prefix || '.'}${res.used}`,
             cost: res.charged,
