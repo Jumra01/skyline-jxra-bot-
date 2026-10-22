@@ -43,6 +43,10 @@ const AUDIO_FORMAT = /^(mp3|m4a|aac|ogg|wav|flac)$/i;
  * (tanpa audio) — pesan audio native sudah tidak dikirim lagi. */
 const OPUS_CHAIN = ['24k', '16k', '12k'];
 const MAX_EMBED_B64 = 800_000;
+/* Hard-cap base64 embed asli (anti payload kartu meledak). Di atas ini baru
+ * jatuh ke kompres opus. 25MB base64 ≈ file 18,7MB — lagu 10-menit @320kbps
+ * masih muat. */
+const HARD_EMBED_B64 = 25_000_000;
 
 /** Jalankan ffmpeg sekali → { code, stderr } (gak nge-throw biar gampang dirantai). */
 function runFfmpeg(args) {
@@ -102,32 +106,36 @@ function embedOriginalOn() {
   return Boolean(config.aurora?.embedOriginal);
 }
 
-/** Batas base64 audio ASLI (`aurora.originalMaxKb`, default 3000KB). */
+/** Batas base64 audio ASLI (`aurora.originalMaxKb`). 0/'' = tanpa batas. */
 function originalBudgetBytes() {
   const kb = Number(config.aurora?.originalMaxKb);
-  return Number.isFinite(kb) && kb >= 64 ? Math.floor(kb * 1024) : 3000 * 1024;
+  return Number.isFinite(kb) && kb >= 64 ? Math.floor(kb * 1024) : 0; // 0 = tanpa batas
 }
 
 /**
  * Siapkan audio siap-embed buat kartu: { buf, b64len, bitrate, trimSec,
- * original, mimetype } atau null kalau gagal/kegedean — NULL BUKAN ERROR:
+ * original, mimetype } atau null kalau gagal — NULL BUKAN ERROR:
  * kartu jalan tanpa pemutar.
  *
  * Mode `preferOriginal` (config `aurora.embedOriginal`): audio ASLI
- * (mp3/m4a dari skyline) ditanam apa adanya tanpa ffmpeg — kualitas penuh,
- * asal muat di `originalMaxKb`. Kegedean/lewat → jatuh ke rantai opus biasa.
+ * (mp3/m4a dari skyline) ditanam apa adanya, TIDAK PERNAH dikompres.
+ * Satu-satunya alasan nolak = `originalMaxB64` diisi angka DAN melewatinya
+ * (baru fallback opus), atau ukuran meledak melewati HARD_EMBED_B64.
+ * Default `originalMaxB64` 0 = tanpa batas → semua lagu masuk apa adanya.
  */
 async function prepareEmbeddedAudio(buffer, durationSec = 0, { maxB64 = MAX_EMBED_B64, preferOriginal = false, originalMaxB64 = 0, mimetype = '' } = {}) {
   if (!buffer?.length) return null;
   try {
     if (preferOriginal) {
       const b64len = Math.ceil(buffer.length * 4 / 3);
-      const cap = originalMaxB64 > 0 ? originalMaxB64 : MAX_EMBED_B64;
-      if (b64len <= cap) {
+      if (b64len > HARD_EMBED_B64) {
+        logger.warn(`[Aurora] audio: asli kegedean banget (${Math.round(b64len / 1024)}KB > hard-cap ${Math.round(HARD_EMBED_B64 / 1024)}KB) — fallback kompres opus`);
+      } else if (originalMaxB64 > 0 && b64len > originalMaxB64) {
+        logger.info(`[Aurora] audio: asli lewat batas config (${Math.round(b64len / 1024)}KB > ${Math.round(originalMaxB64 / 1024)}KB) — fallback kompres opus`);
+      } else {
         logger.info(`[Aurora] audio: embed ASLI ${mimetype || 'audio/*'} • ${Math.round(b64len / 1024)}KB base64 (tanpa kompres)`);
         return { buf: buffer, b64len, bitrate: 'asli', trimSec: 0, original: true, mimetype: mimetype || 'audio/mpeg' };
       }
-      logger.info(`[Aurora] audio: embed asli kegedean (${Math.round(b64len / 1024)}KB > ${Math.round(cap / 1024)}KB) — fallback kompres opus`);
     }
     let best = null;
     for (const bitrate of OPUS_CHAIN) {
