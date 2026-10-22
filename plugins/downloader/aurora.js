@@ -197,6 +197,21 @@ async function sendAuroraAudio(ctx, info, format) {
   /* Kartu rich HTML tetap dikirim (tampilan AURORA deck), tapi audionya
    * lewat pesan audio native — jadi kalau player di webview rewel, lagu
    * tetap bisa diputar dari pesan audio di bawahnya. */
+  let cover = null;
+  try {
+    cover = await fetchThumbBuffer(info.thumbnail, { width: 640 });
+    logger.info(`[Aurora] audio: cover ${cover ? `OK ${Math.round(cover.buffer.length / 1024)}KB` : 'kosong'}`);
+  } catch (err) {
+    logger.warn(`[Aurora] audio: cover gagal — ${err?.message || err}`);
+  }
+
+  // Warna aksen diambil dari cover lalu dinaikin saturasi/terangnya biar
+  // gradiennya hidup (cover gelap kalau dipakai mentah jadi lumpur).
+  let accent = '#1DB954';
+  try {
+    if (cover?.buffer) accent = await accentFromBuffer(cover.buffer) || accent;
+  } catch { /* pakai default */ }
+
   let cardSent = false;
   let thumbB64 = '';
   try { thumbB64 = await thumbDataUri(info.thumbnail); } catch { /* tanpa cover */ }
@@ -229,11 +244,12 @@ async function sendAuroraAudio(ctx, info, format) {
     /* DEFAULT: kartu cover-only. Banyak WebView kartu WA gak bisa mutar media
      * (cuma image), jadi jangan kasih tombol play yang pasti gagal. */
     try {
-      const html = buildCoverHtml({
+      const html = buildSpotifyHtml({
         title: clean,
-        channel: 'AURORA',
+        channel: info.artist || 'Unknown Artist',
         duration,
         thumbnailb64: thumbB64,
+        accent: accent || '#1DB954',
         note: 'Ketuk pesan audio di bawah untuk memutar.'
       });
       await sendRichJH(ctx, html);
@@ -242,14 +258,6 @@ async function sendAuroraAudio(ctx, info, format) {
     } catch (err) {
       logger.warn(`[Aurora] audio: kartu cover gagal — ${err?.message || err}`);
     }
-  }
-
-  let cover = null;
-  try {
-    cover = await fetchThumbBuffer(info.thumbnail, { width: 640 });
-    logger.info(`[Aurora] audio: cover ${cover ? `OK ${Math.round(cover.buffer.length / 1024)}KB` : 'kosong'}`);
-  } catch (err) {
-    logger.warn(`[Aurora] audio: cover gagal — ${err?.message || err}`);
   }
 
   if (cover && !cardSent) {
@@ -283,6 +291,123 @@ async function sendAuroraAudio(ctx, info, format) {
     fileName
   });
   logger.info(`[Aurora] audio: terkirim | ${fileName} • ${(media.length / 1048576).toFixed(2)}MB • total ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+}
+
+/**
+ * Kartu gaya Spotify "Now Playing" + panel LIRIK.
+ * Tanpa elemen media (WebView kartu WA cuma bisa gambar) — murni visual.
+ * Warna aksen diambil dari cover biar gradiennya nyatu.
+ */
+/** Ambil warna dominan cover, lalu boost saturasi & kecerahan (HSL). */
+async function accentFromBuffer(buffer) {
+  const { data } = await sharp(buffer).resize(1, 1, { fit: 'cover' }).raw().toBuffer({ resolveWithObject: true });
+  let r = data[0] / 255, g = data[1] / 255, b = data[2] / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h = 0, sat = 0;
+  const l0 = (max + min) / 2;
+  const d = max - min;
+  if (d) {
+    sat = l0 > 0.5 ? d / (2 - max - min) : d / (max + min);
+    if (max === r) h = ((g - b) / d + (g < b ? 6 : 0));
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h /= 6;
+  }
+  const s2 = Math.min(1, Math.max(0.55, sat));
+  const l2 = Math.min(0.62, Math.max(0.46, l0 + 0.18));
+  const hue2rgb = (p2, q2, t) => {
+    if (t < 0) t += 1; if (t > 1) t -= 1;
+    if (t < 1 / 6) return p2 + (q2 - p2) * 6 * t;
+    if (t < 1 / 2) return q2;
+    if (t < 2 / 3) return p2 + (q2 - p2) * (2 / 3 - t) * 6;
+    return p2;
+  };
+  const q = l2 < 0.5 ? l2 * (1 + s2) : l2 + s2 - l2 * s2;
+  const p2 = 2 * l2 - q;
+  const out = [hue2rgb(p2, q, h + 1 / 3), hue2rgb(p2, q, h), hue2rgb(p2, q, h - 1 / 3)]
+    .map((v) => Math.round(Math.max(0, Math.min(1, v)) * 255));
+  return '#' + out.map((v) => v.toString(16).padStart(2, '0')).join('');
+}
+
+function buildSpotifyHtml({ title, channel, duration, thumbnailb64, accent = '#1DB954', note }) {
+  const hits = (() => {
+    const t = String(duration || '').trim();
+    return /^\d+:\d{2}(:\d{2})?$/.test(t) ? t : '';
+  })();
+  return `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AURORA — ${escapeHtmlJs(title)}</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none}
+html,body{margin:0;background:#000}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color:#fff;padding:12px}
+.card{max-width:420px;margin:auto;border-radius:22px;overflow:hidden;position:relative;
+  background:
+    radial-gradient(120% 60% at 50% 0%, ${accent}55 0%, ${accent}14 38%, transparent 68%),
+    linear-gradient(180deg,#121212 0%,#0b0b0b 55%,#080808 100%);
+  border:1px solid rgba(255,255,255,.07);box-shadow:0 18px 60px rgba(0,0,0,.7)}
+.top{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 6px}
+.tag{font-size:9px;letter-spacing:2.4px;font-weight:800;color:#fff;opacity:.72}
+.dot{width:6px;height:6px;border-radius:50%;background:${accent};box-shadow:0 0 10px ${accent}}
+.body{padding:6px 16px 16px;text-align:center}
+.art{width:100%;aspect-ratio:1/1;object-fit:cover;border-radius:16px;display:block;
+  box-shadow:0 18px 44px rgba(0,0,0,.7), 0 0 0 1px rgba(255,255,255,.06) inset;background:#161616}
+.title{font-size:19px;font-weight:800;line-height:1.28;margin:16px 0 5px;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.artist{font-size:12px;color:#b3b3b3;font-weight:500}
+.bar{position:relative;height:3px;border-radius:3px;background:rgba(255,255,255,.18);margin:16px 2px 6px}
+.bar i{position:absolute;inset:0 auto 0 0;width:0;background:#fff;border-radius:3px}
+.bar b{position:absolute;top:50%;left:0;width:9px;height:9px;border-radius:50%;background:#fff;
+  transform:translate(-50%,-50%);box-shadow:0 0 8px rgba(255,255,255,.5)}
+.times{display:flex;justify-content:space-between;font-size:9px;color:#8f8f8f;font-variant-numeric:tabular-nums}
+.ctrl{display:flex;align-items:center;justify-content:center;gap:22px;margin:14px 0 4px;color:#f2f2f2}
+.ctrl svg{display:block}
+.play{width:52px;height:52px;border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;
+  box-shadow:0 6px 18px rgba(0,0,0,.5)}
+.play svg{fill:#000;stroke:none}
+.lyr{margin-top:16px;border-radius:16px;padding:18px 14px 20px;
+  background:
+    radial-gradient(100% 70% at 50% 0%, ${accent}33 0%, transparent 70%),
+    linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.02));
+  border:1px solid ${accent}33;min-height:190px;box-shadow:0 8px 26px rgba(0,0,0,.35) inset;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px}
+.lyr .h{font-size:9px;letter-spacing:2.6px;font-weight:800;color:${accent};opacity:.95}
+.lyr .t{font-size:13px;font-weight:700;color:#eaeaea}
+.lyr .s{font-size:10.5px;color:#9a9a9a;line-height:1.55;max-width:250px}
+.eq{display:flex;align-items:flex-end;gap:3px;height:22px}
+.eq i{width:3px;border-radius:2px;background:${accent};opacity:.85;animation:eq 1s ease-in-out infinite}
+.eq i:nth-child(1){height:8px;animation-delay:0s}.eq i:nth-child(2){height:16px;animation-delay:.15s}
+.eq i:nth-child(3){height:11px;animation-delay:.3s}.eq i:nth-child(4){height:20px;animation-delay:.45s}
+.eq i:nth-child(5){height:9px;animation-delay:.6s}
+@keyframes eq{0%,100%{transform:scaleY(.45)}50%{transform:scaleY(1)}}
+.foot{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px 0 14px;font-size:9px;color:#7d7d7d;letter-spacing:1.2px}
+</style></head>
+<body>
+<div class="card">
+  <div class="top"><span class="tag">AURORA · NOW PLAYING</span><span class="dot"></span></div>
+  <div class="body">
+    ${thumbnailb64 ? `<img class="art" src="${thumbnailb64}" alt="">` : ''}
+    <div class="title">${escapeHtmlJs(title)}</div>
+    <div class="artist">${escapeHtmlJs(channel || 'Unknown Artist')}</div>
+    <div class="bar"><i style="width:0%"></i><b style="left:0%"></b></div>
+    <div class="times"><span>0:00</span><span>${escapeHtmlJs(hits || '--:--')}</span></div>
+    <div class="ctrl">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M3 6h13v12H3zM18 6l4 6-4 6z"/></svg>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M18 6V4H6v16h12v-2l-8-6z"/></svg>
+      <div class="play"><svg width="24" height="24" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M6 18V6h12V4l-8 6 8 6v-2z"/></svg>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M4 4h16v4H4zM4 10h16v4H4zM4 16h16v4H4z"/></svg>
+    </div>
+    <div class="lyr">
+      <div class="h">LIRIK</div>
+      <div class="eq"><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="t">Lirik belum tersedia</div>
+      <div class="s">${escapeHtmlJs(note || 'Putar lagunya dari pesan audio di bawah, lalu nikmatin suaranya.')}</div>
+    </div>
+  </div>
+  <div class="foot"><span>AURORA</span><span>•</span><span>skyline.web.id</span></div>
+</div>
+</body></html>`;
 }
 
 /**
@@ -1638,4 +1763,4 @@ async function handler(ctx) {
   }
 
 export { pluginConfig as config, handler };
-export const _internals = { resolveSource, probeMedia, isIpLocked, hostOf, buildHtml };
+export const _internals = { resolveSource, probeMedia, isIpLocked, hostOf, buildHtml, buildCoverHtml, buildSpotifyHtml };
