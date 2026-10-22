@@ -689,16 +689,19 @@ function payloadB64Len(html) {
  * Baris sengaja TANPA atribut data — teksnya dibaca dari DOM pas user tap,
  * dan timestamp-nya dari array `LY.t` (hemat ±2KB payload vs nyimpen dua kali). */
 function buildLyricPanelHtml(lyrics, synced) {
-  const body = synced
-    ? lyrics.l
-        .map(([, tx]) => `<i class=ly>${escHtml(tx)}</i>`)
-        .join('')
-    : String(lyrics.p || '')
-        .split('\n')
-        .filter(Boolean)
-        .map((tx) => `<i class=ly>${escHtml(tx)}</i>`)
-        .join('') || '<div class="lyr-none">Lirik tidak tersedia.</div>';
-  const ctl = synced
+  const has = Boolean(lyrics && (lyrics.p || (Array.isArray(lyrics.l) && lyrics.l.length)));
+  const body = !has
+    ? '<div class="lyr-none">⚠️ Lirik tidak tersedia untuk lagu ini — server lagi sibuk atau lagu belum terdaftar. Coba lagi nanti ya.</div>'
+    : synced
+      ? lyrics.l
+          .map(([, tx]) => `<i class=ly>${escHtml(tx)}</i>`)
+          .join('')
+      : String(lyrics.p || '')
+          .split('\n')
+          .filter(Boolean)
+          .map((tx) => `<i class=ly>${escHtml(tx)}</i>`)
+          .join('') || '<div class="lyr-none">Lirik tidak tersedia.</div>';
+  const ctl = has && synced
     ? `<div class="lyr-ctl">
         <button type="button" id="lyrPlay" onclick="lyrPlay()" title="Mulai sinkron">▶</button>
         <button type="button" onclick="lyrShift(-0.5)" title="Geser lirik +0,5 dtk">−</button>
@@ -706,7 +709,7 @@ function buildLyricPanelHtml(lyrics, synced) {
       </div>`
     : '';
   return `<div class="lyrics" id="lyrPanel" style="display:none">
-    <div class="lyr-head"><b>LIRIK</b><span>${synced ? 'SINKRON' : 'TEKS'}</span>${ctl}</div>
+    <div class="lyr-head"><b>LIRIK</b><span>${!has ? 'TIDAK ADA' : synced ? 'SINKRON' : 'TEKS'}</span>${ctl}</div>
     <div class="lyr-view" id="lyrView">${body}</div>
   </div>`;
 }
@@ -863,11 +866,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-s
       <div class="artist">${safeChannel}</div>
     </div>
     <div class="acts">
-      ${hasLyrics ? `<div class="lyr-btn" id="lyrBtn" onclick="lyrToggle()" title="Lirik">
+      <div class="lyr-btn" id="lyrBtn" onclick="lyrToggle()" title="${hasLyrics ? 'Lirik' : 'Lirik — tidak tersedia'}"${hasLyrics ? '' : ' style="opacity:.45"'}>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
           <path d="M4 6h16"/><path d="M4 11h11"/><path d="M4 16h16"/><path d="M4 21h8"/>
         </svg>
-      </div>` : ''}
+      </div>
       <div class="heart">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 1 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8z"/>
@@ -919,7 +922,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-s
     <div class="eq"><i></i><i></i><i></i><i></i><i></i></div>
   </div>
 
-  ${hasLyrics ? buildLyricPanelHtml(lyrics, lyrSynced) : ''}
+  ${buildLyricPanelHtml(lyrics, lyrSynced)}
 
   <div class="foot"><span>AURORA</span><span>•</span><span>skyline.web.id</span><span class="chip">HQ</span></div>
 </div>
@@ -932,6 +935,19 @@ function hint() {
   if (t) { t.textContent = 'Audio gagal disiapkan — coba lagi ya'; t.style.color = '#ff6b6b'; }
   var b = document.getElementById('playBtn');
   if (b) b.className = 'play ready';
+}
+</script>
+<script>
+/* Toggle panel lirik — versi ringkas dipakai kalau lirik gak ada (panel
+ * berisi peringatan). Kalau ADA lirik, blok script lirik di bawah nge-override
+ * fungsi ini dengan versi karaoke-nya. */
+function lyrToggle() {
+  var p = document.getElementById('lyrPanel');
+  if (!p) return;
+  var on = p.style.display === 'none';
+  p.style.display = on ? 'block' : 'none';
+  var b = document.getElementById('lyrBtn');
+  if (b) b.className = on ? 'lyr-btn on' : 'lyr-btn';
 }
 </script>${hasLyrics ? `
 <script>
