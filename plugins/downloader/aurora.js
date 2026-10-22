@@ -17,6 +17,7 @@ import {
 } from '../../scraper/SKYLINE.js';
 import { fetchThumbBuffer } from '../../lib/ytUi.js';
 import { embedAudioCover } from '../../lib/audioCover.js';
+import { fetchLyrics, capLyrics } from '../../lib/lyrics.js';
 
 /* AURORA v3 — SEMUA lewat skyline.web.id (ga ada API pihak ketiga lagi):
  *   • audio  → unduh lewat `downloadAudio()` (jalur yang sama dengan `.yta`),
@@ -196,13 +197,44 @@ async function sendAuroraAudio(ctx, info, format) {
 
   /* Kartu rich HTML tetap dikirim (tampilan AURORA deck), tapi audionya
    * lewat pesan audio native — jadi kalau player di webview rewel, lagu
-   * tetap bisa diputar dari pesan audio di bawahnya. */
+   * tetap bisa diputar dari pesan audio di bawahnya.
+   * Lirik (LRCLIB) diambil PARALEL sama cover biar nambah nol waktu tunggu. */
   let cover = null;
-  try {
-    cover = await fetchThumbBuffer(info.thumbnail, { width: 640 });
-    logger.info(`[Aurora] audio: cover ${cover ? `OK ${Math.round(cover.buffer.length / 1024)}KB` : 'kosong'}`);
-  } catch (err) {
-    logger.warn(`[Aurora] audio: cover gagal — ${err?.message || err}`);
+  const wantLyrics = String(info.title || '') !== 'Aurora Stream'; // input URL manual = judul palsu
+  const [coverRes, lyricRes] = await Promise.all([
+    fetchThumbBuffer(info.thumbnail, { width: 640 }).then(
+      (c) => {
+        logger.info(`[Aurora] audio: cover ${c ? `OK ${Math.round(c.buffer.length / 1024)}KB` : 'kosong'}`);
+        return c;
+      },
+      (err) => {
+        logger.warn(`[Aurora] audio: cover gagal — ${err?.message || err}`);
+        return null;
+      }
+    ),
+    wantLyrics
+      ? fetchLyrics({
+          title: info.title,
+          // Placeholder "skyline-JXRA Stream" (input URL manual) jangan dicari.
+          artist: /skyline-JXRA Stream/.test(String(info.artist || '')) ? '' : info.artist,
+          duration: info.duration
+        }).then(
+          (ly) => capLyrics(ly),
+          (err) => {
+            logger.warn(`[Aurora] lirik: gagal — ${err?.name || 'Error'}: ${err?.message || err}`);
+            return null;
+          }
+        )
+      : Promise.resolve(null)
+  ]);
+  cover = coverRes;
+  const lyricCard = lyricRes;
+  if (lyricCard) {
+    logger.info(
+      `[Aurora] audio: lirik siap — ${lyricCard.s ? `synced ${lyricCard.l.length} baris` : `plain ${String(lyricCard.p).split('\n').length} baris`}`
+    );
+  } else if (wantLyrics) {
+    logger.info('[Aurora] audio: lirik tidak ketemu — kartu dikirim tanpa panel lirik');
   }
 
   // Warna aksen diambil dari cover lalu dinaikin saturasi/terangnya biar
@@ -214,7 +246,9 @@ async function sendAuroraAudio(ctx, info, format) {
 
   let cardSent = false;
   let thumbB64 = '';
-  try { thumbB64 = await thumbDataUri(info.thumbnail); } catch { /* tanpa cover */ }
+  /* Cover di kartu lirik sengaja dibikin lebih kecil (3KB) — markup panel
+   * lirik ikut nambah payload, dan payload base64 wajib tetap ≤ ±26KB (AGENTS §9.2). */
+  try { thumbB64 = await thumbDataUri(info.thumbnail, lyricCard ? { maxB64: 3000 } : {}); } catch { /* tanpa cover */ }
 
   if (config.aurora && config.aurora.playerCard) {
     /* Kartu player (opt-in). WebView kartu WA offline, tapi WebSocket JALAN —
@@ -245,17 +279,39 @@ async function sendAuroraAudio(ctx, info, format) {
      * offline (media nggak bisa diputar), jadi kartu dibuat ringan + cantik,
      * lagunya tetap diputar dari pesan audio native di bawahnya. */
     try {
-      const html = buildSpotifyHtml({
+      const base = {
         title: clean,
         channel: info.artist || 'Unknown Artist',
         duration,
         thumbnailb64: thumbB64,
         accent: accent || '#1DB954',
         note: 'Lagu diputar dari pesan audio di bawah kartu.'
-      });
+      };
+      let html = buildSpotifyHtml({ ...base, lyrics: lyricCard });
+      let shrink = '';
+      /* Jaga-jaga: payload base64 unifiedResponse wajib ≤ ±26KB biar kartu
+       * tetap ke-render. Kalau kartu + lirik kegedean, pangkas bertahap:
+       * Timestamp dibuang (panel jadi biasa) → potong baris → buang lirik. */
+      if (lyricCard && payloadB64Len(html) > 25400) {
+        let ly = { s: false, l: [], p: lyricCard.l.map((x) => x[1]).join('\n') || lyricCard.p };
+        html = buildSpotifyHtml({ ...base, lyrics: ly });
+        shrink = ' • lirik polos';
+        if (payloadB64Len(html) > 25400) {
+          ly = { s: false, l: [], p: String(ly.p).split('\n').slice(0, 18).join('\n') };
+          html = buildSpotifyHtml({ ...base, lyrics: ly });
+          shrink = ' • lirik dipangkas';
+          if (payloadB64Len(html) > 25400) {
+            html = buildSpotifyHtml({ ...base, thumbnailb64: '', lyrics: null });
+            shrink = ' • cover+lirik dibuang';
+          }
+        }
+      }
       await sendNativeHtml(ctx.client, ctx.chat, html);
       cardSent = true;
-      logger.info(`[Aurora] audio: kartu cover terkirim • ${html.length}B (playerCard=false)`);
+      logger.info(
+        `[Aurora] audio: kartu cover terkirim • ${html.length}B • payload±${payloadB64Len(html)}B ` +
+        `(playerCard=false${lyricCard ? ' +lirik' : ''})${shrink}`
+      );
     } catch (err) {
       logger.warn(`[Aurora] audio: kartu cover gagal — ${err?.message || err}`);
     }
@@ -330,18 +386,56 @@ async function accentFromBuffer(buffer) {
   return '#' + out.map((v) => v.toString(16).padStart(2, '0')).join('');
 }
 
+/** Perkiraan ukuran payload base64 sebuah HTML kartu (batas render ±26KB).
+ * +600 = envelope JSON GenAIUnifiedResponse sebelum di-base64. */
+function payloadB64Len(html) {
+  return Math.ceil(String(html || '').length * 4 / 3) + 600;
+}
+
+/** Panel lirik di dalam kartu (sembunyi default; dibuka lewat tombol lirik).
+ * Baris sengaja TANPA atribut data — teksnya dibaca dari DOM pas user tap,
+ * dan timestamp-nya dari array `LY.t` (hemat ±2KB payload vs nyimpen dua kali). */
+function buildLyricPanelHtml(lyrics, synced) {
+  const body = synced
+    ? lyrics.l
+        .map(([, tx]) => `<div class="ly">${escHtml(tx)}</div>`)
+        .join('')
+    : String(lyrics.p || '')
+        .split('\n')
+        .filter(Boolean)
+        .map((tx) => `<div class="ly">${escHtml(tx)}</div>`)
+        .join('') || '<div class="lyr-none">Lirik tidak tersedia.</div>';
+  const ctl = synced
+    ? `<div class="lyr-ctl">
+        <button type="button" id="lyrPlay" onclick="lyrPlay()" title="Mulai sinkron">▶</button>
+        <button type="button" onclick="lyrShift(-0.5)" title="Geser lirik +0,5 dtk">−</button>
+        <button type="button" onclick="lyrShift(0.5)" title="Geser lirik −0,5 dtk">+</button>
+      </div>`
+    : '';
+  return `<div class="lyrics" id="lyrPanel" style="display:none">
+    <div class="lyr-head"><b>LIRIK</b><span>${synced ? 'SINKRON' : 'TEKS'}</span>${ctl}</div>
+    <div class="lyr-view" id="lyrView">${body}</div>
+  </div>`;
+}
+
 /**
  * Kartu "Now Playing" gaya Spotify (dark, cover besar, kontrol penuh).
  * WebView kartu WA: cuma image + WebSocket yang jalan — makanya audio diambil
  * lewat ws-audio, dan lagu tetap dikirim sebagai pesan audio native di bawah.
  * Warna aksen diambil dari cover biar gradiennya nyatu.
+ *
+ * `lyrics` = hasil `capLyrics()` dari lib/lyrics.js — `{ s, l:[[detik,teks]], p }`.
+ * Panel lirik muncul lewat tombol di baris judul; kalau synced, ada mode
+ * karaoke (tap ▶ kira-kira pas lagu mulai di pesan audio) + auto-highlight.
  */
-function buildSpotifyHtml({ title, channel, duration, thumbnailb64, accent = '#1DB954', note }) {
+function buildSpotifyHtml({ title, channel, duration, thumbnailb64, accent = '#1DB954', note, lyrics = null }) {
   const dur = String(duration || '').trim();
   const hits = /^\d+:\d{2}(:\d{2})?$/.test(dur) ? dur : '';
   const safeTitle = escHtml(title || 'Tanpa Judul');
   const safeChannel = escHtml(channel || 'Unknown Artist');
   const safeNote = escHtml(note || 'Lagu juga dikirim sebagai pesan audio — putar dari situ kalau tombol play rewel.');
+  const hasLyrics = Boolean(lyrics && (lyrics.p || (Array.isArray(lyrics.l) && lyrics.l.length)));
+  const lyrSynced = hasLyrics && Array.isArray(lyrics.l) && lyrics.l.length > 0;
   const art = thumbnailb64
     ? `<div class="art-wrap"><img class="art" src="${thumbnailb64}" alt=""></div>`
     : `<div class="art-wrap"><div class="art-ph"><svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M9 18V5.5l10-2V16"/><circle cx="6.6" cy="18" r="2.6"/><circle cx="16.6" cy="16" r="2.6"/></svg></div></div>`;
@@ -421,6 +515,26 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-s
 .eq i:nth-child(4){height:82%;animation-delay:.42s}
 .eq i:nth-child(5){height:38%;animation-delay:.56s}
 @keyframes eq{0%,100%{transform:scaleY(.42)}50%{transform:scaleY(1)}}
+.lyr-btn{width:37px;height:37px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;
+  color:#c7c7c7;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08)}
+.lyr-btn.on{color:${accent};background:${accent}22;border-color:${accent}66}
+.lyrics{margin:14px 14px 0;border-radius:18px;overflow:hidden;
+  background:linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.018));
+  border:1px solid rgba(255,255,255,.075)}
+.lyr-head{display:flex;align-items:center;gap:8px;padding:11px 14px 5px}
+.lyr-head b{font-size:10.5px;letter-spacing:2.2px;font-weight:800}
+.lyr-head span{font-size:8.5px;letter-spacing:1.4px;color:#8f8f8f;font-weight:700;
+  padding:2px 7px;border-radius:6px;background:rgba(255,255,255,.06)}
+.lyr-ctl{margin-left:auto;display:flex;gap:5px}
+.lyr-ctl button{border:0;border-radius:9px;background:rgba(255,255,255,.08);color:#dcdcdc;
+  font-size:11px;font-weight:800;padding:4px 10px;min-width:30px;line-height:1.25}
+.lyr-ctl button.on{background:${accent};color:#08130c}
+.lyr-view{max-height:236px;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;
+  padding:2px 14px 12px}
+.ly{font-size:13.5px;line-height:1.62;font-weight:600;color:rgba(255,255,255,.40);
+  padding:3px 0;transition:color .2s ease}
+.ly.cur{color:#fff}
+.lyr-none{font-size:11.5px;color:#8f8f8f}
 .foot{display:flex;align-items:center;justify-content:center;gap:7px;padding:14px 0 16px;
   font-size:9px;color:#6f6f6f;letter-spacing:1.5px;font-weight:700}
 .chip{padding:3px 7px;border-radius:6px;background:rgba(255,255,255,.06);
@@ -452,10 +566,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-s
       <div class="title">${safeTitle}</div>
       <div class="artist">${safeChannel}</div>
     </div>
-    <div class="heart">
-      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 1 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8z"/>
-      </svg>
+    <div class="acts">
+      ${hasLyrics ? `<div class="lyr-btn" id="lyrBtn" onclick="lyrToggle()" title="Lirik">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
+          <path d="M4 6h16"/><path d="M4 11h11"/><path d="M4 16h16"/><path d="M4 21h8"/>
+        </svg>
+      </div>` : ''}
+      <div class="heart">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 1 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8z"/>
+        </svg>
+      </div>
     </div>
   </div>
 
@@ -502,6 +623,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-s
     <div class="eq"><i></i><i></i><i></i><i></i><i></i></div>
   </div>
 
+  ${hasLyrics ? buildLyricPanelHtml(lyrics, lyrSynced) : ''}
+
   <div class="foot"><span>AURORA</span><span>•</span><span>skyline.web.id</span><span class="chip">HQ</span></div>
 </div>
 
@@ -514,7 +637,60 @@ function hint() {
   var b = document.getElementById('playBtn');
   if (b) b.className = 'play ready';
 }
-</script>
+</script>${hasLyrics ? `
+<script>
+/* LIRIK KARAOKE — WebView kartu WA gak bisa muter audio remote, jadi
+ * sinkronisasi pakai jam manual (ketuk ▶ pas lagu mulai di pesan audio).
+ * Teks baris dibaca dari DOM, cuma timestamp yang di-embed (hemat payload). */
+window.LYRICS = ${JSON.stringify({ s: Boolean(lyrSynced), t: (lyrics.l || []).map((x) => Math.round((Number(x[0]) || 0) * 10) / 10) })};
+var LY = window.LYRICS || {}, T = 0, L = 0, TI = null, I = -1, E = null;
+function nodes() { return E || (E = [].slice.call(document.querySelectorAll('#lyrView .ly'))) }
+function lyrToggle() {
+  var p = document.getElementById('lyrPanel');
+  if (!p) return;
+  var on = p.style.display === 'none';
+  p.style.display = on ? 'block' : 'none';
+  var b = document.getElementById('lyrBtn');
+  if (b) b.className = on ? 'lyr-btn on' : 'lyr-btn';
+  if (on) paint(1);
+}
+function lyrPlay() {
+  var b = document.getElementById('lyrPlay');
+  if (TI) { clearInterval(TI); TI = null; if (b) { b.textContent = '\u25B6'; b.className = ''; } return; }
+  L = Date.now();
+  TI = setInterval(function() { var n = Date.now(); T += (n - L) / 1e3; L = n; paint(); }, 200);
+  if (b) { b.textContent = '\u275A\u275A'; b.className = 'on'; }
+}
+function lyrShift(d) { T = Math.max(0, T + d); L = Date.now(); paint(); }
+function lyrSeek(t) { T = Math.max(0, Number(t) || 0); L = Date.now(); paint(); }
+function paint(f) {
+  var ts = LY.t || [];
+  if (!ts.length) return;
+  var els = nodes();
+  if (!els.length) return;
+  var i = -1;
+  for (var k = 0; k < ts.length && k < els.length; k++) { if (ts[k] <= T + 1e-3) i = k; else break; }
+  if (i === I && !f) return;
+  I = i;
+  for (var j = 0; j < els.length; j++) els[j].className = (j === i ? 'ly cur' : 'ly');
+  var cur = els[i], v = document.getElementById('lyrView');
+  if (cur && v) { // rect, bukan offsetTop: offsetParent kartu ini .card, bukan panel scroll
+    var dy = cur.getBoundingClientRect().top - v.getBoundingClientRect().top;
+    v.scrollTop = Math.max(0, v.scrollTop + dy - v.clientHeight * .4);
+  }
+}
+(function() {
+  var v = document.getElementById('lyrView');
+  if (!v) return;
+  v.addEventListener('click', function(e) {
+    var el = e.target;
+    while (el && el !== v && el.className !== 'ly') el = el.parentNode;
+    if (!el || el === v) return;
+    var els = nodes();
+    for (var i = 0; i < els.length; i++) if (els[i] === el) { lyrSeek((LY.t || [])[i]); return; }
+  });
+})();
+</script>` : ''}
 </body></html>`;
 }
 
@@ -1882,4 +2058,4 @@ async function handler(ctx) {
   }
 
 export { pluginConfig as config, handler };
-export const _internals = { resolveSource, probeMedia, isIpLocked, hostOf, buildHtml, buildCoverHtml, buildSpotifyHtml, thumbDataUri };
+export const _internals = { resolveSource, probeMedia, isIpLocked, hostOf, buildHtml, buildCoverHtml, buildSpotifyHtml, thumbDataUri, payloadB64Len, buildLyricPanelHtml };
