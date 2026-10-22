@@ -199,30 +199,21 @@ async function sendAuroraAudio(ctx, info, format) {
    * tetap bisa diputar dari pesan audio di bawahnya. */
   let cardSent = false;
   try {
-    const link = audioEndpoint(info.url);
-    const probe = await probeMedia(link, 'skyline-audio', { timeoutMs: 20000 });
+    /* Kartu COVER (tanpa player): di WebView kartu WA elemen media gak jalan,
+     * jadi jangan kasih tombol play yang pasti gagal. */
     const thumbB64 = await thumbDataUri(info.thumbnail);
-    // WebView kartu offline → byte audio lewat WebSocket skyline
-    // (/api/tools/ws-audio), lalu dijadikan blob di dalam kartu.
-    const { website } = skylineCreds();
-    const wsDomain = website.replace(/^http/i, 'ws');
-    const wsUrl = `${wsDomain}/api/tools/ws-audio?url=${encodeURIComponent(link)}`;
-    const html = buildHtml({
-      finalTitle: clean,
-      finalChannel: 'AURORA',
-      finalDuration: duration,
-      videoUrl: link,
+    const html = buildCoverHtml({
+      title: clean,
+      channel: 'AURORA',
+      duration,
       thumbnailb64: thumbB64,
-      wsUrl,
-      isAudio: true,
-      preferWs: true,
-      sourceNote: 'Audio juga dikirim di pesan bawah — tekan play'
+      note: 'Ketuk pesan audio di bawah untuk memutar.'
     });
     await sendRichJH(ctx, html);
     cardSent = true;
-    logger.info(`[Aurora] audio: kartu rich HTML terkirim • player=${probe.ok ? 'siap' : 'probe gagal (HTTP ' + (probe.status || 0) + ')'}`);
+    logger.info(`[Aurora] audio: kartu cover terkirim • ${html.length}B`);
   } catch (err) {
-    logger.warn(`[Aurora] audio: kartu rich HTML gagal — ${err?.message || err}`);
+    logger.warn(`[Aurora] audio: kartu cover gagal — ${err?.message || err}`);
   }
 
   let cover = null;
@@ -264,6 +255,52 @@ async function sendAuroraAudio(ctx, info, format) {
     fileName
   });
   logger.info(`[Aurora] audio: terkirim | ${fileName} • ${(media.length / 1048576).toFixed(2)}MB • total ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+}
+
+/**
+ * Kartu COVER buat audio — tanpa <audio>/<video> sama sekali.
+ * Di WebView kartu WA, elemen media gak jalan (cuma image yang tampil),
+ * jadi kartu ini murni visual: cover + judul + durasi + penanda bahwa
+ * lagunya ada di pesan audio di bawahnya.
+ */
+function buildCoverHtml({ title, channel, duration, thumbnailb64, note }) {
+  const hasThumb = Boolean(thumbnailb64);
+  return `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AURORA — ${escapeHtmlJs(title)}</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none}
+body{margin:0;padding:14px;background:#04090b;font-family:Arial,Helvetica,sans-serif;color:#eafff5}
+.wrap{position:relative;max-width:440px;margin:auto;border-radius:20px;overflow:hidden;
+  border:1px solid rgba(0,255,136,.16);box-shadow:0 10px 40px rgba(0,0,0,.55)}
+.bg{position:absolute;inset:-25px;background-position:center;background-size:cover;
+  filter:blur(22px) saturate(1.1);opacity:.35;transform:scale(1.15)}
+.ov{position:absolute;inset:0;background:linear-gradient(180deg,rgba(4,9,11,.35),rgba(4,9,11,.88))}
+.in{position:relative;padding:18px;text-align:center}
+.hd{font-size:10px;font-weight:800;letter-spacing:2.5px;color:#5cffb0;opacity:.9;margin-bottom:14px}
+.cover{width:100%;aspect-ratio:1/1;border-radius:16px;object-fit:cover;display:block;
+  background:#0b1512;box-shadow:0 8px 30px rgba(0,0,0,.5)}
+.title{font-size:14px;font-weight:800;margin:14px 0 4px;line-height:1.35}
+.sub{font-size:11px;color:#8fb8a8}
+.badge{margin-top:14px;display:inline-block;padding:9px 14px;border-radius:999px;
+  background:rgba(0,255,136,.12);border:1px solid rgba(0,255,136,.25);
+  font-size:11px;font-weight:700;color:#8effc4}
+.note{margin-top:8px;font-size:10px;color:#7fa896;line-height:1.5}
+</style></head>
+<body>
+<div class="wrap">
+  <div class="bg"${hasThumb ? ` style="background-image:url('${thumbnailb64}')"` : ''}></div>
+  <div class="ov"></div>
+  <div class="in">
+    <div class="hd">AURORA — UR SPECIAL PLAYER</div>
+    ${hasThumb ? `<img class="cover" src="${thumbnailb64}" alt="">` : ''}
+    <div class="title">${escapeHtmlJs(title)}</div>
+    <div class="sub">${escapeHtmlJs(channel || '')}${duration ? ` • ${escapeHtmlJs(duration)}` : ''}</div>
+    <div class="badge">🎧 Lagu ada di pesan audio di bawah</div>
+    <div class="note">${escapeHtmlJs(note || 'Ketuk pesan audio di bawah untuk memutar.')}</div>
+  </div>
+</div>
+</body></html>`;
 }
 
 async function thumbDataUri(url) {
