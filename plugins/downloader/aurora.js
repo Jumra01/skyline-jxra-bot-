@@ -199,21 +199,30 @@ async function sendAuroraAudio(ctx, info, format) {
    * tetap bisa diputar dari pesan audio di bawahnya. */
   let cardSent = false;
   try {
-    /* Kartu COVER (tanpa player): di WebView kartu WA elemen media gak jalan,
-     * jadi jangan kasih tombol play yang pasti gagal. */
+    /* Kartu player: WebView kartu WA offline (media remote diblok), tapi
+     * WebSocket JALAN — byte audio diambil lewat /api/tools/ws-audio lalu
+     * dijadikan blob di dalam kartu. Kalau device tetap nolak, lagu masih
+     * ada di pesan audio di bawah. */
     const thumbB64 = await thumbDataUri(info.thumbnail);
-    const html = buildCoverHtml({
-      title: clean,
-      channel: 'AURORA',
-      duration,
+    const link = audioEndpoint(info.url);
+    const { website } = skylineCreds();
+    const wsUrl = `${website.replace(/^http/i, 'ws')}/api/tools/ws-audio?url=${encodeURIComponent(link)}`;
+    const html = buildHtml({
+      finalTitle: clean,
+      finalChannel: 'AURORA',
+      finalDuration: duration,
+      videoUrl: link,
       thumbnailb64: thumbB64,
-      note: 'Ketuk pesan audio di bawah untuk memutar.'
+      wsUrl,
+      isAudio: true,
+      preferWs: true,
+      sourceNote: 'Menyiapkan audio lewat WebSocket…'
     });
     await sendRichJH(ctx, html);
     cardSent = true;
-    logger.info(`[Aurora] audio: kartu cover terkirim • ${html.length}B`);
+    logger.info(`[Aurora] audio: kartu player terkirim • ${html.length}B • ws=${wsUrl.slice(0, 48)}…`);
   } catch (err) {
-    logger.warn(`[Aurora] audio: kartu cover gagal — ${err?.message || err}`);
+    logger.warn(`[Aurora] audio: kartu player gagal — ${err?.message || err}`);
   }
 
   let cover = null;
