@@ -230,7 +230,7 @@ function tWs() {
     bytes += ev.data.byteLength || 0;
     got += 1;
   };
-  ws.onerror = function () { set(5, 'no', 'WS error (gagal connect)'); };
+  ws.onerror = function () { set(5, 'no', 'WS error (gagal connect) • ' + WS_URL.slice(0, 55)); };
   ws.onclose = function (e) { if (!bytes) set(5, 'no', 'WS closed ' + e.code + ' ' + (e.reason || '')); };
   setTimeout(function () { try { ws.close(); } catch (e) {} }, 25000);
 }
@@ -451,7 +451,7 @@ function tWsAudio() {
     total += ev.data.byteLength || 0;
     if (total % 262144 < 65536) set(13, 'wait', 'unduh ' + Math.round(total / 1024) + ' KB…');
   };
-  ws.onerror = function () { set(13, 'no', 'WS error'); };
+  ws.onerror = function () { set(13, 'no', 'WS error (gagal connect) • ' + WS_URL.slice(0, 55)); };
   ws.onclose = function (e) { if (!total) set(13, 'no', 'WS closed ' + e.code); };
   setTimeout(function () { if (!total) { try { ws.close(); } catch (e) {} set(13, 'no', 'timeout 60s tanpa data'); } }, 60000);
 }
@@ -486,7 +486,10 @@ async function handler(ctx) {
   const audioUrl =
     `${website}/api/tools/ytdl/audio?url=${encodeURIComponent(TEST_VIDEO)}` +
     `&apikey=${encodeURIComponent(apikey)}&mode=stream`;
-  const wsUrl = `${website.replace(/^http/i, 'ws')}/api/tools/ws-audio?url=${encodeURIComponent(audioUrl)}`;
+  /* Skema WAJIB wss:// — WebView kartu gak boleh buka ws:// (plain), dan
+   * front worker skyline nolak/redirect upgrade non-https → "gagal connect".
+   * Kalau env panel isi `http://`, http→ws doang bikin ws:// yang rusak. */
+  const wsUrl = `${website.replace(/^http/i, 'ws').replace(/^ws:\/\//, 'wss://')}/api/tools/ws-audio?url=${encodeURIComponent(audioUrl)}`;
   const remoteImg = 'https://i.ytimg.com/vi/hQ-wYw4hP84/hqdefault.jpg';
 
   const html = buildLabHtml({

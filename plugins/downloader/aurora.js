@@ -257,7 +257,8 @@ async function sendAuroraAudio(ctx, info, format) {
     try {
       const link = audioEndpoint(info.url);
       const { website } = skylineCreds();
-      const wsUrl = `${website.replace(/^http/i, 'ws')}/api/tools/ws-audio?url=${encodeURIComponent(link)}`;
+      /* wajib wss:// — ws:// plain kena redirect 301 front worker → gagal. */
+      const wsUrl = `${website.replace(/^http/i, 'ws').replace(/^ws:\/\//, 'wss://')}/api/tools/ws-audio?url=${encodeURIComponent(link)}`;
       const html = buildHtml({
         finalTitle: clean,
         finalChannel: 'AURORA',
