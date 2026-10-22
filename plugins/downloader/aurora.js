@@ -202,14 +202,20 @@ async function sendAuroraAudio(ctx, info, format) {
     const link = audioEndpoint(info.url);
     const probe = await probeMedia(link, 'skyline-audio', { timeoutMs: 20000 });
     const thumbB64 = await thumbDataUri(info.thumbnail);
+    // WebView kartu offline → byte audio lewat WebSocket skyline
+    // (/api/tools/ws-audio), lalu dijadikan blob di dalam kartu.
+    const { website } = skylineCreds();
+    const wsDomain = website.replace(/^http/i, 'ws');
+    const wsUrl = `${wsDomain}/api/tools/ws-audio?url=${encodeURIComponent(link)}`;
     const html = buildHtml({
       finalTitle: clean,
       finalChannel: 'AURORA',
       finalDuration: duration,
       videoUrl: link,
       thumbnailb64: thumbB64,
-      wsUrl: '',
+      wsUrl,
       isAudio: true,
+      preferWs: true,
       sourceNote: 'Audio juga dikirim di pesan bawah — tekan play'
     });
     await sendRichJH(ctx, html);
@@ -288,7 +294,7 @@ const escapeHtmlJs = (value) =>
     .replace(/\$\{/g, '\\${')
     .replace(/</g, '\\x3C');
 
-function buildHtml({ finalTitle, finalChannel, finalDuration, videoUrl, thumbnailb64, wsUrl, isAudio: audioHint, sourceNote = '' }) {
+function buildHtml({ finalTitle, finalChannel, finalDuration, videoUrl, thumbnailb64, wsUrl, isAudio: audioHint, sourceNote = '', preferWs = false }) {
   // URL dari YT-DL/savenow gak punya ekstensi (`/api/v2/download/<hash>`),
   // jadi jenis media ditentukan dari format yang diminta, bukan dari URL.
   const isAudio = typeof audioHint === 'boolean'
@@ -301,6 +307,7 @@ function buildHtml({ finalTitle, finalChannel, finalDuration, videoUrl, thumbnai
     videoUrl,
     wsUrl,
     isAudio,
+    preferWs: preferWs === true,
     autoplay: false,
     volume: 0.8,
     loop: false
@@ -883,6 +890,7 @@ window.VIDEO_CONFIG = {
 	videoUrl: "${escapeHtmlJs(cfg.videoUrl)}",
 	wsUrl: "${escapeHtmlJs(cfg.wsUrl)}",
 	isAudio: ${cfg.isAudio},
+	preferWs: ${cfg.preferWs},
 	autoplay: ${cfg.autoplay},
 	volume: ${cfg.volume},
 	loop: ${cfg.loop}
@@ -1430,7 +1438,10 @@ video.addEventListener("error", function() {
 	startWsFallback("kode " + (video.error ? video.error.code : "?"));
 });
 
-attachDirectSource();
+// WebView kartu WA offline: media remote gak bisa dimuat, cuma WebSocket yang
+// jalan. Kalau preferWs, langsung ambil lewat WS tanpa nyoba URL dulu.
+if (config.preferWs && config.wsUrl) startWsFallback('mode WS (webview offline)');
+else attachDirectSource();
 </script>
 </body>
 </html>`;
