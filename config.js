@@ -135,9 +135,11 @@ export default {
     replyTrigger: true,     // balas saat pesan Ella v2 dibales
     privateAuto: true,      // chat pribadi: pesan biasa juga dibalas
     memory: true,           // inget fakta penting tentang user
-    maxHistory: 8,          // pesan terakhir yang dikirim ke API (maks 10)
+    maxHistory: 4,          // pesan terakhir yang dikirim ke API (maks 10) — kecil = prompt ringan
     timeoutMs: 180_000,     // batas tunggu balasan (ms) — 0 = tanpa batas; Gemma bisa 10-25 dtk
-    retries: 6,             // ulang otomatis kalau server balas "AI is busy" (503/429) — total 7 percobaan
+    retries: 2,             // ulang otomatis kalau "AI is busy" (503/429) — total 3 percobaan (backoff 1,5-6s)
+    queueMax: 2,            // kalau antrean Gemma > ini, user langsung dikasih tau (biar ga nunggu 2 menit)
+    warmupMin: 25,          // ping ringan tiap N menit biar upstream ga cold start (0 = mati)
     systemPrompt: '',       // instruksi tambahan (opsional)
 
     // Aksi bot (Ella bisa jalanin command beneran atas permintaan):

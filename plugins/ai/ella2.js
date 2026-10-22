@@ -53,7 +53,7 @@ import { getSetting, setSetting } from '../../core/groupSettings.js'
 import { getGroupConfig, setGroupConfig, disableGlobalAutoAI } from '../../lib/autoai.js'
 import { kindOf, kindOfJid, parseKind, KIND_LABEL, getGlobalKind, setGlobalKind, kindLabel } from '../../lib/aiScope.js'
 import { extractFacts, remember, factsFor, formatBlock, forget } from '../../lib/aiMemory.js'
-import { gemmaChat, isConfigured as skylineReady, keyTag, keySource, explainSkylineError } from '../../scraper/SKYLINE.js'
+import { gemmaChat, gemmaLoad, warmGemma, isConfigured as skylineReady, keyTag, keySource, explainSkylineError } from '../../scraper/SKYLINE.js'
 import { isBotMentioned, stripMention, botIdentity, withTimeout, findImgNode } from '../../lib/aiTrigger.js'
 import { mayExec, parseRunMarkers, runBotCommand, allowNames, splitCommand } from '../../lib/commandExec.js'
 import { getFeature } from '../loader.js'
@@ -198,6 +198,8 @@ function cfg() {
     timeoutMs: num(c.timeoutMs, 5000, 180_000, 60_000),
     systemPrompt: String(c.systemPrompt || '').trim(),
     retries: num(c.retries, 0, 3, 2),
+    queueMax: num(c.queueMax, 0, 10, 2),
+    warmupMin: num(c.warmupMin, 0, 240, 25),
     exec: String(c.exec ?? 'admin').toLowerCase(),
     execAllow: allow.map((s) => String(s).trim()).filter(Boolean),
     execUser: userAllow.map((s) => String(s).trim()).filter(Boolean),
@@ -590,13 +592,23 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false } = {}) 
     execBlocked: !execOn && conf.exec !== 'off',
     actionList: conf.execAllow,
     featureList: conf.execUser.length ? userCatalog(conf.execUser) : [],
-    // Sisa ruang buat catatan gambar (system dipotong API di 3000 char).
-    maxChars: hasImage ? 2800 : 3000,
+    // Prompt dipangkas (1800 char) — makin kecil makin cepat sampai ke model,
+    // jadi jauh lebih jarang nyentuh timeout upstream (yang balik jadi 503).
+    maxChars: hasImage ? 1600 : 1800,
   }) + imageNote
 
   const history = h.msgs
     .slice(-Math.min(HISTORY_MAX, conf.maxHistory))
-    .map((m) => ({ role: m.role, content: m.content }))
+    // Riwayat ga perlu verbatim: 800 char cukup buat jaga konteks, sisanya
+    // cuma nambah panjang prompt (dan waktu tunggu).
+    .map((m) => ({ role: m.role, content: String(m.content || '').slice(0, 800) }))
+
+  // Antrean Gemma udah panjang? Jangan bikin user nunggu 120 dtk lalu gagal.
+  const load = gemmaLoad()
+  if (load.queued > Number(conf.queueMax ?? 2)) {
+    logger.warn(`[Ella2] ditolak cepat — antrean Gemma penuh (queued ${load.queued}, jalan ${load.inFlight})`)
+    return { ok: false, reply: '🕐 *Otak Ella v2 lagi rame* — antreannya panjang. Coba lagi ±30 detik ya 😅' }
+  }
 
   let reply = ''
   let tookMs = 0
@@ -623,6 +635,7 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false } = {}) 
       [
         `[Ella2] gagal — ${why.headline}`,
         `  ↳ server    : HTTP ${err?.status || 0} "${String(err?.message || err).slice(0, 120)}"`,
+        `  ↳ kode      : ${err?.serverCode || err?.code || '-'} • antrean ${err?.load?.queued ?? '?'} (jalan ${err?.load?.inFlight ?? '?'})`,
         `  ↳ percobaan : ${err?.attempts || 1}× (${riwayat}) • total ${lama}`,
         `  ↳ endpoint  : ${(err?.website || '') + (err?.endpoint || '/api/ai/gemma')}`,
         `  ↳ key       : ${err?.keyTag || keyTag()} — ${err?.keySource || keySource()}`,
@@ -635,21 +648,11 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false } = {}) 
   }
 
   if (admission(reply)) {
-    logger.info('[Ella2] jawaban ngaku AI — ulang dengan instruksi identitas')
-    try {
-      const r2 = await withChatQueue(storeKey(ctx), () => gemmaChat({
-        message: text,
-        history,
-        system: `${system}\n\n${RETRY_NOTE}`,
-        timeoutMs: conf.timeoutMs,
-        retries: conf.retries,
-      }))
-      reply = r2.reply
-      tookMs = r2.tookMs
-    } catch {
-      /* jatuh ke SAFE_LINE di bawah */
-    }
-    if (admission(reply)) reply = SAFE_LINE
+    /* Dulu di sini bot nembak request KEDUA (system + RETRY_NOTE) — itu
+     * dobel beban tiap pesan dan ikut nyumbang 503 "ramai". Sekarang cukup
+     * pakai kalimat pengaman, tanpa request tambahan. */
+    logger.info('[Ella2] jawaban ngaku AI — diganti SAFE_LINE (tanpa request ulang)')
+    reply = SAFE_LINE
   }
 
   // Aksi bot: model bisa nitip baris `[[RUN: ...]]` → divalidasi & dijalanin.
@@ -1009,6 +1012,33 @@ async function handler(ctx) {
   }
   return ctx.reply(r.reply)
 }
+
+/* ══════════════════════ warm-up berkala ══════════════════════ */
+/**
+ * Upstream bisa "tidur" kalau lama ga dipakai — request pertama setelah tidur
+ * bisa >90 dtk dan itu berakhir jadi 503 "ramai" padahal cuma cold start.
+ * Ping ringan tiap `config.ella2.warmupMin` menit bikin jalurnya tetap hangat.
+ */
+let warmTimer = null
+function startWarmup() {
+  if (warmTimer) clearInterval(warmTimer)
+  warmTimer = null
+  const menit = Number(cfg().warmupMin) || 0
+  if (menit <= 0 || !skylineReady()) {
+    logger.info('[Ella2] warm-up mati (config.ella2.warmupMin = 0 atau API key kosong)')
+    return
+  }
+  const tick = async () => {
+    const r = await warmGemma({ timeoutMs: 45000 })
+    if (!r.ok) logger.debug(`[Ella2] warm-up gagal (${r.code || r.status || '?'})`)
+  }
+  warmTimer = setInterval(() => void tick(), menit * 60_000)
+  warmTimer.unref?.()
+  const first = setTimeout(() => void tick(), 15_000)
+  first.unref?.()
+  logger.info(`[Ella2] warm-up aktif tiap ${menit} menit`)
+}
+startWarmup()
 
 loadStore()
 addMentionHandler('ella2', onMention, 20)

@@ -42,11 +42,15 @@ export class SkylineKeyError extends Error {
 }
 
 export class SkylineApiError extends Error {
-  constructor(message, status = 0, body = '') {
+  constructor(message, status = 0, body = '', code = '') {
     super(message);
     this.name = 'SkylineApiError';
     this.status = status;
     this.body = String(body || '').slice(0, 220);
+    /* `code` = kode internal dari server (`ai_busy`, `ai_unavailable`,
+     * `hourly_limit`, dll). Dipakai buat milih strategi retry — jangan
+     * andelin teks pesan, teksnya bisa berubah kapan aja. */
+    this.code = String(code || '');
   }
 }
 
@@ -121,6 +125,13 @@ export function explainSkylineError(err) {
       headline: 'Kuota / credit habis',
       reason: 'key masih valid tapi jatah pemakaiannya sudah habis',
       action: 'top-up / naikkan limit key di dashboard, atau pakai key lain'
+    };
+  }
+  if (err?.code === 'hourly_limit' || err?.code === 'total_limit') {
+    return {
+      headline: 'Kuota key habis (rate limit)',
+      reason: `key ${keyTag()} udah lewat batas pemakaian (per jam / 24 jam) — bukan server penuh`,
+      action: 'tunggu reset jam-an, kurangi frekuensi chat, atau pakai key tier lebih tinggi'
     };
   }
   if (status === 429 || status === 503 || /busy|overload|ramai|try again later/i.test(low)) {
@@ -203,14 +214,21 @@ function absUrl(website, url) {
   return website + (u.startsWith('/') ? u : '/' + u);
 }
 
-function parseApiError(body) {
-  if (!body) return '';
+function parseApiPayload(body) {
+  if (!body) return { message: '', code: '' };
   try {
     const obj = JSON.parse(body);
-    return String(obj.error || obj.detail || obj.message || '').trim();
+    return {
+      message: String(obj.error || obj.detail || obj.message || '').trim(),
+      code: String(obj.code || '').trim()
+    };
   } catch {
-    return String(body).trim().slice(0, 160);
+    return { message: String(body).trim().slice(0, 160), code: '' };
   }
+}
+
+function parseApiError(body) {
+  return parseApiPayload(body).message;
 }
 
 /* ══════════════ gerbang global (anti-limit) ══════════════ */
@@ -826,10 +844,30 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * sebagian kena 503. Antrean dilepas tiap percobaan (bukan seluruh retry),
  * jadi chat lain tetap dapat giliran walau satu chat sedang mengulang. */
 let gemmaChain = Promise.resolve();
+/* Statistik antrean. Dipakai plugin buat nolak cepat waktu antrean panjang,
+ * biar user ga nunggu 120 dtk cuma buat dapat pesan "ramai". */
+let gemmaInFlight = 0;
+let gemmaQueued = 0;
+
 function gemmaSlot(fn) {
-  const run = gemmaChain.then(fn, fn);
+  gemmaQueued += 1;
+  const runNow = async () => {
+    gemmaQueued = Math.max(0, gemmaQueued - 1);
+    gemmaInFlight += 1;
+    try {
+      return await fn();
+    } finally {
+      gemmaInFlight = Math.max(0, gemmaInFlight - 1);
+    }
+  };
+  const run = gemmaChain.then(runNow, runNow);
   gemmaChain = run.then(() => {}, () => {});
   return run;
+}
+
+/** Berapa request yang sedang jalan / nunggu di antrean Gemma. */
+export function gemmaLoad() {
+  return { inFlight: gemmaInFlight, queued: gemmaQueued };
 }
 
 async function gemmaOnce(body, website, timeoutMs) {
@@ -858,11 +896,12 @@ async function gemmaOnce(body, website, timeoutMs) {
     /* ditangani di bawah */
   }
 
+  const payload = parseApiPayload(text);
   if (!res.ok || !json) {
-    throw new SkylineApiError(parseApiError(text) || `HTTP ${res.status}`, res.status, text);
+    throw new SkylineApiError(payload.message || `HTTP ${res.status}`, res.status, text, payload.code);
   }
   if (json.status === false) {
-    throw new SkylineApiError(parseApiError(text) || 'API Skyline nolak request', res.status, text);
+    throw new SkylineApiError(payload.message || 'API Skyline nolak request', res.status, text, payload.code);
   }
 
   const reply = String(json.reply || '').trim();
@@ -937,28 +976,48 @@ export async function gemmaChat({ message, history = [], system = '', timeoutMs 
       };
     } catch (err) {
       lastErr = err;
-      const code = Number(err?.status) || 0;
-      statuses.push(code);
-      const busy = BUSY_STATUS.has(code) || /busy|try again later|overload|ramai/i.test(String(err?.message || ''));
-      const retryable = busy || RETRY_STATUS.has(code) || (code === 0 && /timeout|konek/i.test(String(err?.message || '')));
+      const status = Number(err?.status) || 0;
+      const kode = String(err?.code || '');
+      statuses.push(status);
+      /* `ai_busy`   = antrean upstream penuh (layak diulang).
+       * `ai_unavailable` = gangguan lain (boleh diulang sekali).
+       * Timeout lokal juga dianggap ramai, sama kayak di server. */
+      /* Kuota per jam / total ga bakal sembuh dalam hitungan detik —
+       * jangan retry, langsung lempar biar user dapat pesan "dibatasi". */
+      if (kode === 'hourly_limit' || kode === 'total_limit') break;
+      const busy = kode === 'ai_busy'
+        || BUSY_STATUS.has(status)
+        || /busy|try again later|overload|ramai/i.test(String(err?.message || ''));
+      const retryable = busy
+        || RETRY_STATUS.has(status)
+        || kode === 'ai_unavailable'
+        || (status === 0 && /timeout|konek/i.test(String(err?.message || '')));
 
       if (!retryable || i >= maxAttempts) break;
 
       // Percobaan berikutnya = terakhir? Pakai payload ringan (khusus "ramai").
-      liteNext = busy && i >= maxAttempts - 1;
+      liteNext = busy && (i >= maxAttempts - 1 || maxAttempts <= 2);
 
-      // Jeda: 0,9s → 1,8s, yang "ramai" 1,5s → 3s (+ jitter) biar server
-      // sempat lega — dulu cuma 0,6s/1,2s jadi sering nabrak lagi.
-      // "Ramai" biasanya sembuh 10-20 detik → jeda makin panjang (1,5s → 5s)
-      // biar total tunggu masih di bawah `timeoutMs` tapi cukup sabar.
-      const base = busy ? 1200 * i + 300 : 600 * i;
-      await sleep(Math.min(busy ? 5000 : 3000, base) + Math.floor(Math.random() * 300));
+      // Jeda eksponensial + jitter: 1,5s → 3s → 6s (maks 6s). Cukup sabar
+      // nunggu antrean lega, tapi ga jadi badai request.
+      const base = busy ? 1500 * 2 ** (i - 1) : 700 * i;
+      const jeda = Math.min(6000, base) + Math.floor(Math.random() * 400);
+
+      // Masih ada chat lain di antrean? Kasih giliran dulu — jangan numpuk
+      // retry di atas request yang belum kelar.
+      if (gemmaLoad().queued > 0) {
+        const batas = Date.now() + Math.min(8000, jeda + 3000);
+        while (gemmaLoad().queued > 0 && Date.now() < batas) await sleep(250);
+      }
+      await sleep(jeda);
     }
   }
 
   // "Ramai" bukan gangguan konfigurasi → jangan bikin breaker muter 5 menit.
-  const code = Number(lastErr?.status) || 0;
-  const busy = BUSY_STATUS.has(code) || /busy|try again later|overload|ramai/i.test(String(lastErr?.message || ''));
+  const status = Number(lastErr?.status) || 0;
+  const busy = String(lastErr?.code || '') === 'ai_busy'
+    || BUSY_STATUS.has(status)
+    || /busy|try again later|overload|ramai/i.test(String(lastErr?.message || ''));
   if (!busy) breakerFail('gemma');
 
   const errOut = lastErr || new SkylineApiError('Ella v2 gagal nyambung', 0);
@@ -967,11 +1026,37 @@ export async function gemmaChat({ message, history = [], system = '', timeoutMs 
   errOut.attempts = attempts || 1;
   errOut.elapsedMs = Date.now() - startedAt;
   errOut.statuses = statuses;
+  errOut.serverCode = String(lastErr?.code || '');
+  errOut.load = gemmaLoad();
   errOut.endpoint = AI_GEMMA_PATH;
   errOut.website = website;
   errOut.keyTag = keyTag();
   errOut.keySource = keySource();
   throw errOut;
+}
+
+/**
+ * Ping ringan buat "bangunin" model — cold start upstream bisa >90 dtk dan
+ * itu berakhir jadi 503 `ai_busy` di mata bot. Dipanggil berkala oleh plugin
+ * `.ella2` (lihat `config.ella2.warmupMin`). Tanpa retry & tanpa breaker.
+ */
+export async function warmGemma({ timeoutMs = 45000 } = {}) {
+  const { website, apikey } = skylineCreds();
+  if (!apikey) return { ok: false, code: 'NO_API_KEY' };
+  const body = { message: 'ping', system: 'Balas satu kata: ok', apikey };
+  try {
+    const res = await fetch(`${website}${AI_GEMMA_PATH}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Accept: 'application/json', 'User-Agent': UA },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+    if (res.ok) return { ok: true, status: res.status };
+    const payload = parseApiPayload(await res.text());
+    return { ok: false, status: res.status, code: payload.code, message: payload.message };
+  } catch (err) {
+    return { ok: false, status: 0, code: err?.name === 'TimeoutError' ? 'timeout' : 'konek' };
+  }
 }
 
 /** Pesan ramah buat user kalau key belum diisi. */
