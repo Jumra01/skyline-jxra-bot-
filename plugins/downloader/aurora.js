@@ -222,7 +222,7 @@ async function sendPlayerButton(ctx, info, clean, duration) {
   if (artist) params.set('artist', artist);
   const durSec = durToSeconds(duration || info.duration);
   if (durSec) params.set('dur', String(durSec));
-  const playerUrl = `${website}/aurora-player.html?${params.toString()}`;
+  const playerUrl = `${website}/aurora-player?${params.toString()}`;
 
   await ctx.client.message.send(ctx.chat, {
     interactiveMessage: {
