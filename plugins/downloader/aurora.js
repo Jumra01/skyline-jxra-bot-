@@ -589,10 +589,10 @@ async function sendAuroraAudio(ctx, info, format) {
         }
         return { html: h, shrink: sh, audioDataUri };
       };
-      const recompress = async (why) => {
+      const recompress = async (why, maxB64) => {
         logger.warn(`[Aurora] audio: ${why} — kompres otomatis`);
         return prepareEmbeddedAudio(audio.buffer, durToSeconds(duration) || 0, {
-          maxB64: embedBudgetBytes(),
+          maxB64: maxB64 || embedBudgetBytes(),
           preferOriginal: false,
           mimetype: audio.mimetype
         });
@@ -604,15 +604,50 @@ async function sendAuroraAudio(ctx, info, format) {
         card = mkCard(used);
         card.shrink += ' • asli→kompres (batas frame WA)';
       }
-      try {
+      /* Tangga adaptif: kirim kualitas penuh dulu; kalau WA nolak (479
+       * "negative publish ack" ATAU "frame is too large") → turunin budget
+       * embed & ulang, terakhir kartu TANPA embed. Data lapangan: payload
+       * ±1,06MB sukses, 2,5MB+ ditolak — ambang pastinya biar log tiap
+       * tahap ini yang nunjukin (bukan tebakan). Non-479/frame → lempar
+       * ke catch luar seperti biasa. */
+      const budgetSteps = [...new Set(
+        [embedBudgetBytes(), 1_150_000, 800_000].filter((v) => v <= embedBudgetBytes())
+      )].sort((a, b) => b - a);
+      const isReject = (err) => /frame is too large|negative publish ack|error=479/i.test(String(err?.message || err));
+      let sentOk = false;
+      if (!used) {
+        // Kartu memang tanpa audio (embed gagal disiapkan) — payload kecil,
+        // proven-safe: sekali kirim saja.
         await sendNativeHtml(ctx.client, ctx.chat, card.html);
-      } catch (err) {
-        if (!/frame is too large/i.test(String(err?.message || err)) || !used?.original) throw err;
-        // Frame nolak padahal estimasi muat → kalibrasi meleset; kompres & ulang.
-        used = await recompress('frame WA nolak audio asli');
-        card = mkCard(used);
-        card.shrink += ' • asli→kompres (frame nolak)';
+        sentOk = true;
+      }
+      for (let step = 0; step < budgetSteps.length && !sentOk; step += 1) {
+        const budget = budgetSteps[step];
+        if (step > 0) {
+          used = await recompress(`WA nolak kartu — coba tahap ${step + 1}/${budgetSteps.length} budget ${Math.round(budget / 1024)}KB`, budget);
+          card = mkCard(used);
+        }
+        try {
+          await sendNativeHtml(ctx.client, ctx.chat, card.html);
+          sentOk = true;
+          card.shrink += ` • tahap ${step + 1}/${budgetSteps.length} (budget ${Math.round(budget / 1024)}KB)`;
+        } catch (err) {
+          if (!isReject(err)) throw err;
+          logger.warn(
+            `[Aurora] audio: WA nolak kartu tahap ${step + 1}/${budgetSteps.length} ` +
+            `(payload ±${payloadB64Len(card.html)}B ≈ ${Math.round(payloadB64Len(card.html) / 1048576 * 10) / 10}MB) — ` +
+            `${String(err?.message || err).slice(0, 160)}`
+          );
+        }
+      }
+      if (!sentOk) {
+        // Semua tahap dengan audio ditolak (kemungkinan kena flag sementara
+        // server) → kartu polos sekali; kalau tetap ditolak, jatuh ke catch
+        // luar → cover image (selalu berhasil).
+        card = mkCard(null);
+        card.shrink += ' • semua tahap ditolak → tanpa embed';
         await sendNativeHtml(ctx.client, ctx.chat, card.html);
+        sentOk = true;
       }
       cardSent = true;
       logger.info(
