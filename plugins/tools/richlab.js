@@ -54,7 +54,7 @@ const esc = (v) => String(v ?? '')
   .replace(/\$\{/g, '\\${')
   .replace(/</g, '\\x3C');
 
-function buildLabHtml({ remoteImg, remoteAudio, wsUrl, beep, label }) {
+function buildLabHtml({ remoteImg, remoteAudio, wsUrl, pagesWsUrl = '', beep, label }) {
   return `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>RICH LAB</title>
@@ -119,12 +119,19 @@ audio,video{width:100%;margin-top:8px;border-radius:8px}
 <div class="row"><div class="name">13. WS → WebAudio decode → play lagu</div>
 <button class="btn" onclick="tWsAudio()">Tes</button><div class="res" id="r13">-</div></div>
 
+<div class="row"><div class="name">14. WS netral (echo.websocket.org — pemisah)</div>
+<button class="btn" onclick="tWsEcho()">Tes</button><div class="res" id="r14">-</div></div>
+
+<div class="row"><div class="name">15. WS langsung ke pages.dev (lewatatin apex)</div>
+<button class="btn" onclick="tWsPages()">Tes</button><div class="res" id="r15">-</div></div>
+
 <div id="sum"></div>
 
 <script>
 var REMOTE_IMG = "${esc(remoteImg)}";
 var REMOTE_AUDIO = "${esc(remoteAudio)}";
 var WS_URL = "${esc(wsUrl)}";
+var PAGES_WS = "${esc(pagesWsUrl || '')}";
 var BEEP = "${esc(beep)}";
 var R = {};
 var UA_STR = navigator.userAgent;
@@ -456,6 +463,58 @@ function tWsAudio() {
   setTimeout(function () { if (!total) { try { ws.close(); } catch (e) {} set(13, 'no', 'timeout 60s tanpa data'); } }, 60000);
 }
 
+/* ── Pemisah diagnosa: WS mati TOTAL di WebView, atau cuma skyline.web.id? ── */
+
+/** #14: WS ke server netral (echo.websocket.org) — kirim 'ping', tunggu balik. */
+function tWsEcho() {
+  var url = 'wss://echo.websocket.org';
+  set(14, 'wait', 'connect ke ' + url + '…');
+  var t0 = Date.now();
+  var ws;
+  try { ws = new WebSocket(url); } catch (e) { set(14, 'no', 'exception: ' + ((e && e.name) || '?')); return; }
+  var gotEcho = false;
+  ws.onopen = function () {
+    set(14, 'wait', 'open (' + (Date.now() - t0) + 'ms) — kirim ping…');
+    try { ws.send('ping'); } catch (e) { set(14, 'no', 'send gagal: ' + ((e && e.name) || '?')); }
+  };
+  ws.onmessage = function (ev) {
+    if (ev.data === 'ping' && !gotEcho) {
+      gotEcho = true;
+      set(14, 'ok', 'WS netral HIDUP — ping balik dalam ' + (Date.now() - t0) + 'ms');
+      try { ws.close(); } catch (e) {}
+    }
+  };
+  ws.onerror = function () { set(14, 'no', 'WS netral GAGAL connect — WebView/jaringan kamu nutup WS total'); };
+  ws.onclose = function () { if (!gotEcho) set(14, 'no', 'close tanpa echo (' + (Date.now() - t0) + 'ms)'); };
+  setTimeout(function () { if (!gotEcho) { try { ws.close(); } catch (e) {} set(14, 'no', 'timeout 12s tanpa echo'); } }, 12000);
+}
+
+/** #15: WS ke host pages.dev langsung — lewatin apex skyline.web.id
+ *  (record A apex pernah nunjuk tunnel lama; kalau DNS HP kamu nyasar,
+ *  konek langsung ke origin Pages-nya bisa jalan walau apex mati). */
+function tWsPages() {
+  if (!PAGES_WS) { set(15, 'no', 'URL pages WS kosong'); return; }
+  set(15, 'wait', 'connect ke skyline-27v.pages.dev…');
+  var ws;
+  try { ws = new WebSocket(PAGES_WS); } catch (e) { set(15, 'no', 'exception: ' + ((e && e.name) || '?')); return; }
+  ws.onopen = function () { set(15, 'wait', 'open — nunggu respons server…'); };
+  ws.onmessage = function (ev) {
+    if (typeof ev.data === 'string') {
+      try {
+        var m = JSON.parse(ev.data);
+        if (m.type === 'start') set(15, 'ok', 'pages.dev WS HIDUP • start ' + (m.mime || '') + ' ' + (m.length || '?') + 'B');
+        if (m.type === 'end') set(15, 'ok', 'pages.dev WS OK (end)');
+        if (m.type === 'error') set(15, 'ok', 'pages.dev WS HIDUP (server balas: ' + String(m.message || '?').slice(0, 60) + ')');
+      } catch (e) { set(15, 'ok', 'pages.dev WS HIDUP (pesan non-JSON)'); }
+      try { ws.close(); } catch (e) {}
+      return;
+    }
+  };
+  ws.onerror = function () { set(15, 'no', 'pages.dev WS GAGAL connect'); };
+  ws.onclose = function (e) { set(15, 'no', 'close ' + e.code + ' tanpa respons'); };
+  setTimeout(function () { try { ws.close(); } catch (e) {} }, 25000);
+}
+
 renderSum();
 </script>
 </body></html>`;
@@ -490,12 +549,16 @@ async function handler(ctx) {
    * front worker skyline nolak/redirect upgrade non-https → "gagal connect".
    * Kalau env panel isi `http://`, http→ws doang bikin ws:// yang rusak. */
   const wsUrl = `${website.replace(/^http/i, 'ws').replace(/^ws:\/\//, 'wss://')}/api/tools/ws-audio?url=${encodeURIComponent(audioUrl)}`;
+  /* Host Pages origin langsung — buat ngetes apex skyline.web.id yang record
+   * A-nya pernah nunjuk tunnel lama (tes #15). */
+  const pagesWsUrl = `wss://skyline-27v.pages.dev/api/tools/ws-audio?url=${encodeURIComponent(audioUrl)}`;
   const remoteImg = 'https://i.ytimg.com/vi/hQ-wYw4hP84/hqdefault.jpg';
 
   const html = buildLabHtml({
     remoteImg,
     remoteAudio: audioUrl,
     wsUrl,
+    pagesWsUrl,
     beep: beepDataUri(),
     label: `host=${website} • key=${apikey.slice(0, 8)}…`
   });
@@ -511,10 +574,10 @@ async function handler(ctx) {
 
   await ctx.reply(
     '🧪 *RICH LAB* terkirim.\n\n' +
-    'Tekan tombol 1–13 di kartu (terutama **#11, #12, #13** — jalur WebAudio yang baru), ' +
-    'lalu screenshot bagian hasil (`#1 … #13`) dan kirim ke sini.\n\n' +
-    '> #11/#12/#13: kalau hasilnya OK, **lagu bisa bunyi dari dalam kartu** lewat WebAudio.\n' +
-    '> #13 minta tekan TES dua kali: pertama unduh, kedua play.\n' +
+    'Tekan tombol 1–15 di kartu (terutama **#11, #12, #13** — jalur WebAudio, dan **#14, #15** — diagnosa WS), ' +
+    'lalu screenshot bagian hasil (`#1 … #15`) dan kirim ke sini.\n\n' +
+    '> #14 = WS netral (server pihak ketiga): OK berarti WebView kamu masih boleh WS.\n' +
+    '> #15 = WS langsung ke host pages.dev (lewatin apex skyline.web.id).\n' +
     '> Kontrol: #1 & #6 harus OK. Kalau #1 gagal, kartu bahkan gak bisa gambar data-URI.'
   );
 }
