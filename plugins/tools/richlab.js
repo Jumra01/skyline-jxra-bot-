@@ -19,10 +19,12 @@ const UA = 'Mozilla/5.0 (Linux; Android 13; 23021RAA2Y Build/TKQ1.221114.001) Ap
 /** Video pendek buat sumber tes (Janji Suci — 3:14). */
 const TEST_VIDEO = 'https://www.youtube.com/watch?v=hQ-wYw4hP84';
 
-/** 1 detik beep 440 Hz, WAV 8 kHz mono 8-bit → base64. */
+/** Beep 440 Hz, WAV 4 kHz mono 8-bit 0.6 dtk → base64.
+ *  Sample rate 4 kHz sengaja (beep 440Hz tetap jelas, Nyquist aman) —
+ *  kartu lab harus tetap muat di payload FOA, dan beep ini ±3KB bukan ±11KB. */
 function beepDataUri() {
-  const rate = 8000;
-  const n = rate;
+  const rate = 4000;
+  const n = Math.round(rate * 0.6);
   const buf = Buffer.alloc(44 + n);
   buf.write('RIFF', 0);
   buf.writeUInt32LE(36 + n, 4);
@@ -88,7 +90,7 @@ audio,video{width:100%;margin-top:8px;border-radius:8px}
 <div class="row"><div class="name">5. WebSocket ke skyline (ws-audio)</div>
 <button class="btn" onclick="tWs()">Tes</button><div class="res" id="r5">-</div></div>
 
-<div class="row"><div class="name">6. Audio data: URI (beep 1 dtk)</div>
+<div class="row"><div class="name">6. Audio data: URI (beep 0.6 dtk)</div>
 <button class="btn" onclick="tBeep()">Tes</button><div class="res" id="r6">-</div>
 <audio id="a6" preload="auto"></audio></div>
 
@@ -107,6 +109,15 @@ audio,video{width:100%;margin-top:8px;border-radius:8px}
 <div class="row"><div class="name">10. Play dari timer (tanpa gesture)</div>
 <button class="btn" onclick="tTimer()">Tes</button><div class="res" id="r10">-</div>
 <audio id="a10" preload="auto"></audio></div>
+
+<div class="row"><div class="name">11. WebAudio oscillator (beep 0.6 dtk — didengar?)</div>
+<button class="btn" onclick="tWebAudioOsc()">Tes</button><div class="res" id="r11">-</div></div>
+
+<div class="row"><div class="name">12. WebAudio decode beep WAV (data lokal)</div>
+<button class="btn" onclick="tWebAudioDecode()">Tes</button><div class="res" id="r12">-</div></div>
+
+<div class="row"><div class="name">13. WS → WebAudio decode → play lagu</div>
+<button class="btn" onclick="tWsAudio()">Tes</button><div class="res" id="r13">-</div></div>
 
 <div id="sum"></div>
 
@@ -298,6 +309,153 @@ function tWsBlob() {
   setTimeout(function () { if (!bytes) { try { ws.close(); } catch (e) {} set(9, 'no', 'timeout 25s tanpa data'); } }, 25000);
 }
 
+/* ── Jalur WebAudio (AudioContext) — BUKAN elemen <audio>, jadi bisa jadi
+ *    gak kena blokir pipeline media WebView. Ini harapan terakhir biar audio
+ *    bisa bunyi dari dalam kartu. ────────────────────────────────────── */
+
+function getCtx(id) {
+  try {
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) { set(id, 'no', 'AudioContext TIDAK ADA di WebView ini'); return null; }
+    var ctx = window.__labCtx || (window.__labCtx = new AC());
+    if (ctx.state === 'suspended') ctx.resume();
+    return ctx;
+  } catch (e) {
+    set(id, 'no', 'AudioContext exception: ' + ((e && e.name) || '?') + ' ' + ((e && e.message) || ''));
+    return null;
+  }
+}
+
+/** data: URI → ArrayBuffer tanpa fetch (fetch diblok di WebView). */
+function dataUriToAb(uri) {
+  var b64 = uri.slice(uri.indexOf(',') + 1);
+  var bin = atob(b64);
+  var u8 = new Uint8Array(bin.length);
+  for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return u8.buffer;
+}
+
+function tWebAudioOsc() {
+  var ctx = getCtx(11);
+  if (!ctx) return;
+  try {
+    var osc = ctx.createOscillator();
+    var g = ctx.createGain();
+    g.gain.value = 0.15;
+    osc.frequency.value = 440;
+    osc.connect(g);
+    g.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.6);
+    set(11, 'wait', 'beep oscillator 0.6 dtk terjadwal…');
+    setTimeout(function () {
+      if (ctx.state === 'running') set(11, 'ok', 'WebAudio jalan (state=running) — BUNYI BEEP kedengaran?');
+      else set(11, 'no', 'state=' + ctx.state + ' — output diblok (gak kedengaran)');
+    }, 400);
+  } catch (e) { set(11, 'no', 'exception: ' + ((e && e.name) || '?') + ' ' + ((e && e.message) || '')); }
+}
+
+function tWebAudioDecode() {
+  var ctx = getCtx(12);
+  if (!ctx) return;
+  set(12, 'wait', 'decode beep WAV…');
+  try {
+    var ab = dataUriToAb(BEEP);
+    var done = false;
+    var cb = function (buf) {
+      if (done) return;
+      done = true;
+      var src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(ctx.destination);
+      src.start();
+      set(12, 'ok', 'decodeAudioData OK (' + buf.duration.toFixed(2) + 's @ ' + buf.sampleRate + 'Hz) — BUNYI beep?');
+    };
+    var fail = function (e) {
+      if (done) return;
+      done = true;
+      set(12, 'no', 'decode GAGAL: ' + ((e && (e.message || e.name)) || '?'));
+    };
+    var p = ctx.decodeAudioData(ab, cb, fail);
+    if (p && p.then) p.then(cb, fail);
+    setTimeout(function () { if (!done) set(12, 'no', 'decode timeout 8s (kemungkinan gak didukung)'); }, 8000);
+  } catch (e) { set(12, 'no', 'exception: ' + ((e && e.name) || '?') + ' ' + ((e && e.message) || '')); }
+}
+
+function playDecoded(buf) {
+  var ctx = window.__labCtx;
+  if (!ctx) return;
+  if (window.__labSrc) { try { window.__labSrc.stop(); } catch (e) {} }
+  if (window.__labProg) clearInterval(window.__labProg);
+  var src = ctx.createBufferSource();
+  src.buffer = buf;
+  src.connect(ctx.destination);
+  src.start();
+  window.__labSrc = src;
+  var t0 = ctx.currentTime;
+  set(13, 'wait', 'playing… 0.0 / ' + buf.duration.toFixed(1) + 's');
+  window.__labProg = setInterval(function () {
+    var t = ctx.currentTime - t0;
+    if (t >= buf.duration) {
+      clearInterval(window.__labProg);
+      window.__labProg = 0;
+      set(13, 'ok', 'WebAudio PLAY penuh ' + buf.duration.toFixed(1) + 's @ ' + buf.sampleRate + 'Hz — LAGU KEDENGARAN?');
+    } else set(13, 'wait', 'playing… ' + t.toFixed(1) + ' / ' + buf.duration.toFixed(1) + 's');
+  }, 500);
+  setTimeout(function () {
+    if (window.__labProg && ctx.currentTime - t0 > 2) set(13, 'ok', 'WebAudio MUTER ' + (ctx.currentTime - t0).toFixed(1) + 's dari ' + buf.duration.toFixed(1) + 's — LAGU KEDENGARAN? (tekan TES lagi = stop)');
+  }, 2500);
+}
+
+function tWsAudio() {
+  var ctx = getCtx(13);
+  if (!ctx) return;
+  // Ketukan kedua: unduhan sudah ada → decode + play
+  if (window.__labWsBuf) {
+    var buf = window.__labWsBuf;
+    window.__labWsBuf = null;
+    set(13, 'wait', 'decode ' + Math.round(buf.byteLength / 1024) + ' KB…');
+    var done = false;
+    var cb = function (b) { if (done) return; done = true; playDecoded(b); };
+    var fail = function (e) { if (done) return; done = true; set(13, 'no', 'decodeAudioData GAGAL: ' + ((e && (e.message || e.name)) || '?')); };
+    try {
+      var p = ctx.decodeAudioData(buf, cb, fail);
+      if (p && p.then) p.then(cb, fail);
+    } catch (e) { fail(e); }
+    setTimeout(function () { if (!done) set(13, 'no', 'decode timeout 30s — buffer kemungkinan OOM di WebView'); }, 30000);
+    return;
+  }
+  // Ketukan pertama: unduh lagu penuh lewat WS
+  if (!WS_URL) { set(13, 'no', 'URL WS kosong'); return; }
+  set(13, 'wait', 'download lagu via WS…');
+  var ws = new WebSocket(WS_URL);
+  ws.binaryType = 'arraybuffer';
+  var chunks = [], total = 0, t0 = Date.now();
+  ws.onmessage = function (ev) {
+    if (typeof ev.data === 'string') {
+      try {
+        var m = JSON.parse(ev.data);
+        if (m.type === 'end') {
+          var u8 = new Uint8Array(total);
+          var off = 0;
+          for (var i = 0; i < chunks.length; i++) { u8.set(chunks[i], off); off += chunks[i].length; }
+          chunks = [];
+          window.__labWsBuf = u8.buffer;
+          set(13, 'wait', 'unduhan siap (' + Math.round(total / 1024) + ' KB, ' + ((Date.now() - t0) / 1000).toFixed(1) + 's) — TEKAN TES LAGI buat decode+play');
+        }
+        if (m.type === 'error') set(13, 'no', 'server error: ' + (m.message || '?'));
+      } catch (e) {}
+      return;
+    }
+    chunks.push(new Uint8Array(ev.data));
+    total += ev.data.byteLength || 0;
+    if (total % 262144 < 65536) set(13, 'wait', 'unduh ' + Math.round(total / 1024) + ' KB…');
+  };
+  ws.onerror = function () { set(13, 'no', 'WS error'); };
+  ws.onclose = function (e) { if (!total) set(13, 'no', 'WS closed ' + e.code); };
+  setTimeout(function () { if (!total) { try { ws.close(); } catch (e) {} set(13, 'no', 'timeout 60s tanpa data'); } }, 60000);
+}
+
 renderSum();
 </script>
 </body></html>`;
@@ -307,7 +465,7 @@ const pluginConfig = {
   name: 'richlab',
   alias: ['labrich', 'richtest'],
   category: 'tools',
-  description: 'Lab diagnosa kartu rich HTML WhatsApp — tes audio/video (remote, data URI, WebSocket+blob)',
+  description: 'Lab diagnosa kartu rich HTML WhatsApp — tes audio/video (remote, data URI, WebSocket+blob) + jalur WebAudio (#11–#13)',
   usage: '.richlab',
   example: '.richlab',
   isOwner: false,
@@ -350,7 +508,10 @@ async function handler(ctx) {
 
   await ctx.reply(
     '🧪 *RICH LAB* terkirim.\n\n' +
-    'Tekan tombol 1–9 di kartu, lalu screenshot bagian hasil (`#1 … #9`) dan kirim ke sini.\n\n' +
+    'Tekan tombol 1–13 di kartu (terutama **#11, #12, #13** — jalur WebAudio yang baru), ' +
+    'lalu screenshot bagian hasil (`#1 … #13`) dan kirim ke sini.\n\n' +
+    '> #11/#12/#13: kalau hasilnya OK, **lagu bisa bunyi dari dalam kartu** lewat WebAudio.\n' +
+    '> #13 minta tekan TES dua kali: pertama unduh, kedua play.\n' +
     '> Kontrol: #1 & #6 harus OK. Kalau #1 gagal, kartu bahkan gak bisa gambar data-URI.'
   );
 }
