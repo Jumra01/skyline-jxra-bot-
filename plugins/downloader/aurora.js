@@ -981,6 +981,14 @@ function armDirectWatchdog() {
 // (kebijakan autoplay). Coba normal dulu, kalau ditolak mute sebentar
 // lalu unmute lagi — biar user tetap dengar suaranya.
 function safePlay() {
+	// Sebagian webview cuma ngizinin play kalau gesture-nya kena elemen media
+	// sendiri, jadi pasang juga listener langsung di elemen (idempoten).
+	if (!video.dataset.gestureBound) {
+		video.dataset.gestureBound = '1';
+		video.addEventListener('pointerdown', function() {
+			if (video.paused) safePlay();
+		});
+	}
 	var p = video.play();
 	if (!p || !p.catch) return;
 	p.catch(function(err) {
@@ -1343,7 +1351,13 @@ video.addEventListener("error", function() {
 	var msg = video.error && video.error.message ? " • " + video.error.message : "";
 	writeLog("Media error " + code + msg);
 	diagnoseMedia();
-	if (!streamStarted) setStatus("Gagal memutar (kode " + code + msg + ") — coba ketuk play lagi", "err");
+	if (!streamStarted) setStatus("Gagal memutar (kode " + code + msg + ") — pencet tombol play di player", "err");
+	// Tampilkan kontrol bawaan browser: tombol play-nya = gesture sah, jadi
+	// kalau kebijakan autoplay webview ketat, user tetap bisa mulai manual.
+	try {
+		video.controls = true;
+		video.setAttribute('controls', 'controls');
+	} catch (e) {}
 	if (!directMode || streamStarted) {
 		if (code) setWsState("ERROR " + code);
 		return;
