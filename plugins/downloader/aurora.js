@@ -7,7 +7,7 @@
 
 import sharp from 'sharp';
 import config from '../../config.js';
-import { sendRichJH } from '../../lib/jhrich.js';
+import { sendNativeHtml } from '../../lib/emeraldCard.js';
 import { logger } from '../../core/logger.js';
 import {
   ytSearch as skylineSearch,
@@ -234,29 +234,26 @@ async function sendAuroraAudio(ctx, info, format) {
         preferWs: true,
         sourceNote: 'Menyiapkan audio lewat WebSocket…'
       });
-      await sendRichJH(ctx, html);
+      await sendNativeHtml(ctx.client, ctx.chat, html);
       cardSent = true;
       logger.info(`[Aurora] audio: kartu player terkirim • ${html.length}B • ws=${wsUrl.slice(0, 48)}…`);
     } catch (err) {
       logger.warn(`[Aurora] audio: kartu player gagal — ${err?.message || err}`);
     }
   } else {
-    /* DEFAULT: kartu cover-only. Banyak WebView kartu WA gak bisa mutar media
-     * (cuma image), jadi jangan kasih tombol play yang pasti gagal. */
+    /* DEFAULT: kartu visual (tanpa <audio>) — WebView kartu WA di banyak HP
+     * offline (media nggak bisa diputar), jadi kartu dibuat ringan + cantik,
+     * lagunya tetap diputar dari pesan audio native di bawahnya. */
     try {
-      const link = audioEndpoint(info.url);
-      const { website } = skylineCreds();
-      const wsUrl = `${website.replace(/^http/i, 'ws')}/api/tools/ws-audio?url=${encodeURIComponent(link)}`;
       const html = buildSpotifyHtml({
         title: clean,
         channel: info.artist || 'Unknown Artist',
         duration,
         thumbnailb64: thumbB64,
         accent: accent || '#1DB954',
-        wsUrl,
-        note: 'Ketuk pesan audio di bawah untuk memutar.'
+        note: 'Lagu diputar dari pesan audio di bawah kartu.'
       });
-      await sendRichJH(ctx, html);
+      await sendNativeHtml(ctx.client, ctx.chat, html);
       cardSent = true;
       logger.info(`[Aurora] audio: kartu cover terkirim • ${html.length}B (playerCard=false)`);
     } catch (err) {
@@ -333,175 +330,190 @@ async function accentFromBuffer(buffer) {
   return '#' + out.map((v) => v.toString(16).padStart(2, '0')).join('');
 }
 
-function buildSpotifyHtml({ title, channel, duration, thumbnailb64, accent = '#1DB954', note, wsUrl = '' }) {
-  const hits = (() => {
-    const t = String(duration || '').trim();
-    return /^\d+:\d{2}(:\d{2})?$/.test(t) ? t : '';
-  })();
+/**
+ * Kartu "Now Playing" gaya Spotify (dark, cover besar, kontrol penuh).
+ * WebView kartu WA: cuma image + WebSocket yang jalan — makanya audio diambil
+ * lewat ws-audio, dan lagu tetap dikirim sebagai pesan audio native di bawah.
+ * Warna aksen diambil dari cover biar gradiennya nyatu.
+ */
+function buildSpotifyHtml({ title, channel, duration, thumbnailb64, accent = '#1DB954', note }) {
+  const dur = String(duration || '').trim();
+  const hits = /^\d+:\d{2}(:\d{2})?$/.test(dur) ? dur : '';
+  const safeTitle = escHtml(title || 'Tanpa Judul');
+  const safeChannel = escHtml(channel || 'Unknown Artist');
+  const safeNote = escHtml(note || 'Lagu juga dikirim sebagai pesan audio — putar dari situ kalau tombol play rewel.');
+  const art = thumbnailb64
+    ? `<div class="art-wrap"><img class="art" src="${thumbnailb64}" alt=""></div>`
+    : `<div class="art-wrap"><div class="art-ph"><svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M9 18V5.5l10-2V16"/><circle cx="6.6" cy="18" r="2.6"/><circle cx="16.6" cy="16" r="2.6"/></svg></div></div>`;
   return `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AURORA — ${escapeHtmlJs(title)}</title>
+<title>AURORA — ${safeTitle}</title>
 <style>
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none}
 html,body{margin:0;background:#000}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color:#fff;padding:12px}
-.card{max-width:420px;margin:auto;border-radius:22px;overflow:hidden;position:relative;
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;color:#fff;padding:12px}
+.card{max-width:412px;margin:0 auto;border-radius:26px;overflow:hidden;position:relative;
   background:
-    radial-gradient(120% 60% at 50% 0%, ${accent}55 0%, ${accent}14 38%, transparent 68%),
-    linear-gradient(180deg,#121212 0%,#0b0b0b 55%,#080808 100%);
-  border:1px solid rgba(255,255,255,.07);box-shadow:0 18px 60px rgba(0,0,0,.7)}
-.top{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 6px}
-.tag{font-size:9px;letter-spacing:2.4px;font-weight:800;color:#fff;opacity:.72}
-.dot{width:6px;height:6px;border-radius:50%;background:${accent};box-shadow:0 0 10px ${accent}}
-.body{padding:6px 16px 16px;text-align:center}
-.art{width:100%;aspect-ratio:1/1;object-fit:cover;border-radius:16px;display:block;
-  box-shadow:0 18px 44px rgba(0,0,0,.7), 0 0 0 1px rgba(255,255,255,.06) inset;background:#161616}
-.title{font-size:19px;font-weight:800;line-height:1.28;margin:16px 0 5px;
+    radial-gradient(130% 52% at 50% 0%,${accent}59 0%,${accent}1f 34%,rgba(0,0,0,0) 68%),
+    linear-gradient(180deg,#1b1b1b 0%,#121212 44%,#0a0a0a 100%);
+  border:1px solid rgba(255,255,255,.08);
+  box-shadow:0 24px 70px rgba(0,0,0,.8),0 0 0 1px rgba(255,255,255,.03) inset}
+.top{display:flex;align-items:center;gap:10px;padding:15px 17px 6px}
+.logo{width:23px;height:23px;flex:none;display:block}
+.who{display:flex;flex-direction:column;line-height:1.16;min-width:0}
+.who b{font-size:11.5px;letter-spacing:2.4px;font-weight:800;white-space:nowrap}
+.who span{font-size:8px;letter-spacing:1.9px;color:rgba(255,255,255,.42);font-weight:700;margin-top:2px}
+.more{margin-left:auto;display:flex;align-items:center;color:rgba(255,255,255,.55)}
+.hero{padding:14px 18px 2px;text-align:center;position:relative}
+.hero::before{content:"";position:absolute;left:50%;top:8px;width:290px;height:290px;
+  transform:translateX(-50%);border-radius:50%;pointer-events:none;
+  background:radial-gradient(closest-side,${accent}30 0%,${accent}12 55%,transparent 78%)}
+.art-wrap{position:relative;border-radius:20px;overflow:hidden;background:#181818;
+  max-width:252px;margin:0 auto;
+  box-shadow:0 24px 54px rgba(0,0,0,.78),0 0 0 1px rgba(255,255,255,.09),0 0 34px ${accent}26}
+.art{display:block;width:100%;height:auto}
+.art-wrap::after{content:"";position:absolute;inset:0;border-radius:18px;pointer-events:none;
+  background:linear-gradient(180deg,rgba(255,255,255,.08) 0%,rgba(255,255,255,0) 22%,rgba(0,0,0,.22) 100%)}
+.art-ph{position:relative;padding-top:100%;color:${accent};
+  background:radial-gradient(110% 80% at 50% 20%,${accent}47 0%,rgba(255,255,255,.03) 70%)}
+.art-ph svg{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);opacity:.85}
+.track{display:flex;align-items:flex-start;gap:12px;padding:17px 18px 0}
+.meta{min-width:0;flex:1}
+.title{font-size:20px;font-weight:800;letter-spacing:-.35px;line-height:1.24;
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.artist{font-size:12px;color:#b3b3b3;font-weight:500}
-.bar{position:relative;height:3px;border-radius:3px;background:rgba(255,255,255,.18);margin:16px 2px 6px}
-.bar i{position:absolute;inset:0 auto 0 0;width:0;background:#fff;border-radius:3px}
-.bar b{position:absolute;top:50%;left:0;width:9px;height:9px;border-radius:50%;background:#fff;
-  transform:translate(-50%,-50%);box-shadow:0 0 8px rgba(255,255,255,.5)}
-.times{display:flex;justify-content:space-between;font-size:9px;color:#8f8f8f;font-variant-numeric:tabular-nums}
-.ctrl{display:flex;align-items:center;justify-content:center;gap:22px;margin:14px 0 4px;color:#f2f2f2}
-.ctrl svg{display:block}
-.play{width:52px;height:52px;border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;
-  box-shadow:0 6px 18px rgba(0,0,0,.5)}
-.play svg{fill:#000;stroke:none}
-.lyr{margin-top:16px;border-radius:16px;padding:18px 14px 20px;
+.artist{margin-top:6px;font-size:12.5px;color:#b3b3b3;font-weight:600;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.heart{width:37px;height:37px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;
+  color:#c7c7c7;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08)}
+.prog{padding:19px 18px 0}
+.bar{position:relative;height:4px;border-radius:4px;background:rgba(255,255,255,.17)}
+.bar i{position:absolute;inset:0 auto 0 0;width:0%;border-radius:4px;background:${accent};
+  box-shadow:0 0 14px ${accent}8c}
+.bar b{position:absolute;top:50%;left:0%;width:11px;height:11px;border-radius:50%;background:#fff;
+  transform:translate(-50%,-50%);box-shadow:0 3px 10px rgba(0,0,0,.55)}
+.times{display:flex;justify-content:space-between;margin-top:9px;font-size:10px;color:#8f8f8f;
+  font-weight:600;font-variant-numeric:tabular-nums}
+.ctrl{display:flex;align-items:center;justify-content:space-between;padding:10px 24px 2px}
+.ico{width:34px;height:34px;display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.76)}
+.ico.on{color:${accent}}
+.play{width:62px;height:62px;border-radius:50%;background:#fff;color:#0a0a0a;flex:none;
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 14px 32px rgba(0,0,0,.58),0 0 0 1px rgba(255,255,255,.45) inset;
+  transition:transform .12s ease,box-shadow .2s ease}
+.play:active{transform:scale(.93)}
+.play.ready{box-shadow:0 14px 32px rgba(0,0,0,.58),0 0 0 6px ${accent}22,0 0 26px ${accent}66}
+.src{margin:14px 14px 0;display:flex;align-items:center;gap:11px;padding:12px 14px;border-radius:18px;
   background:
-    radial-gradient(100% 70% at 50% 0%, ${accent}33 0%, transparent 70%),
-    linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.02));
-  border:1px solid ${accent}33;min-height:190px;box-shadow:0 8px 26px rgba(0,0,0,.35) inset;
-  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px}
-.lyr .h{font-size:9px;letter-spacing:2.6px;font-weight:800;color:${accent};opacity:.95}
-.lyr .t{font-size:13px;font-weight:700;color:#eaeaea}
-.lyr .s{font-size:10.5px;color:#9a9a9a;line-height:1.55;max-width:250px}
-.eq{display:flex;align-items:flex-end;gap:3px;height:22px}
-.eq i{width:3px;border-radius:2px;background:${accent};opacity:.85;animation:eq 1s ease-in-out infinite}
-.eq i:nth-child(1){height:8px;animation-delay:0s}.eq i:nth-child(2){height:16px;animation-delay:.15s}
-.eq i:nth-child(3){height:11px;animation-delay:.3s}.eq i:nth-child(4){height:20px;animation-delay:.45s}
-.eq i:nth-child(5){height:9px;animation-delay:.6s}
-@keyframes eq{0%,100%{transform:scaleY(.45)}50%{transform:scaleY(1)}}
-.pstat{font-size:10.5px;color:#9a9a9a;margin-top:10px;min-height:14px;text-align:center}
-.foot{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px 0 14px;font-size:9px;color:#7d7d7d;letter-spacing:1.2px}
+    radial-gradient(120% 130% at 0% 0%,${accent}26 0%,rgba(255,255,255,.02) 62%),
+    linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.018));
+  border:1px solid rgba(255,255,255,.075)}
+.src-ico{width:36px;height:36px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;
+  background:${accent};color:#08130c;box-shadow:0 8px 20px ${accent}47}
+.src-txt{min-width:0;flex:1}
+.src-txt b{display:block;font-size:11.5px;font-weight:800;letter-spacing:.15px}
+.src-txt span{display:block;font-size:10px;color:#9a9a9a;line-height:1.45;margin-top:2px}
+.eq{display:flex;align-items:flex-end;gap:2.5px;height:18px;flex:none;padding-right:2px}
+.eq i{width:2.5px;border-radius:2px;background:${accent};opacity:.85;
+  animation:eq 1.05s ease-in-out infinite}
+.eq i:nth-child(1){height:30%;animation-delay:0s}
+.eq i:nth-child(2){height:62%;animation-delay:.14s}
+.eq i:nth-child(3){height:44%;animation-delay:.28s}
+.eq i:nth-child(4){height:82%;animation-delay:.42s}
+.eq i:nth-child(5){height:38%;animation-delay:.56s}
+@keyframes eq{0%,100%{transform:scaleY(.42)}50%{transform:scaleY(1)}}
+.foot{display:flex;align-items:center;justify-content:center;gap:7px;padding:14px 0 16px;
+  font-size:9px;color:#6f6f6f;letter-spacing:1.5px;font-weight:700}
+.chip{padding:3px 7px;border-radius:6px;background:rgba(255,255,255,.06);
+  border:1px solid rgba(255,255,255,.08);color:#9a9a9a;letter-spacing:.9px}
 </style></head>
 <body>
 <div class="card">
-  <div class="top"><span class="tag">AURORA · NOW PLAYING</span><span class="dot"></span></div>
-  <div class="body">
-    ${thumbnailb64 ? `<img class="art" src="${thumbnailb64}" alt="">` : ''}
-    <div class="title">${escapeHtmlJs(title)}</div>
-    <div class="artist">${escapeHtmlJs(channel || 'Unknown Artist')}</div>
-    <div class="bar"><i id="barFill" style="width:0%"></i><b id="knob" style="left:0%"></b></div>
-    <div class="times"><span id="tCur">0:00</span><span>${escapeHtmlJs(hits || '--:--')}</span></div>
-    <div class="ctrl">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M3 6h13v12H3zM18 6l4 6-4 6z"/></svg>
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M18 6V4H6v16h12v-2l-8-6z"/></svg>
-      <div class="play" id="playBtn" onclick="togglePlay()"><svg id="icoPlay" width="24" height="24" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M6 18V6h12V4l-8 6 8 6v-2z"/></svg>
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M4 4h16v4H4zM4 10h16v4H4zM4 16h16v4H4z"/></svg>
-    </div>
-    <div class="pstat" id="pstat">${wsUrl ? 'Ketuk play buat menyiapkan audio' : escapeHtmlJs(note || '')}</div>
-    <div class="lyr">
-      <div class="h">LIRIK</div>
-      <div class="eq"><i></i><i></i><i></i><i></i><i></i></div>
-      <div class="t">Lirik belum tersedia</div>
-      <div class="s">${escapeHtmlJs(note || 'Putar lagunya dari pesan audio di bawah, lalu nikmatin suaranya.')}</div>
+  <div class="top">
+    <svg class="logo" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="11" fill="${accent}"/>
+      <g fill="none" stroke="#07120a" stroke-width="1.7" stroke-linecap="round">
+        <path d="M6.4 8.9c3.7-1.05 8.4-.6 11.2 1.05"/>
+        <path d="M7.3 12.2c3.1-.85 7-.4 9.4 1"/>
+        <path d="M8.1 15.4c2.5-.6 5.4-.3 7.3.8"/>
+      </g>
+    </svg>
+    <div class="who"><b>AURORA</b><span>NOW PLAYING</span></div>
+    <div class="more">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/>
+      </svg>
     </div>
   </div>
-  <div class="foot"><span>AURORA</span><span>•</span><span>skyline.web.id</span></div>
-</div>
-<audio id="ap" preload="auto"></audio>
-<script>
-var WS_URL = "${escapeHtmlJs(wsUrl)}";
-var TOTAL = ${JSON.stringify(String(duration || ''))};
-var ap = document.getElementById('ap');
-var st = document.getElementById('pstat');
-var fill = document.getElementById('barFill');
-var knob = document.getElementById('knob');
-var tCur = document.getElementById('tCur');
-var btn = document.getElementById('playBtn');
-var ico = document.getElementById('icoPlay');
-var ws = null, chunks = [], bytes = 0, blobUrl = '', expect = 0;
 
-function say(t, err) {
-  st.textContent = t;
-  st.style.color = err ? '#ff8a8a' : (t.indexOf('Memutar') === 0 ? '#3ddc84' : '#9a9a9a');
+  <div class="hero">${art}</div>
+
+  <div class="track">
+    <div class="meta">
+      <div class="title">${safeTitle}</div>
+      <div class="artist">${safeChannel}</div>
+    </div>
+    <div class="heart">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 1 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8z"/>
+      </svg>
+    </div>
+  </div>
+
+  <div class="prog">
+    <div class="bar"><i id="barFill"></i><b id="knob"></b></div>
+    <div class="times"><span id="tCur">0:00</span><span id="tDur">${escHtml(hits || '--:--')}</span></div>
+  </div>
+
+  <div class="ctrl">
+    <div class="ico on">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M16 3h5v5"/><path d="M4 20 21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/>
+      </svg>
+    </div>
+    <div class="ico">
+      <svg width="21" height="21" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <path d="M6 5h2v14H6zM19 5v14l-9.5-7z"/>
+      </svg>
+    </div>
+    <div class="play" id="playBtn" onclick="hint()">
+      <svg id="icoPlay" width="25" height="25" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <path d="M8 5v14l11-7z"/>
+      </svg>
+    </div>
+    <div class="ico">
+      <svg width="21" height="21" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <path d="M16 5h2v14h-2zM5 5v14l9.5-7z"/>
+      </svg>
+    </div>
+    <div class="ico">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>
+      </svg>
+    </div>
+  </div>
+
+  <div class="src">
+    <div class="src-ico">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <path d="M9 18V5.4l10-2V16"/><circle cx="6.6" cy="18" r="2.7"/><circle cx="16.6" cy="16" r="2.7"/>
+      </svg>
+    </div>
+    <div class="src-txt"><b>Audio siap diputar</b><span id="srcNote">${safeNote}</span></div>
+    <div class="eq"><i></i><i></i><i></i><i></i><i></i></div>
+  </div>
+
+  <div class="foot"><span>AURORA</span><span>•</span><span>skyline.web.id</span><span class="chip">HQ</span></div>
+</div>
+
+<script>
+/* WebView kartu WA offline (media nggak jalan di banyak device), jadi tombol
+ * play cuma ngasih tau: lagunya diputar dari pesan audio di bawah kartu. */
+function hint() {
+  var t = document.getElementById('srcNote');
+  if (t) { t.textContent = 'Putar lagu dari pesan audio di bawah \u2193'; t.style.color = '#1ed760'; }
+  var b = document.getElementById('playBtn');
+  if (b) b.className = 'play ready';
 }
-function fmt(s) {
-  if (!isFinite(s)) return '0:00';
-  var m = Math.floor(s / 60), x = Math.floor(s % 60);
-  return m + ':' + (x < 10 ? '0' + x : x);
-}
-function setIcon(playing) {
-  ico.innerHTML = playing
-    ? '<path d="M6 4h4v16H6zM14 4h4v16h-4z"/>'
-    : '<path d="M8 5v14l11-7z"/>';
-}
-function loadWs() {
-  if (!WS_URL) { say('URL WebSocket kosong', true); return; }
-  if (ws || blobUrl) return;
-  say('Menyiapkan audio lewat WebSocket…');
-  try { ws = new WebSocket(WS_URL); } catch (e) { say('WebSocket diblok: ' + (e && e.name), true); return; }
-  ws.binaryType = 'arraybuffer';
-  ws.onopen = function () { say('Tersambung — mengunduh…'); };
-  ws.onmessage = function (ev) {
-    if (typeof ev.data === 'string') {
-      try {
-        var m = JSON.parse(ev.data);
-        if (m.type === 'start') { expect = m.length || 0; say('Mengunduh… 0%'); }
-        if (m.type === 'end') finish();
-        if (m.type === 'error') say('Server: ' + (m.message || '?'), true);
-      } catch (e) {}
-      return;
-    }
-    chunks.push(ev.data);
-    bytes += ev.data.byteLength || 0;
-    if (expect) say('Mengunduh… ' + Math.min(99, Math.round((bytes / expect) * 100)) + '%');
-    else say('Mengunduh… ' + Math.round(bytes / 1024) + ' KB');
-  };
-  ws.onerror = function () { say('WebSocket gagal (diblok)', true); };
-  ws.onclose = function (e) { if (!blobUrl && bytes) finish(); };
-}
-function finish() {
-  if (blobUrl) return;
-  if (!bytes) { say('Tidak ada data', true); return; }
-  var blob = new Blob(chunks, { type: 'audio/mpeg' });
-  chunks = [];
-  blobUrl = URL.createObjectURL(blob);
-  ap.src = blobUrl;
-  ap.load();
-  say('Siap — ketuk play');
-}
-function togglePlay() {
-  if (!blobUrl) { loadWs(); return; }
-  if (ap.paused) {
-    var p = ap.play();
-    if (p && p.then) {
-      p.then(function () { say('Memutar'); setIcon(true); })
-       .catch(function (e) { say('Ditolak webview: ' + ((e && e.name) || '?'), true); });
-    }
-  } else {
-    ap.pause();
-    setIcon(false);
-    say('Dijeda');
-  }
-}
-ap.addEventListener('timeupdate', function () {
-  var d = ap.duration || 0;
-  if (d) {
-    var pct = Math.min(100, (ap.currentTime / d) * 100);
-    fill.style.width = pct + '%';
-    knob.style.left = pct + '%';
-    tCur.textContent = fmt(ap.currentTime);
-  }
-});
-ap.addEventListener('error', function () {
-  say('Media error ' + (ap.error ? ap.error.code : '?'), true);
-});
-ap.addEventListener('ended', function () { setIcon(false); say('Selesai'); fill.style.width = '0%'; knob.style.left = '0%'; });
 </script>
 </body></html>`;
 }
@@ -552,25 +564,36 @@ body{margin:0;padding:14px;background:#04090b;font-family:Arial,Helvetica,sans-s
 </body></html>`;
 }
 
-async function thumbDataUri(url) {
+async function thumbDataUri(url, { maxB64 = 9 * 1024 } = {}) {
   if (!url) return '';
   try {
     const r = await fetch(url, { signal: AbortSignal.timeout(10000) });
     if (!r.ok) return '';
     const raw = Buffer.from(await r.arrayBuffer());
     if (!raw.length) return '';
-    // Kecilin dulu: thumbnail asli ~30-50 KB bikin payload HTML membengkak
-    // (base64 naik 4/3) dan kartu berat dirender webview.
-    let b = raw;
-    try {
-      b = await sharp(raw)
-        .resize({ width: 400, withoutEnlargement: true })
-        .jpeg({ quality: 62 })
-        .toBuffer();
-    } catch {}
-    return 'data:image/jpeg;base64,' + b.toString('base64');
+    /* Cover di-embed sebagai data URI, jadi tiap KB di sini ikut membengkak
+     * 4/3 di payload base64 — dan kartu rich yang kegedean bikin WA nampilin
+     * "pesan tidak didukung". Turunin resolusi bertahap sampai masuk budget. */
+    const plan = [[400, 62], [340, 58], [300, 54], [260, 50], [220, 46], [200, 44], [180, 44], [160, 42]];
+    let last = raw;
+    for (const [width, quality] of plan) {
+      try {
+        last = await sharp(raw).resize({ width, withoutEnlargement: true }).jpeg({ quality }).toBuffer();
+      } catch { return 'data:image/jpeg;base64,' + last.toString('base64'); }
+      const b64 = last.toString('base64');
+      if (b64.length <= maxB64) return 'data:image/jpeg;base64,' + b64;
+    }
+    return 'data:image/jpeg;base64,' + last.toString('base64');
   } catch { return ''; }
 }
+
+/** Escape buat teks/atribut HTML (judul bisa ada `&`, `<`, kutip). */
+const escHtml = (value) =>
+  String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 
 const escapeHtmlJs = (value) =>
   String(value ?? '')
@@ -1844,7 +1867,7 @@ async function handler(ctx) {
         sourceNote
       });
 
-      const sent = await sendRichJH(ctx, htmlPayload);
+      const sent = await sendNativeHtml(ctx.client, ctx.chat, htmlPayload);
 
       logger.info('[Aurora] kartu terkirim | id=' + (sent?.id || '?') + ' | sumber=' + media.via + (media.probe?.locked ? ' (locked → WS)' : ''));
       await ctx.react('🎛️');
@@ -1859,4 +1882,4 @@ async function handler(ctx) {
   }
 
 export { pluginConfig as config, handler };
-export const _internals = { resolveSource, probeMedia, isIpLocked, hostOf, buildHtml, buildCoverHtml, buildSpotifyHtml };
+export const _internals = { resolveSource, probeMedia, isIpLocked, hostOf, buildHtml, buildCoverHtml, buildSpotifyHtml, thumbDataUri };
