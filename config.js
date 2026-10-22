@@ -204,12 +204,13 @@ export default {
     // Dikutip sebagai string ('...') biar nilai user kebackup pas .updatesc
     // (KEEP_FIELDS cuma membaca nilai string).
     maxEmbedKb: '',
-    // true = audio di-embed TANPA kompres (mp3/m4a asli dari skyline) —
-    // TIDAK PERNAH dikompres, semua lagu masuk apa adanya (hard-cap 25MB
-    // base64 biar payload nggak meledak). false = kompres opus seperti biasa.
+    // true = audio di-embed TANPA kompres (mp3/m4a asli dari skyline) selama
+    // muat di hard-cap frame WhatsApp (base64 audio ≤ 4MB ≈ file 3MB, karena
+    // payload kartu melebar ±4× di pipeline). Kegedean → otomatis kompres opus.
+    // false = kompres opus seperti biasa.
     embedOriginal: true,
-    // Opsional: batas base64 audio asli (KB). Kosong = TANPA BATAS (semua
-    // lagu asli). Diisi angka (mis. '3000') = kalau lewat, baru fallback
+    // Opsional: batas base64 audio asli (KB). Kosong = pakai hard-cap frame
+    // (±4000KB). Diisi angka (mis. '3000') = kalau lewat, lebih awal fallback
     // kompres opus.
     originalMaxKb: '',
   },

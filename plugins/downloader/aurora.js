@@ -43,10 +43,14 @@ const AUDIO_FORMAT = /^(mp3|m4a|aac|ogg|wav|flac)$/i;
  * (tanpa audio) — pesan audio native sudah tidak dikirim lagi. */
 const OPUS_CHAIN = ['24k', '16k', '12k'];
 const MAX_EMBED_B64 = 800_000;
-/* Hard-cap base64 embed asli (anti payload kartu meledak). Di atas ini baru
- * jatuh ke kompres opus. 25MB base64 ≈ file 18,7MB — lagu 10-menit @320kbps
- * masih muat. */
-const HARD_EMBED_B64 = 25_000_000;
+/* Batas keras frame WhatsApp (Noise) — dari error asli:
+ * "frame is too large: 24148412 bytes (max allowed: 16777215)". */
+const WA_FRAME_MAX = 16_777_215;
+/* Hard-cap base64 audio asli. Pipeline kartu memperbesar ±4×
+ * (html → JSON → base64 → proto/binary node), jadi batas aman
+ * audio base64 = 16.777.215 / 4 ≈ 4,19MB. Di atas ini langsung kompres
+ * opus — kartu audio 3,5MB (≈2,6MB file) masih jauh di bawah limit. */
+const HARD_EMBED_B64 = 4_000_000;
 
 /** Jalankan ffmpeg sekali → { code, stderr } (gak nge-throw biar gampang dirantai). */
 function runFfmpeg(args) {
@@ -318,6 +322,86 @@ function durToSeconds(dur) {
   return parts.reduce((acc, n) => acc * 60 + n, 0) || null;
 }
 
+/* ══════ Tombol PLAYER di in-app browser WhatsApp (opsi ke-2) ══════
+ * Dua pilihan buat dengar: (1) play langsung di kartu (WebAudio), (2) tombol
+ * ini buka web player di in-app browser WhatsApp ASLI (browser penuh —
+ * audio/seek/lirik sinkron jalan normal). API key tidak pernah masuk link
+ * chat: bot menukar URL audio (berapikey) ke token singkat dulu via
+ * /api/tools/aurora-token (D1). */
+
+/** Tukar URL audio ke token player. Null kalau gagal (tombol dilewati). */
+async function mintPlayerToken(audioUrl) {
+  const { website } = skylineCreds();
+  try {
+    const res = await fetch(`${website}/api/tools/aurora-token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'User-Agent': UA },
+      body: JSON.stringify({ url: audioUrl }),
+      signal: AbortSignal.timeout(15000)
+    });
+    if (!res.ok) {
+      logger.warn(`[Aurora] player: mint token HTTP ${res.status} — tombol dilewati`);
+      return null;
+    }
+    const j = await res.json();
+    if (!j?.token) {
+      logger.warn('[Aurora] player: mint token balasan kosong — tombol dilewati');
+      return null;
+    }
+    return String(j.token);
+  } catch (err) {
+    logger.warn(`[Aurora] player: mint token gagal — ${err?.message || err}`);
+    return null;
+  }
+}
+
+/**
+ * Kirim tombol "▶ Buka Player" (cta_url + webview_interaction) — pilihan
+ * kedua selain play di dalam kartu. Null-safe: gagal = dilewati, kartu
+ * tetap utuh.
+ */
+async function sendPlayerButton(ctx, info, clean, duration) {
+  const { website } = skylineCreds();
+  const token = await mintPlayerToken(audioEndpoint(info.url));
+  if (!token) return false;
+
+  const params = new URLSearchParams({
+    t: token,
+    title: String(info.title || clean || '').slice(0, 120),
+    cover: String(info.thumbnail || '').slice(0, 300)
+  });
+  const artist = /skyline-JXRA Stream/.test(String(info.artist || '')) ? '' : String(info.artist || '').slice(0, 80);
+  if (artist) params.set('artist', artist);
+  const durSec = durToSeconds(duration || info.duration);
+  if (durSec) params.set('dur', String(durSec));
+  const playerUrl = `${website}/aurora-player?${params.toString()}`;
+
+  await ctx.client.message.send(ctx.chat, {
+    interactiveMessage: {
+      body: {
+        text: `🎧 *${clean}*\nPilihan kedua: buka player di browser WhatsApp — cover, seek, dan lirik sinkron.`
+      },
+      footer: { text: 'AURORA • skyline.web.id' },
+      nativeFlowMessage: {
+        messageVersion: 1,
+        buttons: [
+          {
+            name: 'cta_url',
+            buttonParamsJson: JSON.stringify({
+              display_text: '🌐 Buka Player Web',
+              url: playerUrl,
+              merchant_url: playerUrl,
+              webview_presentation: 'full',
+              webview_interaction: true
+            })
+          }
+        ]
+      }
+    }
+  });
+  return true;
+}
+
 async function sendAuroraAudio(ctx, info, format) {
   const t0 = Date.now();
   let audio = null;
@@ -450,59 +534,83 @@ async function sendAuroraAudio(ctx, info, format) {
      * tapi AudioContext + data URI hidup). Kalau embed null → kartu visual
      * biasa tanpa audio (pesan audio native sudah tidak dikirim). */
     try {
-      const audioMime = embed ? (embed.mimetype || 'audio/webm;codecs=opus') : '';
-      const audioDataUri = embed ? `data:${audioMime};base64,${embed.buf.toString('base64')}` : '';
-      const base = {
-        title: clean,
-        channel: info.artist || 'Unknown Artist',
-        duration,
-        thumbnailb64: thumbB64,
-        accent: accent || '#1DB954',
-        audioDataUri,
-        audioMeta: embed,
-        note: audioDataUri
-          ? (embed.trimSec
-              ? `Audio kartu dipotong ±${embed.trimSec}s biar muat di kartu.`
-              : embed.original
-                ? 'Tekan ▶ buat putar — audio kualitas asli di dalam kartu.'
-                : 'Tekan ▶ buat putar langsung di dalam kartu.')
-          : 'Gagal menyiapkan audio di kartu — coba lagi ya.'
-      };
-      /* Budget payload:
-       * • TANPA audio → aturan lama ±25,6KB (regime kartu kecil, terbukti
-       *   render di HP).
-       * • DENGAN embed → regime play2: total ~1MB terbukti ke-render & bunyi
-       *   di HP yang sama, jadi markup dikasih 60KB (cover 9KB + lirik 40
-       *   baris + script player muat) di luar porsi audio. Angka 26KB lama
-       *   cuma 2 data point sempit (avatar 31KB "gagal") — play2 membuktikan
-       *   batas aslinya jauh di atas itu. */
-      const audioPart = audioDataUri ? Math.ceil(audioDataUri.length * 4 / 3) : 0;
-      const payBudget = audioDataUri ? 60000 + audioPart : 25600;
-      let html = buildSpotifyHtml({ ...base, lyrics: lyricCard });
-      let shrink = '';
-      /* Jaga-jaga: kalau kartu + lirik kegedean, pangkas bertahap: timestamp
-       * dibuang (panel jadi biasa) → potong baris → buang lirik (cover tetap). */
-      if (lyricCard && payloadB64Len(html) > payBudget) {
-        let ly = { s: false, l: [], p: lyricCard.l.map((x) => x[1]).join('\n') || lyricCard.p };
-        html = buildSpotifyHtml({ ...base, lyrics: ly });
-        shrink = ' • lirik polos';
-        if (payloadB64Len(html) > payBudget) {
-          ly = { s: false, l: [], p: String(ly.p).split('\n').slice(0, 18).join('\n') };
-          html = buildSpotifyHtml({ ...base, lyrics: ly });
-          shrink = ' • lirik dipangkas';
-          if (payloadB64Len(html) > payBudget) {
-            // Step terakhir: buang LIRIK aja — cover jangan, biar kartu tetap
-            // komplit. (Dulu keduanya dibuang barengan → kartu telanjang.)
-            html = buildSpotifyHtml({ ...base, lyrics: null });
-            shrink = ' • lirik dibuang (cover tetap)';
+      /* Batu ukur dari KASUS ASLI (error "frame is too large: 24148412"):
+       * html 6,05MB → unifiedResponse.data 8,07MB → frame 24,1MB, jadi
+       * frame ≈ 3× payloadB64 ≈ 4× html. Limit keras WhatsApp = 16.777.215
+       * byte per frame — audio asli yang estimasinya meledak langsung
+       * dikompres, jadi nggak buang percobaan kirim. */
+      const mkCard = (emb) => {
+        const audioMime = emb ? (emb.mimetype || 'audio/webm;codecs=opus') : '';
+        const audioDataUri = emb ? `data:${audioMime};base64,${emb.buf.toString('base64')}` : '';
+        const b = {
+          title: clean,
+          channel: info.artist || 'Unknown Artist',
+          duration,
+          thumbnailb64: thumbB64,
+          accent: accent || '#1DB954',
+          audioDataUri,
+          audioMeta: emb,
+          note: audioDataUri
+            ? (emb.trimSec
+                ? `Audio kartu dipotong ±${emb.trimSec}s biar muat di kartu.`
+                : emb.original
+                  ? 'Tekan ▶ buat putar — audio kualitas asli di dalam kartu.'
+                  : 'Tekan ▶ buat putar langsung di dalam kartu.')
+            : 'Gagal menyiapkan audio di kartu — coba lagi ya.'
+        };
+        const audioPart = audioDataUri ? Math.ceil(audioDataUri.length * 4 / 3) : 0;
+        const payBudget = audioDataUri ? 60000 + audioPart : 25600;
+        let h = buildSpotifyHtml({ ...b, lyrics: lyricCard });
+        let sh = '';
+        /* Jaga-jaga: kalau kartu + lirik kegedean, pangkas bertahap: timestamp
+         * dibuang (panel jadi biasa) → potong baris → buang lirik (cover tetap). */
+        if (lyricCard && payloadB64Len(h) > payBudget) {
+          let ly = { s: false, l: [], p: lyricCard.l.map((x) => x[1]).join('\n') || lyricCard.p };
+          h = buildSpotifyHtml({ ...b, lyrics: ly });
+          sh = ' • lirik polos';
+          if (payloadB64Len(h) > payBudget) {
+            ly = { s: false, l: [], p: String(ly.p).split('\n').slice(0, 18).join('\n') };
+            h = buildSpotifyHtml({ ...b, lyrics: ly });
+            sh = ' • lirik dipangkas';
+            if (payloadB64Len(h) > payBudget) {
+              // Step terakhir: buang LIRIK aja — cover jangan, biar kartu tetap
+              // komplit. (Dulu keduanya dibuang barengan → kartu telanjang.)
+              h = buildSpotifyHtml({ ...b, lyrics: null });
+              sh = ' • lirik dibuang (cover tetap)';
+            }
           }
         }
+        return { html: h, shrink: sh, audioDataUri };
+      };
+      const recompress = async (why) => {
+        logger.warn(`[Aurora] audio: ${why} — kompres otomatis`);
+        return prepareEmbeddedAudio(audio.buffer, durToSeconds(duration) || 0, {
+          maxB64: embedBudgetBytes(),
+          preferOriginal: false,
+          mimetype: audio.mimetype
+        });
+      };
+      let used = embed;
+      let card = mkCard(used);
+      if (used?.original && payloadB64Len(card.html) * 3 > WA_FRAME_MAX) {
+        used = await recompress(`audio asli estimasi frame ${Math.round(payloadB64Len(card.html) * 3 / 1048576)}MB > 16MB`);
+        card = mkCard(used);
+        card.shrink += ' • asli→kompres (batas frame WA)';
       }
-      await sendNativeHtml(ctx.client, ctx.chat, html);
+      try {
+        await sendNativeHtml(ctx.client, ctx.chat, card.html);
+      } catch (err) {
+        if (!/frame is too large/i.test(String(err?.message || err)) || !used?.original) throw err;
+        // Frame nolak padahal estimasi muat → kalibrasi meleset; kompres & ulang.
+        used = await recompress('frame WA nolak audio asli');
+        card = mkCard(used);
+        card.shrink += ' • asli→kompres (frame nolak)';
+        await sendNativeHtml(ctx.client, ctx.chat, card.html);
+      }
       cardSent = true;
       logger.info(
-        `[Aurora] audio: kartu cover terkirim • ${html.length}B • payload±${payloadB64Len(html)}B ` +
-        `(playerCard=false${lyricCard ? ' +lirik' : ''}${audioDataUri ? ' +audio-embed' : ''})${shrink}`
+        `[Aurora] audio: kartu cover terkirim • ${card.html.length}B • payload±${payloadB64Len(card.html)}B ` +
+        `(playerCard=false${lyricCard ? ' +lirik' : ''}${card.audioDataUri ? ' +audio-embed' : ''})${card.shrink}`
       );
     } catch (err) {
       logger.warn(`[Aurora] audio: kartu cover gagal — ${err?.message || err}`);
@@ -524,6 +632,15 @@ async function sendAuroraAudio(ctx, info, format) {
   }
 
   logger.info(`[Aurora] audio: selesai — kartu player ${cardSent ? 'terkirim' : 'GAGAL'} • total ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+
+  /* Opsi ke-2: tombol web player (in-app browser WhatsApp). Pelengkap —
+   * gagal = dilewati, kartu sudah terkirim di atas tetap utuh. */
+  try {
+    const ok = await sendPlayerButton(ctx, info, clean, duration);
+    if (ok) logger.info('[Aurora] audio: tombol player web terkirim');
+  } catch (err) {
+    logger.warn(`[Aurora] player: tombol gagal — ${err?.message || err}`);
+  }
 }
 
 /**
