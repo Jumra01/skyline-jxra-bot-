@@ -44,7 +44,7 @@ import fs from 'node:fs'
 import config from '../../config.js'
 import { logger } from '../../core/logger.js'
 import { checkCooldown, checkFlood } from '../../core/cooldown.js'
-import { getUser } from '../../core/database.js'
+import { getUser, isPremiumActive } from '../../core/database.js'
 import { addMentionHandler } from '../../core/mentionTrigger.js'
 import { sendTyping } from '../../core/presence.js'
 import { isGroupAdmin } from '../../core/permission.js'
@@ -207,13 +207,78 @@ function cfg() {
   }
 }
 
-/** Katalog ringkas buat prompt: `pinterest <kata kunci>`. */
+/** Satu baris katalog buat prompt: `pinterest — cari gambar`. */
+function promptHint(n) {
+  const hint = USER_HINTS[n]
+  if (hint) {
+    const desc = hint.split(' — ')[1]
+    return desc ? `${n} — ${desc}` : hint
+  }
+  const f = getFeature(n)
+  const desc = String(f?.description || '').replace(/\s+/g, ' ').replace(/[.\s]+$/, '').slice(0, 30)
+  return desc ? `${n} — ${desc}` : n
+}
+
+/** Katalog nama polos buat prompt (hemat char; artinya masuk lewat focusList). */
 function userCatalog(names = cfg().execUser) {
-  return names.map((n) => {
-    const hint = USER_HINTS[n]
-    if (hint) return hint.split(' — ')[0]
-    return n
-  })
+  return names.map((n) => String(n).trim()).filter(Boolean)
+}
+
+/** Katalog berisi arti fitur — cuma buat 3-5 fitur yang paling relevan. */
+function focusCatalog(names = []) {
+  return names.map(promptHint)
+}
+
+/* ══════════════════ siapa yang ngomong ══════════════════ */
+const TIER_LABEL = {
+  owner: 'Owner bot',
+  admin: 'Admin bot',
+  'group-admin': 'Admin grup',
+  premium: 'User premium',
+  member: 'Member biasa',
+}
+
+/** Tingkat pengguna: owner > admin bot > admin grup > premium > member. */
+function principalTier(ctx, { isGroupAdmin = false } = {}) {
+  if (ctx?.isOwner) return 'owner'
+  if (ctx?.isStaff || ctx?.isAdmin) return 'admin'
+  if (isGroupAdmin) return 'group-admin'
+  const premium = isPremiumActive(ctx?.sender) || (ctx?.senderLid ? isPremiumActive(ctx.senderLid) : false)
+  if (premium) return 'premium'
+  return 'member'
+}
+
+function principalLabel(ctx, isGroupAdmin = false) {
+  return TIER_LABEL[principalTier(ctx, { isGroupAdmin })]
+}
+
+/** Member ga boleh lihat fitur premium di prompt (biar ga nawarin yang ga boleh). */
+function catalogNamesFor(tier, names = cfg().execUser) {
+  if (tier !== 'member') return names
+  return names.filter((n) => !getFeature(n)?.premium)
+}
+
+/* Kata kunci di pesan user → fitur yang paling mungkin dia maksud.
+ * Ditaruh terpisah di prompt biar Ella langsung nembak yang tepat. */
+const INTENT_MAP = [
+  { re: /(foto|gambar|image|wallpaper|pp\b|profil)/i, cmds: ['pinterest', 'hd', 'unblur', 'removebg'] },
+  { re: /(lagu|musik|music|audio|mp3|spotify)/i, cmds: ['play', 'yta', 'spotify', 'tomp3'] },
+  { re: /(video|youtube|yt\b|film)/i, cmds: ['ytv', 'ytsearch'] },
+  { re: /(tiktok|instagram|\big\b|facebook|\bfb\b|twitter|\bx\b)/i, cmds: ['tiktok', 'ig', 'fb', 'twitter'] },
+  { re: /(stiker|sticker|meme)/i, cmds: ['sticker', 'brat', 'smeme', 'toimg'] },
+  { re: /(edit|jernihin|tajemin|blur|background)/i, cmds: ['omniedit', 'hd', 'unblur', 'removebg'] },
+  { re: /(link|upload)/i, cmds: ['tourl'] },
+  { re: /(saldo|emerald|koin|daily|harian)/i, cmds: ['balance', 'daily'] },
+]
+
+function pickFocus(text, names) {
+  const allowed = new Set(names)
+  const picked = []
+  for (const { re, cmds } of INTENT_MAP) {
+    if (!re.test(String(text || ''))) continue
+    for (const c of cmds) if (allowed.has(c) && !picked.includes(c)) picked.push(c)
+  }
+  return picked.slice(0, 5)
 }
 
 /** Katalog versi enak dibaca (buat `.ella2 aksi`). */
@@ -327,7 +392,8 @@ async function contextFor(ctx) {
   return {
     name,
     number: ctx.senderNumber ? `+${ctx.senderNumber}` : '-',
-    role: roleLabel(ctx),
+    role: principalLabel(ctx, Boolean(group?.isGroupAdmin)),
+    tier: principalTier(ctx, { isGroupAdmin: Boolean(group?.isGroupAdmin) }),
     group,
   }
 }
@@ -567,6 +633,9 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false } = {}) 
   }
 
   const info = await contextFor(ctx)
+  // Siapa yang ngomong: owner / admin bot / admin grup / premium / member.
+  // Pakai hasil dari contextFor (sekali query premium per pesan, bukan dua).
+  const tier = info.tier || principalTier(ctx, { isGroupAdmin: info.group?.isGroupAdmin })
   // Boleh nyuruh Ella ngejalanin command? (owner/staff/admin grup, sesuai config)
   const execOn = mayExec(ctx, { mode: conf.exec, isGroupAdmin: info.group?.isGroupAdmin })
   // Owner/staff bot = bebas minta command apa pun; admin grup terikat daftar.
@@ -591,11 +660,19 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false } = {}) 
     openExec,
     execBlocked: !execOn && conf.exec !== 'off',
     actionList: conf.execAllow,
-    featureList: conf.execUser.length ? userCatalog(conf.execUser) : [],
-    // Prompt dipangkas (1800 char) — makin kecil makin cepat sampai ke model,
-    // jadi jauh lebih jarang nyentuh timeout upstream (yang balik jadi 503).
-    maxChars: hasImage ? 1600 : 1800,
+    featureList: conf.execUser.length ? userCatalog(catalogNamesFor(tier, conf.execUser)) : [],
+    // 3-5 fitur yang paling mungkin dimaksud pesan ini (biar Ella tepat sasaran).
+    // Fitur umum boleh diminta siapa pun (member sekalipun) — jadi shortlist
+    // & jaring pengaman tetap aktif walau dia bukan owner/admin.
+    focusList: focusCatalog(pickFocus(text, catalogNamesFor(tier, conf.execUser))),
+    roleTier: tier,
+    // 2.000 char: daftar fitur dijamin utuh (blok alat dipotong paling akhir),
+    // tetap lebih ringan dari 3.000 + riwayat 8 pesan jaman dulu.
+    maxChars: hasImage ? 1800 : 2000,
   }) + imageNote
+
+  // Nama fitur yang boleh dia pakai (buat jaring pengaman di bawah).
+  const allowedNames = catalogNamesFor(tier, conf.execUser)
 
   const history = h.msgs
     .slice(-Math.min(HISTORY_MAX, conf.maxHistory))
@@ -655,6 +732,17 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false } = {}) 
     reply = SAFE_LINE
   }
 
+  /* Jaring pengaman: user jelas minta fitur tapi model lupa nulis [[RUN]].
+   * Cuma jalan kalau meleset (1 request ekstra, dan cuma kalau antrean lowong),
+   * jadi obrolan biasa tetap 1 request. */
+  if (allowedNames.length && !/\[\[\s*RUN\s*:/i.test(reply) && pickFocus(text, allowedNames).length && gemmaLoad().queued === 0) {
+    const picked = await forceRunPick(text, allowedNames.concat(conf.execAllow))
+    if (picked) {
+      logger.info(`[Ella2] model lupa [[RUN]] — dipaksa lewat router: ${picked}`)
+      reply = `[[RUN: ${picked}]]\n${reply}`
+    }
+  }
+
   // Aksi bot: model bisa nitip baris `[[RUN: ...]]` → divalidasi & dijalanin.
   // Penanda selalu dibuang dari teks, termasuk kalau pengirim gak berhak.
   const applied = await applyRunMarkers(ctx, reply, { execOn, open: openExec, conf })
@@ -665,6 +753,28 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false } = {}) 
   pushTurn(h, 'assistant', reply)
   logger.debug({ ms: tookMs, chars: reply.length }, '[Ella2] balas')
   return { ok: true, reply: `${reply}${execNote}`, tookMs }
+}
+
+/* ══════════════════════ router cadangan ══════════════════════ */
+/**
+ * Dipakai kalau model lupa nulis `[[RUN: ...]]` padahal user jelas minta fitur.
+ * Prompt-nya sempit (cuma daftar perintah) → cepat & jarang salah.
+ */
+async function forceRunPick(text, names) {
+  const list = [...new Set(names.map((n) => String(n).trim()).filter(Boolean))]
+  if (!list.length) return ''
+  const sys =
+    `Kamu router command bot. Pilih SATU perintah paling cocok buat pesan user.\n` +
+    `Daftar: ${list.join(' | ')}\n` +
+    `Jawab HANYA satu baris: [[RUN: <perintah>]] — tanpa penjelasan, tanpa tanda kutip.`
+  try {
+    const r = await gemmaChat({ message: text, system: sys, timeoutMs: 30000, retries: 0 })
+    const m = String(r.reply || '').match(/\[\[\s*RUN\s*:\s*(.+?)\s*\]\]/i)
+    return m ? m[1].replace(/[`*]/g, '').trim() : ''
+  } catch (err) {
+    logger.debug({ err: String(err?.message || err).slice(0, 100) }, '[Ella2] router cadangan gagal')
+    return ''
+  }
 }
 
 /* ══════════════════════ auto (tag / bales / DM) ══════════════════════ */
@@ -1048,5 +1158,6 @@ export const _internals = {
   cfg, runChat, humanError, onMention, handler, hereOn, sourceOf, statusText, admission,
   contextFor, nowWIB, store, STORE_FILE, loadStore, execRoleLabel, applyRunMarkers,
   mayExec, parseRunMarkers, runBotCommand, DEFAULT_EXEC_ALLOW,
-  DEFAULT_EXEC_USER, USER_HINTS, userCatalog, userCatalogDetailed,
+  DEFAULT_EXEC_USER, USER_HINTS, userCatalog, userCatalogDetailed, focusCatalog,
+  principalTier, principalLabel, catalogNamesFor, pickFocus, forceRunPick,
 }
