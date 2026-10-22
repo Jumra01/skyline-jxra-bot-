@@ -129,12 +129,16 @@ async function resolveSource(info, format) {
  * Tanpa `ytInfo()` — server yang resolve audio pas endpoint itu dipanggil,
  * jadi lebih cepat & satu langkah lebih sedikit yang bisa gagal.
  */
-async function downloadAudioViaSearch(videoUrl, { timeoutMs = 180000, maxBytes = 60 * 1024 * 1024 } = {}) {
+/** URL endpoint audio skyline buat video tertentu (dipakai kartu & unduhan). */
+function audioEndpoint(videoUrl) {
   const { website, apikey } = skylineCreds();
   if (!apikey) throw new Error('API key skyline.web.id belum diisi');
-  const link =
-    `${website}/api/tools/ytdl/audio?url=${encodeURIComponent(videoUrl)}` +
+  return `${website}/api/tools/ytdl/audio?url=${encodeURIComponent(videoUrl)}` +
     `&apikey=${encodeURIComponent(apikey)}&mode=stream`;
+}
+
+async function downloadAudioViaSearch(videoUrl, { timeoutMs = 180000, maxBytes = 60 * 1024 * 1024 } = {}) {
+  const link = audioEndpoint(videoUrl);
   const host = hostOf(link);
   const t0 = Date.now();
   let res;
@@ -190,6 +194,31 @@ async function sendAuroraAudio(ctx, info, format) {
   const clean = String(info.title || 'Audio').replace(/[\\/:*?"<>|]/g, '').slice(0, 90);
   const duration = String(info.duration || '');
 
+  /* Kartu rich HTML tetap dikirim (tampilan AURORA deck), tapi audionya
+   * lewat pesan audio native — jadi kalau player di webview rewel, lagu
+   * tetap bisa diputar dari pesan audio di bawahnya. */
+  let cardSent = false;
+  try {
+    const link = audioEndpoint(info.url);
+    const probe = await probeMedia(link, 'skyline-audio', { timeoutMs: 20000 });
+    const thumbB64 = await thumbDataUri(info.thumbnail);
+    const html = buildHtml({
+      finalTitle: clean,
+      finalChannel: 'AURORA',
+      finalDuration: duration,
+      videoUrl: link,
+      thumbnailb64: thumbB64,
+      wsUrl: '',
+      isAudio: true,
+      sourceNote: 'Audio juga dikirim di pesan bawah — tekan play'
+    });
+    await sendRichJH(ctx, html);
+    cardSent = true;
+    logger.info(`[Aurora] audio: kartu rich HTML terkirim • player=${probe.ok ? 'siap' : 'probe gagal (HTTP ' + (probe.status || 0) + ')'}`);
+  } catch (err) {
+    logger.warn(`[Aurora] audio: kartu rich HTML gagal — ${err?.message || err}`);
+  }
+
   let cover = null;
   try {
     cover = await fetchThumbBuffer(info.thumbnail, { width: 640 });
@@ -198,7 +227,7 @@ async function sendAuroraAudio(ctx, info, format) {
     logger.warn(`[Aurora] audio: cover gagal — ${err?.message || err}`);
   }
 
-  if (cover) {
+  if (cover && !cardSent) {
     try {
       await ctx.client.message.send(ctx.chat, {
         type: 'image',
