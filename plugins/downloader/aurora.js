@@ -16,17 +16,15 @@ import {
   isConfigured as skylineReady
 } from '../../scraper/SKYLINE.js';
 import { fetchThumbBuffer } from '../../lib/ytUi.js';
-import { embedAudioCover } from '../../lib/audioCover.js';
 import { fetchLyrics, capLyrics } from '../../lib/lyrics.js';
 import { spawn } from 'node:child_process';
 import { writeFile, readFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-/* AURORA v3 — SEMUA lewat skyline.web.id (ga ada API pihak ketiga lagi):
- *   • audio  → unduh lewat `downloadAudio()` (jalur yang sama dengan `.yta`),
- *              lalu dikirim sebagai AUDIO WhatsApp asli + cover. Pemutar
- *              WhatsApp native, jadi gak ada lagi drama webview nolak play.
+/* AURORA v4 — audio CUMA lewat kartu rich HTML (tanpa pesan audio native):
+ *   • audio  → unduh lewat endpoint skyline, kompres ke Opus (ffmpeg), lalu
+ *              ditanam sebagai data: URI di kartu → WebAudio yang muter.
  *   • video  → tetap kartu HTML, tapi link-nya dari skyline & wajib lolos probe.
  */
 
@@ -42,7 +40,7 @@ const AUDIO_FORMAT = /^(mp3|m4a|aac|ogg|wav|flac)$/i;
  * Rantai bitrate 24k → 16k → 12k; kalau masih kegedean lagu dipotong (trim)
  * — MAX_EMBED_B64 800KB = batas yang sama dengan play2 (terbukti ke-render
  * & bunyi di HP). Kompres gagal / tetap kegedean → kartu tetap mode visual
- * + pesan audio native (jalur yang dijamin jalan), bukan kartu rusak. */
+ * (tanpa audio) — pesan audio native sudah tidak dikirim lagi. */
 const OPUS_CHAIN = ['24k', '16k', '12k'];
 const MAX_EMBED_B64 = 800_000;
 
@@ -99,13 +97,38 @@ function embedBudgetBytes() {
   return Number.isFinite(kb) && kb >= 64 ? Math.floor(kb * 1024) : MAX_EMBED_B64;
 }
 
+/** Embed TANPA kompres aktif? (`aurora.embedOriginal`) */
+function embedOriginalOn() {
+  return Boolean(config.aurora?.embedOriginal);
+}
+
+/** Batas base64 audio ASLI (`aurora.originalMaxKb`, default 3000KB). */
+function originalBudgetBytes() {
+  const kb = Number(config.aurora?.originalMaxKb);
+  return Number.isFinite(kb) && kb >= 64 ? Math.floor(kb * 1024) : 3000 * 1024;
+}
+
 /**
- * Siapkan audio siap-embed buat kartu: { buf, b64len, bitrate, trimSec } atau
- * null kalau gagal/kegedean — NULL BUKAN ERROR: kartu jalan tanpa pemutar.
+ * Siapkan audio siap-embed buat kartu: { buf, b64len, bitrate, trimSec,
+ * original, mimetype } atau null kalau gagal/kegedean — NULL BUKAN ERROR:
+ * kartu jalan tanpa pemutar.
+ *
+ * Mode `preferOriginal` (config `aurora.embedOriginal`): audio ASLI
+ * (mp3/m4a dari skyline) ditanam apa adanya tanpa ffmpeg — kualitas penuh,
+ * asal muat di `originalMaxKb`. Kegedean/lewat → jatuh ke rantai opus biasa.
  */
-async function prepareEmbeddedAudio(buffer, durationSec = 0, { maxB64 = MAX_EMBED_B64 } = {}) {
+async function prepareEmbeddedAudio(buffer, durationSec = 0, { maxB64 = MAX_EMBED_B64, preferOriginal = false, originalMaxB64 = 0, mimetype = '' } = {}) {
   if (!buffer?.length) return null;
   try {
+    if (preferOriginal) {
+      const b64len = Math.ceil(buffer.length * 4 / 3);
+      const cap = originalMaxB64 > 0 ? originalMaxB64 : MAX_EMBED_B64;
+      if (b64len <= cap) {
+        logger.info(`[Aurora] audio: embed ASLI ${mimetype || 'audio/*'} • ${Math.round(b64len / 1024)}KB base64 (tanpa kompres)`);
+        return { buf: buffer, b64len, bitrate: 'asli', trimSec: 0, original: true, mimetype: mimetype || 'audio/mpeg' };
+      }
+      logger.info(`[Aurora] audio: embed asli kegedean (${Math.round(b64len / 1024)}KB > ${Math.round(cap / 1024)}KB) — fallback kompres opus`);
+    }
     let best = null;
     for (const bitrate of OPUS_CHAIN) {
       const buf = await compressOpus(buffer, { bitrate });
@@ -280,88 +303,11 @@ async function downloadAudioViaSearch(videoUrl, { timeoutMs = 180000, maxBytes =
   return { buffer: buf, mimetype: type.split(';')[0].trim() || 'audio/mpeg', ext: /mp4|m4a/.test(type) ? 'm4a' : 'mp3' };
 }
 
-/* ══════ Tombol PLAYER di in-app browser WhatsApp ══════
- * Riset repo contoh komunitas zаpo (jobasfernandes/zapo-interactive-examples):
- * tombol `cta_url` + `webview_interaction: true` membuka halaman di in-app
- * browser WhatsApp ASLI di HP (browser penuh — audio/fetch/media jalan),
- * BUKAN WebView kartu FOA yang offline. Jadi player web hosted bisa bunyi
- * beneran. API key tidak pernah masuk link chat: bot menukar URL audio
- * (berapikey) ke token singkat dulu via /api/tools/aurora-token (D1). */
-
-/** Tukar URL audio ke token player. Null kalau gagal (tombol dilewati). */
-async function mintPlayerToken(audioUrl) {
-  const { website } = skylineCreds();
-  try {
-    const res = await fetch(`${website}/api/tools/aurora-token`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'User-Agent': UA },
-      body: JSON.stringify({ url: audioUrl }),
-      signal: AbortSignal.timeout(15000)
-    });
-    if (!res.ok) {
-      logger.warn(`[Aurora] player: mint token HTTP ${res.status} — tombol dilewati`);
-      return null;
-    }
-    const j = await res.json();
-    if (!j?.token) {
-      logger.warn('[Aurora] player: mint token balasan kosong — tombol dilewati');
-      return null;
-    }
-    return String(j.token);
-  } catch (err) {
-    logger.warn(`[Aurora] player: mint token gagal — ${err?.message || err}`);
-    return null;
-  }
-}
-
 /** "3:45" / "1:02:03" → detik. Null kalau gak kebaca. */
 function durToSeconds(dur) {
   const parts = String(dur || '').split(':').map((n) => parseInt(n, 10));
   if (!parts.length || parts.some((n) => !Number.isFinite(n))) return null;
   return parts.reduce((acc, n) => acc * 60 + n, 0) || null;
-}
-
-/** Kirim tombol "Buka Player" (cta_url + webview_interaction). Null-safe. */
-async function sendPlayerButton(ctx, info, clean, duration) {
-  const { website } = skylineCreds();
-  const token = await mintPlayerToken(audioEndpoint(info.url));
-  if (!token) return false;
-
-  const params = new URLSearchParams({
-    t: token,
-    title: String(info.title || clean || '').slice(0, 120),
-    cover: String(info.thumbnail || '').slice(0, 300)
-  });
-  const artist = /skyline-JXRA Stream/.test(String(info.artist || '')) ? '' : String(info.artist || '').slice(0, 80);
-  if (artist) params.set('artist', artist);
-  const durSec = durToSeconds(duration || info.duration);
-  if (durSec) params.set('dur', String(durSec));
-  const playerUrl = `${website}/aurora-player?${params.toString()}`;
-
-  await ctx.client.message.send(ctx.chat, {
-    interactiveMessage: {
-      body: {
-        text: `🎧 *${clean}*\nBuka player di dalam WhatsApp — cover, tombol play, dan lirik sinkron.`
-      },
-      footer: { text: 'AURORA • skyline.web.id' },
-      nativeFlowMessage: {
-        messageVersion: 1,
-        buttons: [
-          {
-            name: 'cta_url',
-            buttonParamsJson: JSON.stringify({
-              display_text: '▶ Buka Player',
-              url: playerUrl,
-              merchant_url: playerUrl,
-              webview_presentation: 'full',
-              webview_interaction: true
-            })
-          }
-        ]
-      }
-    }
-  });
-  return true;
 }
 
 async function sendAuroraAudio(ctx, info, format) {
@@ -393,9 +339,8 @@ async function sendAuroraAudio(ctx, info, format) {
   const clean = String(info.title || 'Audio').replace(/[\\/:*?"<>|]/g, '').slice(0, 90);
   const duration = String(info.duration || '');
 
-  /* Kartu rich HTML tetap dikirim (tampilan AURORA deck), tapi audionya
-   * lewat pesan audio native — jadi kalau player di webview rewel, lagu
-   * tetap bisa diputar dari pesan audio di bawahnya.
+  /* Lagu cuma lewat kartu rich HTML (audio embed WebAudio di dalam kartu) —
+   * pesan audio native & tombol "Buka Player" sudah tidak dikirim lagi.
    * Lirik (LRCLIB) diambil PARALEL sama cover biar nambah nol waktu tunggu. */
   let cover = null;
   const wantLyrics = String(info.title || '') !== 'Aurora Stream'; // input URL manual = judul palsu
@@ -426,18 +371,23 @@ async function sendAuroraAudio(ctx, info, format) {
           }
         )
       : Promise.resolve(null),
-    prepareEmbeddedAudio(audio.buffer, durToSeconds(duration) || 0, { maxB64: embedBudgetBytes() })
+    prepareEmbeddedAudio(audio.buffer, durToSeconds(duration) || 0, {
+      maxB64: embedBudgetBytes(),
+      preferOriginal: embedOriginalOn(),
+      originalMaxB64: originalBudgetBytes(),
+      mimetype: audio.mimetype
+    })
   ]);
   cover = coverRes;
   const lyricCard = lyricRes;
   const embed = embedRes || null;
   if (embed) {
     logger.info(
-      `[Aurora] audio: embed WebAudio siap — opus ${embed.bitrate} • ` +
+      `[Aurora] audio: embed WebAudio siap — ${embed.original ? `ASLI ${embed.mimetype}` : `opus ${embed.bitrate}`} • ` +
       `${Math.round(embed.b64len / 1024)}KB base64${embed.trimSec ? ` • trim ${embed.trimSec}s` : ''}`
     );
   } else {
-    logger.info('[Aurora] audio: tanpa embed — kartu mode visual (tombol play = hint), audio tetap di pesan native');
+    logger.info('[Aurora] audio: tanpa embed — kartu mode visual tanpa audio (tombol play = hint)');
   }
   if (lyricCard) {
     logger.info(
@@ -490,9 +440,10 @@ async function sendAuroraAudio(ctx, info, format) {
     /* DEFAULT: kartu AURORA deck. Kalau embed sukses → pemutar WebAudio
      * beneran di dalam kartu (jalur play2 — WebView mati buat <audio> remote,
      * tapi AudioContext + data URI hidup). Kalau embed null → kartu visual
-     * biasa, lagu tetap di pesan audio native di bawahnya. */
+     * biasa tanpa audio (pesan audio native sudah tidak dikirim). */
     try {
-      const audioDataUri = embed ? `data:audio/webm;codecs=opus;base64,${embed.buf.toString('base64')}` : '';
+      const audioMime = embed ? (embed.mimetype || 'audio/webm;codecs=opus') : '';
+      const audioDataUri = embed ? `data:${audioMime};base64,${embed.buf.toString('base64')}` : '';
       const base = {
         title: clean,
         channel: info.artist || 'Unknown Artist',
@@ -503,9 +454,11 @@ async function sendAuroraAudio(ctx, info, format) {
         audioMeta: embed,
         note: audioDataUri
           ? (embed.trimSec
-              ? `Audio kartu dipotong ±${embed.trimSec}s biar muat — lagu penuh di pesan audio bawah.`
-              : 'Tekan ▶ buat putar langsung di kartu — versi HQ di pesan audio bawah.')
-          : 'Lagu diputar dari pesan audio di bawah kartu.'
+              ? `Audio kartu dipotong ±${embed.trimSec}s biar muat di kartu.`
+              : embed.original
+                ? 'Tekan ▶ buat putar — audio kualitas asli di dalam kartu.'
+                : 'Tekan ▶ buat putar langsung di dalam kartu.')
+          : 'Gagal menyiapkan audio di kartu — coba lagi ya.'
       };
       /* Budget payload:
        * • TANPA audio → aturan lama ±25,6KB (regime kartu kecil, terbukti
@@ -562,32 +515,7 @@ async function sendAuroraAudio(ctx, info, format) {
     }
   }
 
-  let media = audio.buffer;
-  try {
-    const emb = await embedAudioCover(audio.buffer, audio.mimetype, cover?.buffer);
-    media = emb.buffer;
-    logger.info(`[Aurora] audio: cover ditanam=${emb.embedded ? 'ya' : 'tidak'}`);
-  } catch (err) {
-    logger.warn(`[Aurora] audio: tanam cover gagal — ${err?.message || err}`);
-  }
-
-  const fileName = `${clean}.${audio.ext || 'mp3'}`;
-  await ctx.client.message.send(ctx.chat, {
-    type: 'audio',
-    media,
-    mimetype: audio.mimetype,
-    fileName
-  });
-  logger.info(`[Aurora] audio: terkirim | ${fileName} • ${(media.length / 1048576).toFixed(2)}MB • total ${((Date.now() - t0) / 1000).toFixed(1)}s`);
-
-  /* Tombol player (in-app browser WhatsApp) — pelengkap; gagal = dilewati,
-   * kartu + pesan audio native di atas tetap utuh. */
-  try {
-    const ok = await sendPlayerButton(ctx, info, clean, duration);
-    if (ok) logger.info('[Aurora] audio: tombol player (in-app webview) terkirim');
-  } catch (err) {
-    logger.warn(`[Aurora] player: tombol gagal — ${err?.message || err}`);
-  }
+  logger.info(`[Aurora] audio: selesai — kartu player ${cardSent ? 'terkirim' : 'GAGAL'} • total ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 }
 
 /**
@@ -660,13 +588,13 @@ function buildLyricPanelHtml(lyrics, synced) {
 
 /**
  * Kartu "Now Playing" gaya Spotify (dark, cover besar, kontrol penuh).
- * WebView kartu WA: cuma image + WebSocket yang jalan — makanya audio diambil
- * lewat ws-audio, dan lagu tetap dikirim sebagai pesan audio native di bawah.
+ * Audio ditanam sebagai data: URI di dalam kartu → WebAudio yang muter
+ * (WebView kartu WA mati buat <audio> remote, tapi AudioContext hidup).
  * Warna aksen diambil dari cover biar gradiennya nyatu.
  *
  * `lyrics` = hasil `capLyrics()` dari lib/lyrics.js — `{ s, l:[[detik,teks]], p }`.
  * Panel lirik muncul lewat tombol di baris judul; kalau synced, ada mode
- * karaoke (tap ▶ kira-kira pas lagu mulai di pesan audio) + auto-highlight.
+ * karaoke (sinkron sama posisi audio di kartu) + auto-highlight.
  */
 function buildSpotifyHtml({ title, channel, duration, thumbnailb64, accent = '#1DB954', note, lyrics = null, audioDataUri = '', audioMeta = null }) {
   const dur = String(duration || '').trim();
@@ -675,8 +603,8 @@ function buildSpotifyHtml({ title, channel, duration, thumbnailb64, accent = '#1
   const safeChannel = escHtml(channel || 'Unknown Artist');
   const hasAudio = Boolean(audioDataUri);
   const safeNote = escHtml(note || (hasAudio
-    ? 'Tekan ▶ buat putar langsung di kartu — versi HQ di pesan audio bawah.'
-    : 'Lagu juga dikirim sebagai pesan audio — putar dari situ kalau tombol play rewel.'));
+    ? 'Tekan ▶ buat putar langsung di dalam kartu.'
+    : 'Gagal menyiapkan audio di kartu — coba lagi ya.'));
   const hasLyrics = Boolean(lyrics && (lyrics.p || (Array.isArray(lyrics.l) && lyrics.l.length)));
   const lyrSynced = hasLyrics && Array.isArray(lyrics.l) && lyrics.l.length > 0;
   const art = thumbnailb64
@@ -872,18 +800,18 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-s
 </div>
 
 <script>
-/* WebView kartu WA offline (media nggak jalan di banyak device), jadi tombol
- * play cuma ngasih tau: lagunya diputar dari pesan audio di bawah kartu. */
+/* Fallback kalau jalur WebAudio gak kepakai: tombol play cuma ngasih tau
+ * kalau audio kartu gagal disiapkan. */
 function hint() {
   var t = document.getElementById('srcNote');
-  if (t) { t.textContent = 'Putar lagu dari pesan audio di bawah \u2193'; t.style.color = '#1ed760'; }
+  if (t) { t.textContent = 'Audio gagal disiapkan — coba lagi ya'; t.style.color = '#ff6b6b'; }
   var b = document.getElementById('playBtn');
   if (b) b.className = 'play ready';
 }
 </script>${hasLyrics ? `
 <script>
-/* LIRIK KARAOKE — WebView kartu WA gak bisa muter audio remote, jadi
- * sinkronisasi pakai jam manual (ketuk ▶ pas lagu mulai di pesan audio).
+/* LIRIK KARAOKE — sebelum audio di-decode, sinkronisasi pakai jam manual
+ * (ketuk ▶ di panel lirik); sesudah decode, ngikut posisi audio di kartu.
  * Teks baris dibaca dari DOM, cuma timestamp yang di-embed (hemat payload). */
 window.LYRICS = ${JSON.stringify({ s: Boolean(lyrSynced), t: (lyrics.l || []).map((x) => Math.round((Number(x[0]) || 0) * 10) / 10) })};
 var LY = window.LYRICS || {}, T = 0, L = 0, TI = null, I = -1, E = null;
@@ -966,7 +894,7 @@ function dataUriToAb(uri) {
 function aCtx() {
   if (actx) return actx;
   var C = window.AudioContext || window.webkitAudioContext;
-  if (!C) { aNote('WebAudio tidak didukung — pakai pesan audio bawah'); return null; }
+  if (!C) { aNote('WebAudio tidak didukung di device ini'); return null; }
   try { actx = new C(); } catch (e) { aNote('AudioContext gagal: ' + ((e && e.message) || '?')); return null; }
   return actx;
 }
@@ -1061,12 +989,12 @@ function aLoad() {
     if (done) return; done = true;
     abuf = b; aReady = true; aLoading = false;
     aLinkLyrics(); aPaint(); aIcons(false);
-    aNote('Siap — ketuk ▶ (HQ-nya di pesan audio bawah)');
+    aNote('Siap — ketuk ▶ buat putar');
   };
   var fail = function (e) {
     if (done) return; done = true;
     aLoading = false;
-    aNote('Gagal decode (' + ((e && (e.message || e.name)) || '?') + ') — pakai pesan audio bawah');
+    aNote('Gagal decode audio (' + ((e && (e.message || e.name)) || '?') + ') — coba lagi ya');
   };
   try {
     var p = ctx.decodeAudioData(ab, ok, fail);
@@ -1093,9 +1021,8 @@ setInterval(function () {
 
 /**
  * Kartu COVER buat audio — tanpa <audio>/<video> sama sekali.
- * Di WebView kartu WA, elemen media gak jalan (cuma image yang tampil),
- * jadi kartu ini murni visual: cover + judul + durasi + penanda bahwa
- * lagunya ada di pesan audio di bawahnya.
+ * Cuma visual: cover + judul + durasi (kartu player WebAudio = jalur utama;
+ * builder ini dipertahankan buat _internals/tes).
  */
 function buildCoverHtml({ title, channel, duration, thumbnailb64, note }) {
   const hasThumb = Boolean(thumbnailb64);
@@ -1130,8 +1057,8 @@ body{margin:0;padding:14px;background:#04090b;font-family:Arial,Helvetica,sans-s
     ${hasThumb ? `<img class="cover" src="${thumbnailb64}" alt="">` : ''}
     <div class="title">${escapeHtmlJs(title)}</div>
     <div class="sub">${escapeHtmlJs(channel || '')}${duration ? ` • ${escapeHtmlJs(duration)}` : ''}</div>
-    <div class="badge">🎧 Lagu ada di pesan audio di bawah</div>
-    <div class="note">${escapeHtmlJs(note || 'Ketuk pesan audio di bawah untuk memutar.')}</div>
+    <div class="badge">🎧 Player AURORA</div>
+    <div class="note">${escapeHtmlJs(note || 'Putar dari kartu player.')}</div>
   </div>
 </div>
 </body></html>`;

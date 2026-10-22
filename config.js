@@ -204,6 +204,13 @@ export default {
     // Dikutip sebagai string ('...') biar nilai user kebackup pas .updatesc
     // (KEEP_FIELDS cuma membaca nilai string).
     maxEmbedKb: '',
+    // true = audio di-embed TANPA kompres (mp3/m4a asli dari skyline) selama
+    // muat di `originalMaxKb`. Kualitas penuh, tapi payload kartu besar —
+    // kalau HP nolak render, balikin ke false.
+    embedOriginal: true,
+    // Batas base64 audio ASLI (KB). Kosong = 3000 (±2,2MB file). Di atas
+    // batas ini otomatis fallback ke opus 24k→16k→12k + trim.
+    originalMaxKb: '',
   },
 
   emerald: {
