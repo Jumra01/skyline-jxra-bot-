@@ -44,7 +44,8 @@ import fs from 'node:fs'
 import config from '../../config.js'
 import { logger } from '../../core/logger.js'
 import { checkCooldown, checkFlood } from '../../core/cooldown.js'
-import { getUser, isPremiumActive } from '../../core/database.js'
+import { getUser, isPremiumActive, isEmeraldNotifyOn } from '../../core/database.js'
+import { sendUsageCard, getNotifyGlobal } from '../../lib/emeraldCard.js'
 import { addMentionHandler } from '../../core/mentionTrigger.js'
 import { sendTyping } from '../../core/presence.js'
 import { isGroupAdmin } from '../../core/permission.js'
@@ -590,8 +591,32 @@ async function applyRunMarkers(ctx, reply, { execOn = false, open = false, conf 
       userAllow: conf.execUser,
       open,
     })
-    logger.info({ cmd: a, ok: res.ok, tier: res.tier, err: res.error }, '[Ella2] aksi bot')
+    logger.info({ cmd: a, ok: res.ok, tier: res.tier, err: res.error, charged: res.charged }, '[Ella2] aksi bot')
     results.push(res.ok ? `✅ \`${res.used}\` dijalanin.` : `⚠️ ${res.error}.`)
+
+    /* Kartu pemakaian emerald (CTA) — dulu cuma muncul kalau command diketik
+     * manual; lewat Ella kepotongnya senyap. Sekarang sama-sama dapat kartu. */
+    if (res.ok && res.charged > 0) {
+      try {
+        const mode = config.emerald?.notify
+        const allowed =
+          mode !== false &&
+          isEmeraldNotifyOn(ctx.sender) &&
+          getNotifyGlobal() &&
+          (mode !== 'private' || !ctx.isGroup)
+        if (allowed) {
+          const desc = String(getFeature(splitCommand(a).name)?.description || '')
+          void sendUsageCard(ctx, {
+            command: `${ctx.prefix || '.'}${res.used}`,
+            cost: res.charged,
+            balance: res.balance,
+            description: desc,
+          }).catch((err) => logger.warn({ err }, '[Ella2] kartu emerald gagal dikirim'))
+        }
+      } catch (err) {
+        logger.warn({ err }, '[Ella2] kartu emerald gagal disiapkan')
+      }
+    }
   }
 
   const notes = [...results]
