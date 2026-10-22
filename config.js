@@ -192,6 +192,13 @@ export default {
   cooldown: 3000,            // jeda antar command per user (ms)
 
   /* ── EMERALD (mata uang command) ───────────────────────── */
+  /* ── AURORA (player kartu) ──────────────────────────────── */
+  // false = kartu cuma cover + info (paling aman, jalan di semua device).
+  // true  = kartu player WebSocket (butuh WS; sebagian WebView WA nolak media).
+  aurora: {
+    playerCard: false,
+  },
+
   emerald: {
     enabled: true,           // false = semua command gratis
     defaultCost: 1,          // biaya default (override: `energi:` di plugin)
