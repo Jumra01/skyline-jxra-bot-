@@ -904,6 +904,30 @@ var isLoop = false;
 var userPressed = false;
 
 var config = window.VIDEO_CONFIG || {};
+
+/* ═══ DEBUG: console + panel ═══
+ * Semua kejadian media dicatat ke console ([Aurora] ...) DAN ke panel
+ * MEDIA PROCESS di kartu, biar kelihatan tanpa buka DevTools. */
+function dbg(msg, level) {
+	var line = String(msg);
+	try {
+		if (level === 'err') console.error('[Aurora] ' + line);
+		else if (level === 'warn') console.warn('[Aurora] ' + line);
+		else console.log('[Aurora] ' + line);
+	} catch (e) {}
+	try { writeLog(line); } catch (e) {}
+}
+function srcShort(u) { return String(u || '').replace(/apikey=[^&]+/g, 'apikey=***').slice(0, 110); }
+window.addEventListener('error', function(e) {
+	dbg('window.onerror: ' + (e.message || '?') + ' @' + (e.filename || '') + ':' + (e.lineno || 0), 'err');
+});
+window.addEventListener('unhandledrejection', function(e) {
+	var r = e.reason || {};
+	dbg('unhandledrejection: ' + (r.name || '?') + ' ' + (r.message || String(r)), 'err');
+});
+dbg('boot • origin=' + location.origin + ' • secure=' + window.isSecureContext);
+dbg('ua=' + String(navigator.userAgent).slice(0, 100));
+dbg('canPlay mp3=' + (video.canPlayType('audio/mpeg') || 'no') + ' • m4a=' + (video.canPlayType('audio/mp4') || 'no') + ' • mp4=' + (video.canPlayType('video/mp4') || 'no'));
 var background = document.getElementById("background");
 songTitle.textContent = config.title || "Unknown Video";
 artist.textContent = config.channel || "Unknown Channel";
@@ -990,6 +1014,10 @@ function safePlay() {
 		});
 	}
 	var p = video.play();
+	if (p && p.then) {
+		p.then(function() { dbg('play() OK • t=' + video.currentTime.toFixed(2)); })
+		 .catch(function(e) { dbg('play() reject: ' + ((e && e.name) || '?') + ' ' + ((e && e.message) || ''), 'err'); });
+	}
 	if (!p || !p.catch) return;
 	p.catch(function(err) {
 		writeLog("play() ditolak: " + ((err && err.name) || "?"));
@@ -1313,14 +1341,33 @@ function attachDirectSource() {
 }
 
 video.addEventListener("playing", function() {
+	dbg('playing • t=' + video.currentTime.toFixed(2) + ' • rs=' + video.readyState);
 	setStatus("Memutar", "");
 });
 
+video.addEventListener("loadstart", function() {
+	dbg('loadstart • src=' + srcShort(video.currentSrc || video.src));
+});
+
+video.addEventListener("canplay", function() {
+	dbg('canplay • rs=' + video.readyState + ' • dur=' + (isFinite(video.duration) ? video.duration.toFixed(1) : '?'));
+});
+
+video.addEventListener("suspend", function() {
+	dbg('suspend • ns=' + video.networkState + ' • rs=' + video.readyState);
+});
+
+video.addEventListener("abort", function() {
+	dbg('abort • ns=' + video.networkState, 'warn');
+});
+
 video.addEventListener("waiting", function() {
+	dbg('waiting • rs=' + video.readyState + ' • ns=' + video.networkState, 'warn');
 	if (!diagDone) setStatus("Buffering… tunggu sinyal", "warn");
 });
 
 video.addEventListener("stalled", function() {
+	dbg('stalled • rs=' + video.readyState + ' • ns=' + video.networkState, 'warn');
 	if (!diagDone) setStatus("Koneksi lambat — masih buffering", "warn");
 });
 
@@ -1349,7 +1396,7 @@ var retriedDirect = false;
 video.addEventListener("error", function() {
 	var code = video.error ? video.error.code : 0;
 	var msg = video.error && video.error.message ? " • " + video.error.message : "";
-	writeLog("Media error " + code + msg);
+	dbg('media error • kode=' + code + msg + ' • rs=' + video.readyState + ' • ns=' + video.networkState + ' • src=' + srcShort(video.currentSrc || video.src), 'err');
 	diagnoseMedia();
 	if (!streamStarted) setStatus("Gagal memutar (kode " + code + msg + ") — pencet tombol play di player", "err");
 	// Tampilkan kontrol bawaan browser: tombol play-nya = gesture sah, jadi
