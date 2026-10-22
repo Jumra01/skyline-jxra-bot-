@@ -37,12 +37,21 @@ const AUDIO_FORMAT = /^(mp3|m4a|aac|ogg|wav|flac)$/i;
  * WA, TAPI WebAudio hidup (#11 oscillator + #12 decodeAudioData data-URI bunyi).
  * Jadi lagu dikompres ke Opus (ffmpeg, mono 48k) lalu ditanam sebagai data: URI
  * di dalam HTML kartu → kartu decode sendiri → AudioContext yang muter.
- * Rantai bitrate 24k → 16k → 12k; kalau masih kegedean lagu dipotong (trim)
- * — MAX_EMBED_B64 800KB = batas yang sama dengan play2 (terbukti ke-render
- * & bunyi di HP). Kompres gagal / tetap kegedean → kartu tetap mode visual
- * (tanpa audio) — pesan audio native sudah tidak dikirim lagi. */
-const OPUS_CHAIN = ['24k', '16k', '12k'];
-const MAX_EMBED_B64 = 800_000;
+ * Rantai bitrate 48k → 32k → 24k → 16k (mulai dari kualitas TINGGI; 12k/16k
+ * ekstrem dibuang — owner: kompresi terlalu kuat = suara jelek). Budget
+ * MAX_EMBED_B64 2MB base64 ≈ file 1,5MB: keukur encoder zapo asli kartu
+ * bawaan 2MB audio → frame ±2,9MB (limit keras 16,7MB), jadi masih aman
+ * jauh di bawahnya. Lagu ±4 menit masuk penuh @48k. Kompres gagal / tetap
+ * kegedean → kartu tetap mode visual (tanpa audio) — pesan audio native
+ * sudah tidak dikirim lagi. */
+const OPUS_CHAIN = ['48k', '32k', '24k', '16k'];
+const MAX_EMBED_B64 = 2_000_000;
+/* Perkiraan base64/detik per bitrate (constrained VBR, mono 48k):
+ * bitrate ÷ 8 × 4/3 — dipakai ngitung trim tanpa encode aslinya dulu. */
+const B64_PER_SEC = { '48k': 8_000, '32k': 5_333, '24k': 4_000, '16k': 2_667 };
+/* Bitrate pas trim (lagu lebih panjang dari yang muat di budget): tengah
+ * — 48k kependekan buat lagu panjang, 16k terlalu jelek. */
+const TRIM_BITRATE = '24k';
 /* Batas keras frame WhatsApp (Noise) — dari error asli:
  * "frame is too large: 24148412 bytes (max allowed: 16777215)". */
 const WA_FRAME_MAX = 16_777_215;
@@ -149,17 +158,13 @@ async function prepareEmbeddedAudio(buffer, durationSec = 0, { maxB64 = MAX_EMBE
       logger.info(`[Aurora] audio: opus ${bitrate} → ${Math.round(b64len / 1024)}KB base64`);
       if (b64len <= maxB64) return best;
     }
-    // Semua bitrate masih kegedean (umumnya lagu > 6,5 menit) → potong lagu.
-    // Ukur langsung dari budget: b64/detik @24k = 24000bps ÷ 8 × 4/3 = 4000.
-    // (Rumus "rasio" gaya play2 ngitung dari ukuran 12k tapi nge-encode 24k
-    // → hasilnya ~1,8× budget, gak bakal pernah lolos — jadi jangan ditiru.)
+    // Semua bitrate masih kegedean penuh (lagu > ±7,5 menit) → potong lagu.
     const dur = Number(durationSec) || 0;
     if (dur < 60) {
       logger.warn('[Aurora] audio: embed kegedean & durasi nggak diketahui — kartu dikirim tanpa pemutar');
       return null;
     }
-    const B64_PER_SEC = { '24k': 4000, '16k': 2667, '12k': 2000 };
-    const bitrate = OPUS_CHAIN[0];
+    const bitrate = TRIM_BITRATE;
     const trimSec = Math.min(dur - 5, Math.floor((maxB64 * 0.9) / B64_PER_SEC[bitrate]));
     if (trimSec < 30) {
       logger.warn('[Aurora] audio: trim gak masuk akal — tanpa embed');
@@ -456,7 +461,9 @@ async function sendAuroraAudio(ctx, info, format) {
           artist: /skyline-JXRA Stream/.test(String(info.artist || '')) ? '' : info.artist,
           duration: info.duration
         }).then(
-          (ly) => capLyrics(ly),
+          // Lirik diambil UTUH (batas default 40 baris bikin kepotong) —
+          // pengaman terakhirnya = guard payload di mkCard, jadi aman.
+          (ly) => capLyrics(ly, { maxLines: 250, maxLineLen: 120, maxText: 16000 }),
           (err) => {
             logger.warn(`[Aurora] lirik: gagal — ${err?.name || 'Error'}: ${err?.message || err}`);
             return null;

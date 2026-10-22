@@ -197,12 +197,12 @@ export default {
   // true  = kartu player WebSocket (butuh WS; sebagian WebView WA nolak media).
   aurora: {
     playerCard: false,
-    // Batas audio yang di-embed di dalam kartu (KB base64). Kosong = 800 =
-    // angka play2 yang udah kebukti ke-render + bunyi di HP. Naikkan (mis.
-    // '1500' / '2000') kalau HP muat: lagu jadi bisa penuh + bitrate lebih
-    // tinggi, tapi kartu makin berat & makin dekat ke batas render WA.
-    // Dikutip sebagai string ('...') biar nilai user kebackup pas .updatesc
-    // (KEEP_FIELDS cuma membaca nilai string).
+    // Batas audio yang di-embed di dalam kartu (KB base64). Kosong = 2000 =
+    // keukur encoder zapo: frame kartu ±2,9MB (limit keras WA 16,7MB) —
+    // lagu ±4 menit muat penuh di opus 48k. Turunin (mis. '800') kalau mau
+    // hemat, naikin sampai '3900' maksimal; jangan lewat 4000 (hard-cap
+    // frame). Dikutip sebagai string ('...') biar nilai user kebackup pas
+    // .updatesc (KEEP_FIELDS cuma membaca nilai string).
     maxEmbedKb: '',
     // true = audio di-embed TANPA kompres (mp3/m4a asli dari skyline) selama
     // muat di hard-cap frame WhatsApp (base64 audio ≤ 4MB ≈ file 3MB, karena
