@@ -99,6 +99,16 @@ function isIpLocked(url) {
   return /[?&]ip=/i.test(String(url || ''));
 }
 
+/** URL proxy di skyline.web.id dikasih `mode=stream` supaya dikirim inline
+ * (bukan `attachment`) — sebagian webview nolak media ber-disposition attachment. */
+function withInlineMode(url) {
+  try {
+    const u = new URL(String(url || ''));
+    if (/^skyline\.web\.id$/i.test(u.host) && /\/ytdl\//i.test(u.pathname)) u.searchParams.set('mode', 'stream');
+    return u.href;
+  } catch { return url; }
+}
+
 /**
  * Cek cepat apakah URL bisa diputar: ambil 2 KB pertama pakai Range, lalu
  * cancel. HASILNYA DICATAT ke log — ini yang bikin "kartu muncul tapi lagu
@@ -115,6 +125,7 @@ async function probeMedia(url, label) {
     });
     const type = (r.headers.get('content-type') || '-').toLowerCase();
     const range = r.headers.get('content-range') || '';
+    const disp = (r.headers.get('content-disposition') || '').toLowerCase();
     const total = r.headers.get('content-length') || '?';
     let first = 0;
     let snippet = '';
@@ -129,13 +140,16 @@ async function probeMedia(url, label) {
         await reader.cancel();
       }
     } catch { /* cuma butuh status + header */ }
+    // `attachment` cuma dicatat: ternyata skyline DAN savenow dua-duanya
+    // ngirim header itu, dan Chrome tetap bisa muter — bukan penyebab utama.
+    const attachment = /attachment/i.test(disp);
     const ok = (r.status === 200 || r.status === 206) && /^(audio|video)\//.test(type);
     // Body-nya dibuang untuk media; kalau gagal (403/HTML/JSON error) cuplikannya
     // ikut dicatat biar sebabnya kelihatan tanpa buka DevTools.
     const tail = ok ? '' : ` • body="${snippet.slice(0, 140)}"`;
-    const line = `[Aurora] probe ${label} → HTTP ${r.status} • ${type} • range=${range || 'TIDAK didukung'} • ${first}B/${total}B • ${Date.now() - t0}ms • host=${host}${locked ? ' • ⚠ IP-LOCKED' : ''}${tail}`;
+    const line = `[Aurora] probe ${label} → HTTP ${r.status} • ${type} • range=${range || 'TIDAK didukung'} • ${first}B/${total}B • ${Date.now() - t0}ms • host=${host}${locked ? ' • ⚠ IP-LOCKED' : ''}${attachment ? ' • ⚠ attachment' : ''}${tail}`;
     if (ok) logger.info(line); else logger.warn(line);
-    return { ok, status: r.status, type, ranges: Boolean(range), bytes: first, host, locked };
+    return { ok, status: r.status, type, ranges: Boolean(range), bytes: first, host, locked, attachment };
   } catch (err) {
     logger.warn(`[Aurora] probe ${label} GAGAL — ${err?.name || 'Error'}: ${err?.message || err} • host=${host}${locked ? ' • ⚠ IP-LOCKED' : ''}`);
     return { ok: false, status: 0, type: '', ranges: false, bytes: 0, host, locked, error: err?.name || 'Error' };
@@ -153,6 +167,7 @@ async function resolveSource(info, format) {
   let lockedFallback = null;
 
   const accept = async (cand) => {
+    cand = { ...cand, url: withInlineMode(cand.url) };
     const probe = await probeMedia(cand.url, cand.via);
     const item = { ...cand, probe, preview: `Sumber ${cand.via} • ${probe.type || 'media'}${probe.ranges ? ' • seek OK' : ''}` };
     if (probe.ok && !probe.locked) return item;
@@ -952,6 +967,7 @@ function safePlay() {
 	if (!p || !p.catch) return;
 	p.catch(function(err) {
 		writeLog("play() ditolak: " + ((err && err.name) || "?"));
+		if (!diagDone) setStatus("Play ditolak webview — ketuk sekali lagi", "warn");
 		video.muted = true;
 		var p2 = video.play();
 		if (!p2 || !p2.then) return;
@@ -961,6 +977,7 @@ function safePlay() {
 			}, 350);
 		}).catch(function(e2) {
 			writeLog("play() gagal: " + ((e2 && e2.name) || "?"));
+			if (!diagDone) setStatus("Audio diblokir webview (" + ((e2 && e2.name) || "?") + ") — ketuk play lagi", "err");
 			setWsState("BLOCKED");
 		});
 	});
@@ -1274,11 +1291,11 @@ video.addEventListener("playing", function() {
 });
 
 video.addEventListener("waiting", function() {
-	setStatus("Buffering… tunggu sinyal", "warn");
+	if (!diagDone) setStatus("Buffering… tunggu sinyal", "warn");
 });
 
 video.addEventListener("stalled", function() {
-	setStatus("Koneksi lambat — masih buffering", "warn");
+	if (!diagDone) setStatus("Koneksi lambat — masih buffering", "warn");
 });
 
 video.addEventListener("loadedmetadata", function() {
@@ -1290,13 +1307,40 @@ video.addEventListener("loadedmetadata", function() {
 	writeLog("Siap | durasi " + formatTime(video.duration));
 });
 
+// Diagnosa sekali per sesi: kalau media gagal, cek HTTP/Content-Type URL-nya
+// biar status di kartu nyebut angka asli (403/502/HTML) — bukan cuma "kode 4".
+var diagDone = false;
+function diagnoseMedia() {
+	// fetch() lintas-origin bakal diblok CORS, jadi diagnosa pakai info dari
+	// elemen media sendiri: kode error + pesan asli dari engine.
+	diagDone = true;
+	var v = video.error;
+	var detail = v ? ("kode " + v.code + (v.message ? " • " + v.message : "")) : "tanpa detail";
+	writeLog("Diagnosa: " + detail + " • src=" + String(config.videoUrl || "").slice(0, 60) + "…");
+}
+
+var retriedDirect = false;
 video.addEventListener("error", function() {
 	var code = video.error ? video.error.code : 0;
-	var msg = video.error && video.error.message ? " | " + video.error.message : "";
+	var msg = video.error && video.error.message ? " • " + video.error.message : "";
 	writeLog("Media error " + code + msg);
-	setStatus("Gagal memutar (kode " + code + ") — coba tekan play lagi", "err");
+	diagnoseMedia();
+	if (!streamStarted) setStatus("Gagal memutar (kode " + code + msg + ") — coba ketuk play lagi", "err");
 	if (!directMode || streamStarted) {
 		if (code) setWsState("ERROR " + code);
+		return;
+	}
+	// Sekali coba ulang untuk SEMUA kode: endpoint proxy nge-resolve ulang tiap
+	// request, jadi 502 sesaat (yang tampil sebagai kode 4) sering sembuh sendiri.
+	if (!retriedDirect) {
+		retriedDirect = true;
+		setTimeout(function() {
+			try {
+				video.src = config.videoUrl;
+				video.load();
+				safePlay();
+			} catch (e) {}
+		}, 1200);
 		return;
 	}
 	if (!config.wsUrl) {
