@@ -166,6 +166,90 @@ async function downloadAudioViaSearch(videoUrl, { timeoutMs = 180000, maxBytes =
   return { buffer: buf, mimetype: type.split(';')[0].trim() || 'audio/mpeg', ext: /mp4|m4a/.test(type) ? 'm4a' : 'mp3' };
 }
 
+/* ══════ Tombol PLAYER di in-app browser WhatsApp ══════
+ * Riset repo contoh komunitas zаpo (jobasfernandes/zapo-interactive-examples):
+ * tombol `cta_url` + `webview_interaction: true` membuka halaman di in-app
+ * browser WhatsApp ASLI di HP (browser penuh — audio/fetch/media jalan),
+ * BUKAN WebView kartu FOA yang offline. Jadi player web hosted bisa bunyi
+ * beneran. API key tidak pernah masuk link chat: bot menukar URL audio
+ * (berapikey) ke token singkat dulu via /api/tools/aurora-token (D1). */
+
+/** Tukar URL audio ke token player. Null kalau gagal (tombol dilewati). */
+async function mintPlayerToken(audioUrl) {
+  const { website } = skylineCreds();
+  try {
+    const res = await fetch(`${website}/api/tools/aurora-token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'User-Agent': UA },
+      body: JSON.stringify({ url: audioUrl }),
+      signal: AbortSignal.timeout(15000)
+    });
+    if (!res.ok) {
+      logger.warn(`[Aurora] player: mint token HTTP ${res.status} — tombol dilewati`);
+      return null;
+    }
+    const j = await res.json();
+    if (!j?.token) {
+      logger.warn('[Aurora] player: mint token balasan kosong — tombol dilewati');
+      return null;
+    }
+    return String(j.token);
+  } catch (err) {
+    logger.warn(`[Aurora] player: mint token gagal — ${err?.message || err}`);
+    return null;
+  }
+}
+
+/** "3:45" / "1:02:03" → detik. Null kalau gak kebaca. */
+function durToSeconds(dur) {
+  const parts = String(dur || '').split(':').map((n) => parseInt(n, 10));
+  if (!parts.length || parts.some((n) => !Number.isFinite(n))) return null;
+  return parts.reduce((acc, n) => acc * 60 + n, 0) || null;
+}
+
+/** Kirim tombol "Buka Player" (cta_url + webview_interaction). Null-safe. */
+async function sendPlayerButton(ctx, info, clean, duration) {
+  const { website } = skylineCreds();
+  const token = await mintPlayerToken(audioEndpoint(info.url));
+  if (!token) return false;
+
+  const params = new URLSearchParams({
+    t: token,
+    title: String(info.title || clean || '').slice(0, 120),
+    cover: String(info.thumbnail || '').slice(0, 300)
+  });
+  const artist = /skyline-JXRA Stream/.test(String(info.artist || '')) ? '' : String(info.artist || '').slice(0, 80);
+  if (artist) params.set('artist', artist);
+  const durSec = durToSeconds(duration || info.duration);
+  if (durSec) params.set('dur', String(durSec));
+  const playerUrl = `${website}/aurora-player.html?${params.toString()}`;
+
+  await ctx.client.message.send(ctx.chat, {
+    interactiveMessage: {
+      body: {
+        text: `🎧 *${clean}*\nBuka player di dalam WhatsApp — cover, tombol play, dan lirik sinkron.`
+      },
+      footer: { text: 'AURORA • skyline.web.id' },
+      nativeFlowMessage: {
+        messageVersion: 1,
+        buttons: [
+          {
+            name: 'cta_url',
+            buttonParamsJson: JSON.stringify({
+              display_text: '▶ Buka Player',
+              url: playerUrl,
+              merchant_url: playerUrl,
+              webview_presentation: 'full',
+              webview_interaction: true
+            })
+          }
+        ]
+      }
+    }
+  });
+  return true;
+}
+
 async function sendAuroraAudio(ctx, info, format) {
   const t0 = Date.now();
   let audio = null;
@@ -353,6 +437,15 @@ async function sendAuroraAudio(ctx, info, format) {
     fileName
   });
   logger.info(`[Aurora] audio: terkirim | ${fileName} • ${(media.length / 1048576).toFixed(2)}MB • total ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+
+  /* Tombol player (in-app browser WhatsApp) — pelengkap; gagal = dilewati,
+   * kartu + pesan audio native di atas tetap utuh. */
+  try {
+    const ok = await sendPlayerButton(ctx, info, clean, duration);
+    if (ok) logger.info('[Aurora] audio: tombol player (in-app webview) terkirim');
+  } catch (err) {
+    logger.warn(`[Aurora] player: tombol gagal — ${err?.message || err}`);
+  }
 }
 
 /**
