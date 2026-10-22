@@ -1207,11 +1207,12 @@ function finishWsDownload(cfg) {
 		} catch (e) {}
 	}
 	wsChunks = [];
-	if (cfg.autoplay || userPressed) {
-		setTimeout(function() {
-			playVideo();
-		}, 300);
-	}
+	/* JANGAN play otomatis di sini. Ini dipanggil dari callback WebSocket,
+	 * bukan dari ketukan user — Chrome/WebView bakal nolak dengan
+	 * NotAllowedError dan statusnya jadi "diblokir webview".
+	 * Yang benar: tunggu user mengetuk tombol play (gesture sah). */
+	setStatus("Siap — ketuk play", "");
+	writeLog("Siap diputar (autoplay sengaja mati: butuh ketukan user)");
 }
 
 function startVideoStream(cfg) {
