@@ -146,7 +146,7 @@ function set(id, state, text) {
 function renderSum() {
   var s = document.getElementById('sum');
   if (!s) return;
-  var lines = ['origin=' + location.origin, 'secure=' + window.isSecureContext, 'ua=' + UA_STR.slice(0, 70)];
+  var lines = ['origin=' + location.origin, 'secure=' + window.isSecureContext, 'ua=' + UA_STR.slice(0, 70), 'ws=' + (WS_URL ? WS_URL.slice(0, 90) : '(kosong)')];
   Object.keys(R).sort().forEach(function (k) { lines.push('#' + k + ' ' + R[k]); });
   s.textContent = lines.join('\\n');
 }
