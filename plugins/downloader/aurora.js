@@ -246,9 +246,10 @@ async function sendAuroraAudio(ctx, info, format) {
 
   let cardSent = false;
   let thumbB64 = '';
-  /* Cover di kartu lirik sengaja dibikin lebih kecil (3KB) — markup panel
-   * lirik ikut nambah payload, dan payload base64 wajib tetap ≤ ±26KB (AGENTS §9.2). */
-  try { thumbB64 = await thumbDataUri(info.thumbnail, lyricCard ? { maxB64: 3000 } : {}); } catch { /* tanpa cover */ }
+  /* Cover di kartu lirik dibikin kecil (2,4KB) — markup panel lirik ikut
+   * nambah payload, dan payload base64 wajib tetap ≤ ±26KB (AGENTS §9.2).
+   * thumbDataUri() sekarang nurut budget (turun sampai 90px kalau perlu). */
+  try { thumbB64 = await thumbDataUri(info.thumbnail, lyricCard ? { maxB64: 2400 } : {}); } catch { /* tanpa cover */ }
 
   if (config.aurora && config.aurora.playerCard) {
     /* Kartu player (opt-in). WebView kartu WA offline, tapi WebSocket JALAN —
@@ -290,19 +291,22 @@ async function sendAuroraAudio(ctx, info, format) {
       let html = buildSpotifyHtml({ ...base, lyrics: lyricCard });
       let shrink = '';
       /* Jaga-jaga: payload base64 unifiedResponse wajib ≤ ±26KB biar kartu
-       * tetap ke-render. Kalau kartu + lirik kegedean, pangkas bertahap:
-       * Timestamp dibuang (panel jadi biasa) → potong baris → buang lirik. */
-      if (lyricCard && payloadB64Len(html) > 25400) {
+       * tetap ke-render (25,6KB = batas; 25,0KB pernah terbukti ke-render).
+       * Kalau kartu + lirik kegedean, pangkas bertahap: timestamp dibuang
+       * (panel jadi biasa) → potong baris → buang lirik (cover tetap). */
+      if (lyricCard && payloadB64Len(html) > 25600) {
         let ly = { s: false, l: [], p: lyricCard.l.map((x) => x[1]).join('\n') || lyricCard.p };
         html = buildSpotifyHtml({ ...base, lyrics: ly });
         shrink = ' • lirik polos';
-        if (payloadB64Len(html) > 25400) {
+        if (payloadB64Len(html) > 25600) {
           ly = { s: false, l: [], p: String(ly.p).split('\n').slice(0, 18).join('\n') };
           html = buildSpotifyHtml({ ...base, lyrics: ly });
           shrink = ' • lirik dipangkas';
-          if (payloadB64Len(html) > 25400) {
-            html = buildSpotifyHtml({ ...base, thumbnailb64: '', lyrics: null });
-            shrink = ' • cover+lirik dibuang';
+          if (payloadB64Len(html) > 25600) {
+            // Step terakhir: buang LIRIK aja — cover jangan, biar kartu tetap
+            // komplit. (Dulu keduanya dibuang barengan → kartu telanjang.)
+            html = buildSpotifyHtml({ ...base, lyrics: null });
+            shrink = ' • lirik dibuang (cover tetap)';
           }
         }
       }
@@ -398,12 +402,12 @@ function payloadB64Len(html) {
 function buildLyricPanelHtml(lyrics, synced) {
   const body = synced
     ? lyrics.l
-        .map(([, tx]) => `<div class="ly">${escHtml(tx)}</div>`)
+        .map(([, tx]) => `<i class=ly>${escHtml(tx)}</i>`)
         .join('')
     : String(lyrics.p || '')
         .split('\n')
         .filter(Boolean)
-        .map((tx) => `<div class="ly">${escHtml(tx)}</div>`)
+        .map((tx) => `<i class=ly>${escHtml(tx)}</i>`)
         .join('') || '<div class="lyr-none">Lirik tidak tersedia.</div>';
   const ctl = synced
     ? `<div class="lyr-ctl">
@@ -531,7 +535,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-s
 .lyr-ctl button.on{background:${accent};color:#08130c}
 .lyr-view{max-height:236px;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;
   padding:2px 14px 12px}
-.ly{font-size:13.5px;line-height:1.62;font-weight:600;color:rgba(255,255,255,.40);
+.ly{display:block;font-size:13.5px;line-height:1.62;font-weight:600;color:rgba(255,255,255,.40);
   padding:3px 0;transition:color .2s ease}
 .ly.cur{color:#fff}
 .lyr-none{font-size:11.5px;color:#8f8f8f}
@@ -749,8 +753,10 @@ async function thumbDataUri(url, { maxB64 = 9 * 1024 } = {}) {
     if (!raw.length) return '';
     /* Cover di-embed sebagai data URI, jadi tiap KB di sini ikut membengkak
      * 4/3 di payload base64 — dan kartu rich yang kegedean bikin WA nampilin
-     * "pesan tidak didukung". Turunin resolusi bertahap sampai masuk budget. */
-    const plan = [[400, 62], [340, 58], [300, 54], [260, 50], [220, 46], [200, 44], [180, 44], [160, 42]];
+     * "pesan tidak didukung". Turunin resolusi bertahap sampai masuk budget
+     * (plan diperpanjang sampai 90px — thumbnail foto asli di 160px pun bisa
+     * masih ±3.5KB, gak muat di budget kecil kartu lirik). */
+    const plan = [[400, 62], [340, 58], [300, 54], [260, 50], [220, 46], [200, 44], [180, 44], [160, 42], [140, 40], [120, 38], [110, 36], [100, 34], [90, 32]];
     let last = raw;
     for (const [width, quality] of plan) {
       try {
