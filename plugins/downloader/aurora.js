@@ -244,12 +244,16 @@ async function sendAuroraAudio(ctx, info, format) {
     /* DEFAULT: kartu cover-only. Banyak WebView kartu WA gak bisa mutar media
      * (cuma image), jadi jangan kasih tombol play yang pasti gagal. */
     try {
+      const link = audioEndpoint(info.url);
+      const { website } = skylineCreds();
+      const wsUrl = `${website.replace(/^http/i, 'ws')}/api/tools/ws-audio?url=${encodeURIComponent(link)}`;
       const html = buildSpotifyHtml({
         title: clean,
         channel: info.artist || 'Unknown Artist',
         duration,
         thumbnailb64: thumbB64,
         accent: accent || '#1DB954',
+        wsUrl,
         note: 'Ketuk pesan audio di bawah untuk memutar.'
       });
       await sendRichJH(ctx, html);
@@ -329,7 +333,7 @@ async function accentFromBuffer(buffer) {
   return '#' + out.map((v) => v.toString(16).padStart(2, '0')).join('');
 }
 
-function buildSpotifyHtml({ title, channel, duration, thumbnailb64, accent = '#1DB954', note }) {
+function buildSpotifyHtml({ title, channel, duration, thumbnailb64, accent = '#1DB954', note, wsUrl = '' }) {
   const hits = (() => {
     const t = String(duration || '').trim();
     return /^\d+:\d{2}(:\d{2})?$/.test(t) ? t : '';
@@ -380,6 +384,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;co
 .eq i:nth-child(3){height:11px;animation-delay:.3s}.eq i:nth-child(4){height:20px;animation-delay:.45s}
 .eq i:nth-child(5){height:9px;animation-delay:.6s}
 @keyframes eq{0%,100%{transform:scaleY(.45)}50%{transform:scaleY(1)}}
+.pstat{font-size:10.5px;color:#9a9a9a;margin-top:10px;min-height:14px;text-align:center}
 .foot{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px 0 14px;font-size:9px;color:#7d7d7d;letter-spacing:1.2px}
 </style></head>
 <body>
@@ -389,15 +394,16 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;co
     ${thumbnailb64 ? `<img class="art" src="${thumbnailb64}" alt="">` : ''}
     <div class="title">${escapeHtmlJs(title)}</div>
     <div class="artist">${escapeHtmlJs(channel || 'Unknown Artist')}</div>
-    <div class="bar"><i style="width:0%"></i><b style="left:0%"></b></div>
-    <div class="times"><span>0:00</span><span>${escapeHtmlJs(hits || '--:--')}</span></div>
+    <div class="bar"><i id="barFill" style="width:0%"></i><b id="knob" style="left:0%"></b></div>
+    <div class="times"><span id="tCur">0:00</span><span>${escapeHtmlJs(hits || '--:--')}</span></div>
     <div class="ctrl">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M3 6h13v12H3zM18 6l4 6-4 6z"/></svg>
       <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M18 6V4H6v16h12v-2l-8-6z"/></svg>
-      <div class="play"><svg width="24" height="24" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
+      <div class="play" id="playBtn" onclick="togglePlay()"><svg id="icoPlay" width="24" height="24" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
       <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M6 18V6h12V4l-8 6 8 6v-2z"/></svg>
       <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M4 4h16v4H4zM4 10h16v4H4zM4 16h16v4H4z"/></svg>
     </div>
+    <div class="pstat" id="pstat">${wsUrl ? 'Ketuk play buat menyiapkan audio' : escapeHtmlJs(note || '')}</div>
     <div class="lyr">
       <div class="h">LIRIK</div>
       <div class="eq"><i></i><i></i><i></i><i></i><i></i></div>
@@ -407,6 +413,96 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;co
   </div>
   <div class="foot"><span>AURORA</span><span>•</span><span>skyline.web.id</span></div>
 </div>
+<audio id="ap" preload="auto"></audio>
+<script>
+var WS_URL = "${escapeHtmlJs(wsUrl)}";
+var TOTAL = ${JSON.stringify(String(duration || ''))};
+var ap = document.getElementById('ap');
+var st = document.getElementById('pstat');
+var fill = document.getElementById('barFill');
+var knob = document.getElementById('knob');
+var tCur = document.getElementById('tCur');
+var btn = document.getElementById('playBtn');
+var ico = document.getElementById('icoPlay');
+var ws = null, chunks = [], bytes = 0, blobUrl = '', expect = 0;
+
+function say(t, err) {
+  st.textContent = t;
+  st.style.color = err ? '#ff8a8a' : (t.indexOf('Memutar') === 0 ? '#3ddc84' : '#9a9a9a');
+}
+function fmt(s) {
+  if (!isFinite(s)) return '0:00';
+  var m = Math.floor(s / 60), x = Math.floor(s % 60);
+  return m + ':' + (x < 10 ? '0' + x : x);
+}
+function setIcon(playing) {
+  ico.innerHTML = playing
+    ? '<path d="M6 4h4v16H6zM14 4h4v16h-4z"/>'
+    : '<path d="M8 5v14l11-7z"/>';
+}
+function loadWs() {
+  if (!WS_URL) { say('URL WebSocket kosong', true); return; }
+  if (ws || blobUrl) return;
+  say('Menyiapkan audio lewat WebSocket…');
+  try { ws = new WebSocket(WS_URL); } catch (e) { say('WebSocket diblok: ' + (e && e.name), true); return; }
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = function () { say('Tersambung — mengunduh…'); };
+  ws.onmessage = function (ev) {
+    if (typeof ev.data === 'string') {
+      try {
+        var m = JSON.parse(ev.data);
+        if (m.type === 'start') { expect = m.length || 0; say('Mengunduh… 0%'); }
+        if (m.type === 'end') finish();
+        if (m.type === 'error') say('Server: ' + (m.message || '?'), true);
+      } catch (e) {}
+      return;
+    }
+    chunks.push(ev.data);
+    bytes += ev.data.byteLength || 0;
+    if (expect) say('Mengunduh… ' + Math.min(99, Math.round((bytes / expect) * 100)) + '%');
+    else say('Mengunduh… ' + Math.round(bytes / 1024) + ' KB');
+  };
+  ws.onerror = function () { say('WebSocket gagal (diblok)', true); };
+  ws.onclose = function (e) { if (!blobUrl && bytes) finish(); };
+}
+function finish() {
+  if (blobUrl) return;
+  if (!bytes) { say('Tidak ada data', true); return; }
+  var blob = new Blob(chunks, { type: 'audio/mpeg' });
+  chunks = [];
+  blobUrl = URL.createObjectURL(blob);
+  ap.src = blobUrl;
+  ap.load();
+  say('Siap — ketuk play');
+}
+function togglePlay() {
+  if (!blobUrl) { loadWs(); return; }
+  if (ap.paused) {
+    var p = ap.play();
+    if (p && p.then) {
+      p.then(function () { say('Memutar'); setIcon(true); })
+       .catch(function (e) { say('Ditolak webview: ' + ((e && e.name) || '?'), true); });
+    }
+  } else {
+    ap.pause();
+    setIcon(false);
+    say('Dijeda');
+  }
+}
+ap.addEventListener('timeupdate', function () {
+  var d = ap.duration || 0;
+  if (d) {
+    var pct = Math.min(100, (ap.currentTime / d) * 100);
+    fill.style.width = pct + '%';
+    knob.style.left = pct + '%';
+    tCur.textContent = fmt(ap.currentTime);
+  }
+});
+ap.addEventListener('error', function () {
+  say('Media error ' + (ap.error ? ap.error.code : '?'), true);
+});
+ap.addEventListener('ended', function () { setIcon(false); say('Selesai'); fill.style.width = '0%'; knob.style.left = '0%'; });
+</script>
 </body></html>`;
 }
 
