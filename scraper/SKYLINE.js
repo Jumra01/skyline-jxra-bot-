@@ -748,7 +748,7 @@ export async function superHd({ image, timeout = 180000, retries = 1 } = {}) {
  */
 export const AI_CHAT_PATH = '/api/ai/aichat-skyline';
 
-export async function aiChatSkyline({ message, history = [], system = '', timeoutMs = 30000 } = {}) {
+export async function aiChatSkyline({ message, history = [], system = '', timeoutMs = 30000, retries = 2 } = {}) {
   const teks = String(message || '').trim();
   if (!teks) throw new SkylineApiError('Pesan kosong', 400);
 
@@ -766,6 +766,32 @@ export async function aiChatSkyline({ message, history = [], system = '', timeou
   }
   if (system) body.system = String(system).slice(0, 3000);
 
+  /* 503/429 "ramai" itu sementara — dulu Ella v1 nyerah di percobaan pertama
+   * (dan tiga kali ramai malah maticbreaker 5 menit). Sekarang diulang sebentar
+   * dengan jeda naik, dan "ramai" tidak dihitung ke breaker (sama kayak Gemma). */
+  const maxTries = Math.max(1, Math.min(5, (Number(retries) || 0) + 1));
+  let lastErr = null;
+
+  for (let i = 1; i <= maxTries; i += 1) {
+    try {
+      return await aiChatOnce(body, website, timeoutMs);
+    } catch (err) {
+      lastErr = err;
+      const status = Number(err?.status) || 0;
+      const busy = BUSY_STATUS.has(status) || /busy|try again later|overload|ramai/i.test(String(err?.message || ''));
+      const retryable = busy
+        || RETRY_STATUS.has(status)
+        || (status === 0 && /timeout|konek/i.test(String(err?.message || '')));
+      if (!retryable || i >= maxTries) throw err;
+      const jeda = Math.min(6000, busy ? 2000 * i : 700 * i) + Math.floor(Math.random() * 300);
+      await sleep(jeda);
+    }
+  }
+  throw lastErr || new SkylineApiError('Ella gagal nyambung', 0);
+}
+
+/** Satu percobaan request ke /api/ai/aichat-skyline (otak Ella v1). */
+async function aiChatOnce(body, website, timeoutMs) {
   let res;
   try {
     res = await skylineSchedule(() =>
@@ -792,12 +818,14 @@ export async function aiChatSkyline({ message, history = [], system = '', timeou
     /* ditangani di bawah */
   }
 
+  /* "Ramai" (429/503) bukan rusak → jangan bikin breaker muter 5 menit. */
+  const ramai = BUSY_STATUS.has(res.status);
   if (!res.ok || !json) {
-    breakerFail('aichat');
+    if (!ramai) breakerFail('aichat');
     throw new SkylineApiError(parseApiError(text) || `HTTP ${res.status}`, res.status, text);
   }
   if (json.status === false) {
-    breakerFail('aichat');
+    if (!ramai) breakerFail('aichat');
     throw new SkylineApiError(parseApiError(text) || 'API Skyline nolak request', res.status, text);
   }
 
@@ -998,10 +1026,11 @@ export async function gemmaChat({ message, history = [], system = '', timeoutMs 
       // Percobaan berikutnya = terakhir? Pakai payload ringan (khusus "ramai").
       liteNext = busy && (i >= maxAttempts - 1 || maxAttempts <= 2);
 
-      // Jeda eksponensial + jitter: 1,5s → 3s → 6s (maks 6s). Cukup sabar
-      // nunggu antrean lega, tapi ga jadi badai request.
-      const base = busy ? 1500 * 2 ** (i - 1) : 700 * i;
-      const jeda = Math.min(6000, base) + Math.floor(Math.random() * 400);
+      // Jeda eksponensial + jitter. "Ramai" biasanya bertahan menit (antrean
+      // upstream), jadi jeda busy naik sampai 30 dtk: 2s → 6s → 18s → 30s.
+      // Gangguan lain (502/504) tetap singkat.
+      const base = busy ? 2000 * 3 ** (i - 1) : 700 * i;
+      const jeda = Math.min(busy ? 30000 : 6000, base) + Math.floor(Math.random() * 400);
 
       // Masih ada chat lain di antrean? Kasih giliran dulu — jangan numpuk
       // retry di atas request yang belum kelar.

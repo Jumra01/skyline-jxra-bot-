@@ -137,7 +137,7 @@ export default {
     memory: true,           // inget fakta penting tentang user
     maxHistory: 4,          // pesan terakhir yang dikirim ke API (maks 10) — kecil = prompt ringan
     timeoutMs: 180_000,     // batas tunggu balasan (ms) — 0 = tanpa batas; Gemma bisa 10-25 dtk
-    retries: 2,             // ulang otomatis kalau "AI is busy" (503/429) — total 3 percobaan (backoff 1,5-6s)
+    retries: 4,             // ulang otomatis kalau "AI is busy" (503/429) — total 5 percobaan (backoff 2s→30s, deadline 180s di bawah)
     queueMax: 2,            // kalau antrean Gemma > ini, user langsung dikasih tau (biar ga nunggu 2 menit)
     warmupMin: 25,          // ping ringan tiap N menit biar upstream ga cold start (0 = mati)
     systemPrompt: '',       // instruksi tambahan (opsional)

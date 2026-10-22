@@ -325,7 +325,7 @@ async function runChat(ctx, text, { mode = 'onlychat', image = null } = {}) {
   let reply = ''
   let tookMs = 0
   try {
-    const r = await aiChatSkyline({ message: text, history, system, timeoutMs: conf.timeoutMs })
+    const r = await aiChatSkyline({ message: text, history, system, timeoutMs: conf.timeoutMs, retries: 2 })
     reply = r.reply
     tookMs = r.tookMs
   } catch (err) {

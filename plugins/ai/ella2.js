@@ -198,7 +198,7 @@ function cfg() {
     maxHistory: num(c.maxHistory, 2, HISTORY_MAX, 8),
     timeoutMs: num(c.timeoutMs, 5000, 180_000, 60_000),
     systemPrompt: String(c.systemPrompt || '').trim(),
-    retries: num(c.retries, 0, 3, 2),
+    retries: num(c.retries, 0, 10, 2),
     queueMax: num(c.queueMax, 0, 10, 2),
     warmupMin: num(c.warmupMin, 0, 240, 25),
     exec: String(c.exec ?? 'admin').toLowerCase(),
