@@ -414,6 +414,63 @@ async function downloadAudioViaSearch(videoUrl, { timeoutMs = 180000, maxBytes =
   throw new Error(`gagal ambil audio — ${tried.length} jalur dicoba: ${tried.join(' | ')}`);
 }
 
+/** Satu hasil pencarian → bentuk `info` yang dipakai handler. */
+function searchResultToInfo(v) {
+  return {
+    url: v.url,
+    title: v.title || 'Unknown',
+    artist: v.artist || v.channel || 'skyline-JXRA Stream',
+    thumbnail: v.thumbnail || '',
+    duration: v.duration || ''
+  };
+}
+
+/**
+ * Pilih KANDIDAT dari hasil pencarian — bukan cuma `results[0]`.
+ *
+ * Kenapa perlu: "lagu biasa (Teramini, Dynasti) bisa, DJ Onty-Onty nggak".
+ * Hasil teratas buat query DJ/remix sering berupa **video LIVE** (radio DJ
+ * 24 jam) atau upload yang dibatasi pemiliknya; endpoint ytdl memang gagal
+ * buat video begitu, padahal reupload lagu yang SAMA ada di hasil ke-2/ke-3
+ * dan normal. Kode lama langsung ambil hasil pertama, jadi satu video
+ * bermasalah = command gagal total (kadang berhasil cuma kalau urutan hasil
+ * pencarian kebetulan beda).
+ *
+ * Aturan:
+ *  - buang `live` (audio live stream gak bisa diunduh sebagai file)
+ *  - audio: buang durasi >45 menit (hampir pasti lewat batas 60MB server),
+ *    tapi disimpan sebagai cadangan terakhir kalau memang cuma itu hasilnya
+ *  - sisanya dipakai berurutan, maksimal `max` kandidat
+ */
+function pickSearchCandidates(results, { forAudio = true, max = 4 } = {}) {
+  const list = (Array.isArray(results) ? results : []).filter((v) => v && v.url);
+  if (!list.length) return [];
+  const skipped = [];
+  const keep = [];
+  const spare = [];
+  for (const v of list) {
+    const secs = Number(v.seconds) || 0;
+    const title = String(v.title || '');
+    /* API kadang gak ngisi flag `live` → deteksi dari judul juga (radio DJ
+     * 24 jam biasanya nulis LIVE / 24 JAM / RADIO di judulnya). */
+    const looksLive = v.live || /(^|[^\p{L}])(live|radio|24\s*jam)([^\p{L}]|$)/iu.test(title);
+    if (looksLive) {
+      skipped.push(`live "${title.slice(0, 40)}"`);
+      continue;
+    }
+    if (forAudio && secs > 45 * 60) { spare.push(v); continue; }
+    keep.push(v);
+  }
+  const picked = (keep.length ? keep : spare.length ? spare : list).slice(0, max);
+  if (skipped.length) {
+    logger.info(`[Aurora] search: ${skipped.length} hasil live dilewati — ${skipped.slice(0, 3).join(' | ')}`);
+  }
+  if (!keep.length && spare.length) {
+    logger.warn('[Aurora] search: semua hasil bukan live tapi kepanjangan (>45 menit) — dicoba juga sebagai cadangan');
+  }
+  return picked.map(searchResultToInfo);
+}
+
 /** "3:45" / "1:02:03" → detik. Null kalau gak kebaca. */
 function durToSeconds(dur) {
   const parts = String(dur || '').split(':').map((n) => parseInt(n, 10));
@@ -501,29 +558,56 @@ async function sendPlayerButton(ctx, info, clean, duration) {
   return true;
 }
 
-async function sendAuroraAudio(ctx, info, format) {
+async function sendAuroraAudio(ctx, infos, format) {
   const t0 = Date.now();
+  const candidates = (Array.isArray(infos) ? infos : [infos]).filter((i) => i?.url);
   let audio = null;
-  let lastErr = null;
+  let info = candidates[0] || null;
+  const fails = [];
+  /* Anggaran waktu TOTAL buat seluruh kandidat (bukan per request): endpoint
+   * skyline bisa nyiapin file 10-30s, tapi kalau semua kandidat bermasalah
+   * command jangan menggantung belasan menit. */
+  const deadline = Date.now() + 240_000;
+  const leftMs = () => Math.max(20_000, deadline - Date.now());
 
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    try {
-      logger.info(`[Aurora] audio: unduh (percobaan ${attempt}/2) "${String(info.title || '').slice(0, 70)}" url=${String(info.url || '').slice(0, 60)}`);
-      audio = await downloadAudioViaSearch(info.url);
+  /* Satu video gagal TIDAK berarti lagunya gak ada: coba kandidat
+   * pencarian berikutnya (reupload lagu yang sama). Kandidat pertama dicoba
+   * 2× (gangguan jaringan sesaat), sisanya sekali — biar command gak
+   * menggantung lama kalau semua memang bermasalah. */
+  for (let i = 0; i < candidates.length && !audio; i += 1) {
+    const cand = candidates[i];
+    const tries = i === 0 ? 2 : 1;
+    for (let attempt = 1; attempt <= tries; attempt += 1) {
+      try {
+        logger.info(
+          `[Aurora] audio: unduh kandidat ${i + 1}/${candidates.length} (percobaan ${attempt}) ` +
+          `"${String(cand.title || '').slice(0, 70)}" url=${String(cand.url || '').slice(0, 60)}`
+        );
+        audio = await downloadAudioViaSearch(cand.url, { timeoutMs: leftMs() });
+        info = cand;
+        if (i > 0) {
+          logger.info(`[Aurora] audio: kandidat ${i + 1} berhasil — "${String(cand.title || '').slice(0, 60)}"`);
+        }
+        break;
+      } catch (err) {
+        fails.push(`#${i + 1} ${String(err?.message || err).slice(0, 260)}`);
+        logger.warn(
+          `[Aurora] audio: kandidat ${i + 1}/${candidates.length} GAGAL (percobaan ${attempt}/${tries}) — ` +
+          `status=${err?.status || 0} • pesan=${String(err?.message || err).slice(0, 500)}`
+        );
+        if (attempt < tries) await new Promise((r) => setTimeout(r, 1500));
+      }
+    }
+    if (Date.now() >= deadline) {
+      logger.warn('[Aurora] audio: anggaran waktu 240s habis — berhenti nyoba kandidat');
       break;
-    } catch (err) {
-      lastErr = err;
-      logger.warn(
-        `[Aurora] audio: GAGAL (percobaan ${attempt}/2) — status=${err?.status || 0} • ` +
-        `pesan=${String(err?.message || err).slice(0, 700)}`
-      );
-      if (attempt < 2) await new Promise((r) => setTimeout(r, 1500));
     }
   }
   if (!audio) {
+    const lastErr = fails[fails.length - 1] || '';
     throw new Error(
-      `Gagal unduh audio dari skyline${lastErr?.status ? ` (HTTP ${lastErr.status})` : ''}: ` +
-      String(lastErr?.message || lastErr || 'tanpa detail').slice(0, 600)
+      `Gagal unduh audio dari skyline (${candidates.length} kandidat dicoba)${fails.length > 1 ? `: ${fails.join(' | ')}` : `: ${lastErr}`}` +
+      '\nLagu DJ/remix yang cuma ada versi live sering gak bisa diunduh — coba kirim link YouTube-nya langsung: `.aurora <url>`'
     );
   }
 
@@ -2575,49 +2659,61 @@ async function handler(ctx) {
     await ctx.react('🎧');
 
     try {
-      let info;
+      let candidates = [];
       if (/^https?:\/\//i.test(query)) {
-        info = { url: query, title: 'Aurora Stream', artist: 'skyline-JXRA Stream', thumbnail: '' };
+        candidates = [{
+          url: query, title: 'Aurora Stream', artist: 'skyline-JXRA Stream',
+          thumbnail: '', duration: ''
+        }];
       } else if (skylineReady()) {
         try {
           const results = await skylineSearch(query, 8);
-          const v = results[0];
-          if (v?.url) {
-            info = {
-              url: v.url,
-              title: v.title || 'Unknown',
-              artist: v.artist || v.channel || 'skyline-JXRA Stream',
-              thumbnail: v.thumbnail || '',
-              duration: v.duration || ''
-            };
+          candidates = pickSearchCandidates(results, { forAudio: AUDIO_FORMAT.test(format) });
+          if (!candidates.length) {
+            logger.warn(`[Aurora] search "${query.slice(0, 60)}" → ${results.length} hasil, 0 kandidat valid`);
           }
         } catch (err) {
           logger.warn('[Aurora] Skyline search GAGAL — HTTP ' + (err?.status || 0) + ' • ' + (err?.message || err));
         }
       }
-      if (!info?.url) {
+      if (!candidates.length) {
         // Tanpa API cadangan: kalau skyline ga bisa, ya error jujur.
         throw new Error('Lagu/video gak ketemu lewat skyline.web.id (search kosong)');
       }
+      const info = candidates[0];
 
-      // AUDIO → jalur `.yta`: unduh lewat skyline lalu kirim audio WhatsApp asli.
+      // AUDIO → unduh lewat skyline lalu kirim kartu player berisi audio.
       if (AUDIO_FORMAT.test(format)) {
-        await sendAuroraAudio(ctx, info, format);
+        await sendAuroraAudio(ctx, candidates, format);
         await ctx.react('🎛️');
         return;
       }
 
-      const media = await resolveSource(info, format);
-      if (!media?.url) throw new Error('Link final gak dapet');
+      /* VIDEO: kandidat pertama bisa gagal probe (video live/restricted) —
+       * coba kandidat berikutnya sebelum nyerah. */
+      let media = null;
+      let videoInfo = info;
+      const vFails = [];
+      for (const cand of candidates.slice(0, 3)) {
+        try {
+          media = await resolveSource(cand, format);
+          videoInfo = cand;
+          break;
+        } catch (err) {
+          vFails.push(`"${String(cand.title || '').slice(0, 40)}": ${String(err?.message || err).slice(0, 160)}`);
+          logger.warn(`[Aurora] video: kandidat gagal — ${String(err?.message || err).slice(0, 300)}`);
+        }
+      }
+      if (!media?.url) throw new Error('Link final gak dapet' + (vFails.length ? ` — ${vFails.join(' | ')}` : ''));
 
-      const finalTitle = media.title || info.title || 'Unknown Video';
-      const finalChannel = info.artist || 'Unknown Channel';
+      const finalTitle = media.title || videoInfo.title || 'Unknown Video';
+      const finalChannel = videoInfo.artist || 'Unknown Channel';
       const finalDuration = media.duration || '';
       // Thumbnail bisa dari sumber mana saja yang hidup — coba dua-duanya
       // paralel biar gak nambah waktu tunggu.
       const [thumbA, thumbB] = await Promise.all([
         thumbDataUri(media.thumbnail),
-        thumbDataUri(info.thumbnail)
+        thumbDataUri(videoInfo.thumbnail)
       ]);
       const thumbnailb64 = thumbA || thumbB;
 
@@ -2656,9 +2752,14 @@ async function handler(ctx) {
         `pesan=${String(e?.message || e).slice(0, 900)}`
       );
       await ctx.react('❎');
-      ctx.reply('*Aurora Error:* ' + String(e.message || e).slice(0, 250));
+      /* Error multi-baris (rincian tiap kandidat) jangan dipotong di tengah —
+       * baris pertama buat user, sisanya sudah ada di log. */
+      const lines = String(e?.message || e).split('\n');
+      const head = lines[0].slice(0, 200);
+      const hint = lines[1] ? '\n' + lines[1].slice(0, 200) : '';
+      ctx.reply('*Aurora Error:* ' + head + hint);
     }
   }
 
 export { pluginConfig as config, handler };
-export const _internals = { resolveSource, probeMedia, isIpLocked, hostOf, buildHtml, buildCoverHtml, buildSpotifyHtml, thumbDataUri, payloadB64Len, buildLyricPanelHtml, prepareEmbeddedAudio, compressOpus, durToSeconds, audioEndpoint, withoutParam, redactUrl, fetchAudioBinary, downloadAudioViaSearch };
+export const _internals = { resolveSource, probeMedia, isIpLocked, hostOf, buildHtml, buildCoverHtml, buildSpotifyHtml, thumbDataUri, payloadB64Len, buildLyricPanelHtml, prepareEmbeddedAudio, compressOpus, durToSeconds, audioEndpoint, withoutParam, redactUrl, fetchAudioBinary, downloadAudioViaSearch, pickSearchCandidates, searchResultToInfo };
