@@ -364,9 +364,12 @@ async function resolveSource(info, format) {
 }
 
 /**
- * AUDIO: cukup pakai hasil SEARCH skyline + endpoint `/api/tools/ytdl/audio`.
- * Tanpa `ytInfo()` — server yang resolve audio pas endpoint itu dipanggil,
- * jadi lebih cepat & satu langkah lebih sedikit yang bisa gagal.
+ * AUDIO: endpoint `/api/tools/ytdl/audio` adalah jalur tercepat, TAPI docs
+ * skyline bilang jalur resminya = `GET /api/tools/ytdl` dulu, lalu fetch
+ * `audio.url` yang sudah membawa apikey. Kalau server membalas halaman HTML
+ * (pernah kejadian: HTTP 200 `text/html`), rantai di bawah otomatis nyoba
+ * beberapa bentuk URL lalu jatuh ke alur docs — jadi satu endpoint bermasalah
+ * nggak bikin `.aurora` mati.
  */
 /** URL endpoint audio skyline buat video tertentu (dipakai kartu & unduhan). */
 function audioEndpoint(videoUrl) {
@@ -376,32 +379,123 @@ function audioEndpoint(videoUrl) {
     `&apikey=${encodeURIComponent(apikey)}&mode=stream`;
 }
 
-async function downloadAudioViaSearch(videoUrl, { timeoutMs = 180000, maxBytes = 60 * 1024 * 1024 } = {}) {
-  const link = audioEndpoint(videoUrl);
+/** URL yang sama dengan satu query param dibuang (`mode=stream` dst). */
+function withoutParam(url, name) {
+  try {
+    const u = new URL(String(url || ''));
+    u.searchParams.delete(name);
+    return u.href;
+  } catch { return url; }
+}
+
+/** Jangan pernah bocorin apikey ke log/chat — sensor nilai query `apikey`. */
+function redactUrl(url) {
+  return String(url || '').replace(/([?&](?:api)?key=)[^&#]*/gi, '$1***');
+}
+
+/** Ambil + validasi satu URL audio. Error-nya nyebut judul halaman + URL final. */
+async function fetchAudioBinary(link, { timeoutMs = 180000, maxBytes = 60 * 1024 * 1024, label = 'audio' } = {}) {
   const host = hostOf(link);
   const t0 = Date.now();
   let res;
   try {
-    res = await fetch(link, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(timeoutMs) });
+    res = await fetch(link, {
+      headers: { 'User-Agent': UA, Accept: 'audio/*,application/octet-stream;q=0.9,*/*;q=0.5' },
+      signal: AbortSignal.timeout(timeoutMs)
+    });
   } catch (err) {
-    throw new Error(`koneksi ke ${host} gagal (${err?.name || 'Error'}: ${err?.message || err})`);
+    throw new Error(`[${label}] koneksi ke ${host} gagal (${err?.name || 'Error'}: ${err?.message || err})`);
   }
   const type = (res.headers.get('content-type') || '').toLowerCase();
+  const finalUrl = redactUrl(res.url || link);
+  /* Body HTML itu yang bikin bingung: ambil judul + potongan awal biar
+   * ketahuan halaman apa yang dibalikin (challenge / landing / error). */
+  const readSnippet = async (n) => {
+    try {
+      const body = (await res.text()).slice(0, 3000);
+      const title = ((body.match(/<title[^>]*>([^<]{1,140})/i) || [])[1] || '').trim();
+      return { snippet: body.slice(0, n).replace(/\s+/g, ' '), title };
+    } catch { return { snippet: '', title: '' }; }
+  };
   if (!res.ok) {
-    let body = '';
-    try { body = (await res.text()).slice(0, 160).replace(/\s+/g, ' '); } catch { /* ignore */ }
-    throw Object.assign(new Error(`HTTP ${res.status} • ${type || '-'} • body="${body}"`), { status: res.status });
+    const { snippet, title } = await readSnippet(200);
+    throw Object.assign(
+      new Error(`[${label}] HTTP ${res.status} • ${type || '-'}${title ? ` • title="${title}"` : ''} • final=${finalUrl} • body="${snippet}"`),
+      { status: res.status }
+    );
   }
   if (!/^audio\//.test(type)) {
-    let body = '';
-    try { body = (await res.text()).slice(0, 160).replace(/\s+/g, ' '); } catch { /* ignore */ }
-    throw Object.assign(new Error(`bukan audio (content-type ${type || '-'}) • body="${body}"`), { status: res.status });
+    const { snippet, title } = await readSnippet(200);
+    throw Object.assign(
+      new Error(`[${label}] bukan audio (content-type ${type || '-'})${title ? ` • title="${title}"` : ''} • final=${finalUrl} • body="${snippet}"`),
+      { status: res.status }
+    );
+  }
+  const len = Number(res.headers.get('content-length') || 0);
+  if (len && len > maxBytes) {
+    throw new Error(`[${label}] audio kegedean (${(len / 1048576).toFixed(1)}MB > ${(maxBytes / 1048576).toFixed(0)}MB)`);
   }
   const buf = Buffer.from(await res.arrayBuffer());
-  if (!buf.length) throw new Error('audio kosong (0 byte)');
-  if (buf.length > maxBytes) throw new Error(`audio kegedean (${(buf.length / 1048576).toFixed(1)}MB > ${(maxBytes / 1048576).toFixed(0)}MB)`);
-  logger.info(`[Aurora] audio: ${type} • ${(buf.length / 1048576).toFixed(2)}MB • ${((Date.now() - t0) / 1000).toFixed(1)}s • host=${host}`);
-  return { buffer: buf, mimetype: type.split(';')[0].trim() || 'audio/mpeg', ext: /mp4|m4a/.test(type) ? 'm4a' : 'mp3' };
+  if (!buf.length) throw new Error(`[${label}] audio kosong (0 byte)`);
+  if (buf.length > maxBytes) throw new Error(`[${label}] audio kegedean (${(buf.length / 1048576).toFixed(1)}MB > ${(maxBytes / 1048576).toFixed(0)}MB)`);
+  logger.info(
+    `[Aurora] audio: ${type} • ${(buf.length / 1048576).toFixed(2)}MB • ` +
+    `${((Date.now() - t0) / 1000).toFixed(1)}s • host=${host} • jalur=${label}`
+  );
+  return {
+    buffer: buf,
+    mimetype: type.split(';')[0].trim() || 'audio/mpeg',
+    ext: /mp4|m4a/.test(type) ? 'm4a' : 'mp3',
+    via: label,
+    finalUrl
+  };
+}
+
+/**
+ * Unduh audio dengan rantai fallback:
+ *   1. `/api/tools/ytdl/audio?…&mode=stream` (tercepat)
+ *   2. URL yang sama TANPA `mode` (param ekstra kadang bikin server balas HTML)
+ *   3. alur docs: `/api/tools/ytdl` → `audio.url` (jalur `.play`/`.yta`)
+ * Semua kegagalan dikumpulin → pesan error nyebut tiap jalur + sebabnya.
+ */
+async function downloadAudioViaSearch(videoUrl, { timeoutMs = 180000, maxBytes = 60 * 1024 * 1024 } = {}) {
+  const tried = [];
+  /* Satu budget waktu buat SELURUH rantai (bukan per request) — kalau endpoint
+   * pertama menggantung, jalur berikutnya tetap dapat sisa waktu, bukan
+   * numpuk 3× timeout. */
+  const deadline = Date.now() + timeoutMs;
+  const left = () => Math.max(8000, deadline - Date.now());
+  const attempt = async (url, label) => {
+    try {
+      return await fetchAudioBinary(url, { timeoutMs: left(), maxBytes, label });
+    } catch (err) {
+      tried.push(String(err?.message || err).slice(0, 400));
+      throw err;
+    }
+  };
+
+  const link = audioEndpoint(videoUrl);
+
+  // 1) endpoint langsung (mode=stream)
+  try { return await attempt(link, 'ytdl/audio'); } catch { /* lanjut */ }
+
+  // 2) endpoint langsung tanpa `mode`
+  try { return await attempt(withoutParam(link, 'mode'), 'ytdl/audio tanpa mode'); } catch { /* lanjut */ }
+
+  // 3) alur resmi docs → audio.url (link sudah membawa apikey)
+  let meta = null;
+  try {
+    meta = await skylineInfo(videoUrl);
+  } catch (err) {
+    tried.push(`[info] ${String(err?.message || err).slice(0, 200)}`);
+  }
+  if (meta?.audioUrl) {
+    try { return await attempt(meta.audioUrl, 'audio.url'); } catch { /* lanjut */ }
+  } else if (meta) {
+    tried.push('[audio.url] kosong di response /api/tools/ytdl');
+  }
+
+  throw new Error(`gagal ambil audio — ${tried.length} jalur dicoba: ${tried.join(' | ')}`);
 }
 
 /** "3:45" / "1:02:03" → detik. Null kalau gak kebaca. */
@@ -498,14 +592,14 @@ async function sendAuroraAudio(ctx, info, format) {
 
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
-      logger.info(`[Aurora] audio: unduh via /api/tools/ytdl/audio (percobaan ${attempt}/2) "${String(info.title || '').slice(0, 70)}"`);
+      logger.info(`[Aurora] audio: unduh (percobaan ${attempt}/2) "${String(info.title || '').slice(0, 70)}" url=${String(info.url || '').slice(0, 60)}`);
       audio = await downloadAudioViaSearch(info.url);
       break;
     } catch (err) {
       lastErr = err;
       logger.warn(
         `[Aurora] audio: GAGAL (percobaan ${attempt}/2) — status=${err?.status || 0} • ` +
-        `pesan=${String(err?.message || err).slice(0, 180)}`
+        `pesan=${String(err?.message || err).slice(0, 700)}`
       );
       if (attempt < 2) await new Promise((r) => setTimeout(r, 1500));
     }
@@ -513,7 +607,7 @@ async function sendAuroraAudio(ctx, info, format) {
   if (!audio) {
     throw new Error(
       `Gagal unduh audio dari skyline${lastErr?.status ? ` (HTTP ${lastErr.status})` : ''}: ` +
-      String(lastErr?.message || lastErr || 'tanpa detail').slice(0, 170)
+      String(lastErr?.message || lastErr || 'tanpa detail').slice(0, 600)
     );
   }
 
@@ -2700,7 +2794,7 @@ async function handler(ctx) {
     } catch (e) {
       logger.error(
         `[Aurora] GAGAL — ${e?.name || 'Error'} • status=${e?.status || 0} • kode=${e?.code || '-'} • ` +
-        `pesan=${String(e?.message || e).slice(0, 200)}`
+        `pesan=${String(e?.message || e).slice(0, 900)}`
       );
       await ctx.react('❎');
       ctx.reply('*Aurora Error:* ' + String(e.message || e).slice(0, 250));
@@ -2708,4 +2802,4 @@ async function handler(ctx) {
   }
 
 export { pluginConfig as config, handler };
-export const _internals = { resolveSource, probeMedia, isIpLocked, hostOf, buildHtml, buildCoverHtml, buildSpotifyHtml, thumbDataUri, payloadB64Len, buildLyricPanelHtml, prepareEmbeddedAudio, compressOpus, durToSeconds, vnBitrate, vnChannels, compressVn, prepareVnAudio };
+export const _internals = { resolveSource, probeMedia, isIpLocked, hostOf, buildHtml, buildCoverHtml, buildSpotifyHtml, thumbDataUri, payloadB64Len, buildLyricPanelHtml, prepareEmbeddedAudio, compressOpus, durToSeconds, vnBitrate, vnChannels, compressVn, prepareVnAudio, audioEndpoint, withoutParam, redactUrl, fetchAudioBinary, downloadAudioViaSearch };

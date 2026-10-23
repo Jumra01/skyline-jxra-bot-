@@ -448,7 +448,10 @@ export async function ytSearch(query, limit = 12) {
       const videoId = v.video_id || v.videoId || '';
       return {
         videoId,
-        url: v.url || (videoId ? `https://www.youtube.com/watch?v=${videoId}` : ''),
+        // Pakai URL kanonik dari videoId — kalau API balikin URL relatif
+        // (`/watch?v=…`) atau link share, endpoint audio bisa bingung dan
+        // malah balas halaman HTML. Fallback: absolutkan URL mentahnya.
+        url: videoId ? `https://www.youtube.com/watch?v=${videoId}` : absUrl(website, v.url),
         title: v.title || 'Tanpa judul',
         channel: v.channel || v.author || '-',
         artist: v.channel || v.author || '-',
