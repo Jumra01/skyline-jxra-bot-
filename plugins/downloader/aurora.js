@@ -781,6 +781,17 @@ async function sendAuroraAudio(ctx, infos, format, progress = null) {
   const leftMs = () => Math.max(20_000, deadline - Date.now());
   progress?.set(2, undefined, info?.title);
 
+  /* Input URL manual = judul placeholder ("Aurora Stream") → lirik & judul
+   * kartu ikut salah. Ambil metadata asli PARALEL dengan unduhan supaya
+   * tidak menambah waktu tunggu (di-await setelah audio dapat). */
+  const isPlaceholder = /^Aurora Stream$/i.test(String(info?.title || '').trim());
+  const metaP = isPlaceholder
+    ? skylineInfo(info.url).catch((err) => {
+        logger.warn(`[Aurora] meta: ytInfo gagal — ${String(err?.message || err).slice(0, 160)}`);
+        return null;
+      })
+    : null;
+
   /* Satu video gagal TIDAK berarti lagunya gak ada: coba kandidat
    * pencarian berikutnya (reupload lagu yang sama). Kandidat pertama dicoba
    * 2× (gangguan jaringan sesaat), sisanya sekali — biar command gak
@@ -843,6 +854,31 @@ async function sendAuroraAudio(ctx, infos, format, progress = null) {
       `Gagal unduh audio dari skyline (${candidates.length} kandidat dicoba)${fails.length > 1 ? `: ${fails.join(' | ')}` : `: ${lastErr}`}` +
       '\nLagu DJ/remix yang cuma ada versi live sering gak bisa diunduh — coba kirim link YouTube-nya langsung: `.aurora <url>`'
     );
+  }
+
+  /* Metadata asli buat input URL: kartu jadi pakai judul yang benar dan
+   * `wantLyrics` di bawah tidak lagi mati karena placeholder. Timeout 12 dtk
+   * — kalau ytInfo lambat, kartu tetap jalan dengan data seadanya. */
+  if (metaP) {
+    let meta = null;
+    try {
+      meta = await Promise.race([
+        metaP,
+        new Promise((resolve) => {
+          const tm = setTimeout(() => resolve(null), 12000);
+          tm.unref?.();
+        })
+      ]);
+    } catch { meta = null; }
+    if (meta?.title && meta.title !== 'YouTube') {
+      info = {
+        ...info,
+        title: meta.title,
+        duration: meta.duration && meta.duration !== '-:--' ? meta.duration : info.duration,
+        thumbnail: info.thumbnail || meta.thumbnail || ''
+      };
+      logger.info(`[Aurora] meta: input URL → "${String(info.title).slice(0, 70)}" • ${info.duration || '?'}`);
+    }
   }
 
   const clean = String(info.title || 'Audio').replace(/[\\/:*?"<>|]/g, '').slice(0, 90);
