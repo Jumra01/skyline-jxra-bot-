@@ -876,7 +876,13 @@ async function sendAuroraAudio(ctx, infos, format, progress = null) {
         }).then(
           // Lirik diambil UTUH (batas default 40 baris bikin kepotong) —
           // pengaman terakhirnya = guard payload di mkCard, jadi aman.
-          (ly) => capLyrics(ly, { maxLines: 250, maxLineLen: 120, maxText: 16000 }),
+          (ly) => {
+            if (!ly?.ok) {
+              logger.info(`[Aurora] audio: lirik tidak ada — ${ly?.reason || 'kosong'}`);
+              return null;
+            }
+            return capLyrics(ly, { maxLines: 250, maxLineLen: 120, maxText: 16000 });
+          },
           (err) => {
             logger.warn(`[Aurora] lirik: gagal — ${err?.name || 'Error'}: ${err?.message || err}`);
             return null;
@@ -906,7 +912,7 @@ async function sendAuroraAudio(ctx, infos, format, progress = null) {
       `[Aurora] audio: lirik siap — ${lyricCard.s ? `synced ${lyricCard.l.length} baris` : `plain ${String(lyricCard.p).split('\n').length} baris`}`
     );
   } else if (wantLyrics) {
-    logger.info('[Aurora] audio: lirik tidak ketemu — kartu dikirim tanpa panel lirik');
+    logger.debug('[Aurora] audio: kartu dikirim tanpa panel lirik (lihat log [Lyrics] di atas kenapa)');
   }
 
   // Warna aksen diambil dari cover lalu dinaikin saturasi/terangnya biar
