@@ -213,6 +213,11 @@ export default {
     // (±4000KB). Diisi angka (mis. '3000') = kalau lewat, lebih awal fallback
     // kompres opus.
     originalMaxKb: '',
+    // Tombol "Buka Player Web" (pesan terpisah). Default false: kalau audio
+    // sudah nempel di kartu (WebAudio), tombol ini bikin chat jadi 2-3 bubble.
+    // Otomatis tetap dikirim kalau kartu GAGAL memuat audio. Set true kalau
+    // mau tombolnya selalu ada.
+    playerButton: false,
   },
 
   emerald: {

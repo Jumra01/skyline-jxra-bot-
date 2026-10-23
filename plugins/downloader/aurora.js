@@ -583,6 +583,7 @@ function progressBar(step, total = 4) {
  */
 function createProgress(ctx, title = '') {
   const t0 = Date.now();
+  const isGroup = String(ctx.chat || '').endsWith('@g.us');
   let id = null;
   let step = 1;
   let note = AURORA_STAGES[0];
@@ -605,8 +606,14 @@ function createProgress(ctx, title = '') {
 
   const edit = () => {
     if (!id) return chain;
+    /* Di GRUP, edit pesan sendiri butuh `participant` = JID bot (pola sama
+     * `lib/album.js`). Tanpa itu WhatsApp bisa mengabaikan edit-nya. */
+    const participant = isGroup
+      ? (ctx.client.getCurrentMeJid?.() || ctx.client.getCurrentCredentials?.()?.meJid || undefined)
+      : undefined;
+    const editKey = participant ? { id, participant } : { id };
     chain = chain
-      .then(() => ctx.client.message.send(ctx.chat, { type: 'text', text: body() }, { editKey: { id } }))
+      .then(() => ctx.client.message.send(ctx.chat, { type: 'text', text: body() }, { editKey }))
       .catch((err) => {
         editFails += 1;
         const line = '[Aurora] progress: edit gagal — ' + String(err?.message || err).slice(0, 160);
@@ -788,6 +795,7 @@ async function sendAuroraAudio(ctx, infos, format, progress = null) {
   } catch { /* pakai default */ }
 
   let cardSent = false;
+  let embeddedAudio = false;
   let thumbB64 = '';
   progress?.set(4, 'mengirim kartu…');
   /* Cover di kartu lirik dibikin kecil (2,4KB) — markup panel lirik ikut
@@ -935,6 +943,7 @@ async function sendAuroraAudio(ctx, infos, format, progress = null) {
         sentOk = true;
       }
       cardSent = true;
+      embeddedAudio = Boolean(card.audioDataUri);
       logger.info(
         `[Aurora] audio: kartu cover terkirim • ${card.html.length}B • payload±${payloadB64Len(card.html)}B ` +
         `(playerCard=false${lyricCard ? ' +lirik' : ''}${card.audioDataUri ? ' +audio-embed' : ''})${card.shrink}`
@@ -960,13 +969,17 @@ async function sendAuroraAudio(ctx, infos, format, progress = null) {
 
   logger.info(`[Aurora] audio: selesai — kartu player ${cardSent ? 'terkirim' : 'GAGAL'} • total ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 
-  /* Opsi ke-2: tombol web player (in-app browser WhatsApp). Pelengkap —
-   * gagal = dilewati, kartu sudah terkirim di atas tetap utuh. */
-  try {
-    const ok = await sendPlayerButton(ctx, info, clean, duration);
-    if (ok) logger.info('[Aurora] audio: tombol player web terkirim');
-  } catch (err) {
-    logger.warn(`[Aurora] player: tombol gagal — ${err?.message || err}`);
+  /* Opsi ke-2: tombol web player (in-app browser WhatsApp). Cuma dikirim kalau
+   * kartu TIDAK punya audio embed (mis. embed gagal) atau user menyalakan
+   * `config.aurora.playerButton` — biar chat nggak jadi 2-3 bubble per lagu. */
+  const wantPlayerButton = !embeddedAudio || Boolean(config.aurora?.playerButton);
+  if (wantPlayerButton) {
+    try {
+      const ok = await sendPlayerButton(ctx, info, clean, duration);
+      if (ok) logger.info('[Aurora] audio: tombol player web terkirim');
+    } catch (err) {
+      logger.warn(`[Aurora] player: tombol gagal — ${err?.message || err}`);
+    }
   }
 }
 
@@ -2780,7 +2793,6 @@ async function handler(ctx) {
         }];
       } else if (skylineReady()) {
         try {
-          progress.set(1, 'mencari lagu di YouTube…');
           const results = await skylineSearch(query, 8);
           candidates = pickSearchCandidates(results, { forAudio: AUDIO_FORMAT.test(format) });
           if (!candidates.length) {
