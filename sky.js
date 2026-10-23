@@ -6,7 +6,6 @@
  * Jantung bot! Hati2 dlm mengubah file ini!
  */
 
-import { createMediaWsServer } from './src/ws/mediaServer.js'
 import { createStore, WaClient } from 'zapo-js'
 import { createSqliteStore } from '@zapo-js/store-sqlite'
 import { createMediaProcessor } from '@zapo-js/media-utils'
@@ -185,13 +184,6 @@ async function main() {
   setupErrorHandler()
   const loadResult = await loadFeatures()
   printInfo(loadResult)
-
-  createMediaWsServer({
-    port: Number(config.wsPort || 8090),
-    path: config.wsPath || '/wss/audio',
-    host: config.wsHost || '127.0.0.1',
-    token: config.wsToken || ''
-  })
 
   setupHotReload(client)
   setupConnection(client)

@@ -175,13 +175,6 @@ export default {
     ],
   },
 
-  /* ── MEDIA WORKER (WebSocket) ──────────────────────────── */
-  wsWorkerUrl: 'wss://audio.jhx.my.id/wss/audio',
-  wsPort: 8090,
-  wsPath: '/wss/audio',
-  wsHost: '127.0.0.1',       // biarin localhost (anti open-proxy/SSRF)
-  wsToken: '',               // opsional: ?token=...
-
   /* ── ANTI-SPAM & COOLDOWN ──────────────────────────────── */
   antiSpam: {
     enabled: true,
