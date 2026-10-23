@@ -801,10 +801,12 @@ async function sendAuroraAudio(ctx, infos, format, progress = null) {
   let embeddedAudio = false;
   let thumbB64 = '';
   progress?.set(4, 'mengirim kartu…');
-  /* Cover di kartu lirik dibikin kecil (2,4KB) — markup panel lirik ikut
-   * nambah payload. KECUALI ada audio embed: kartu masuk regime play2
-   * (payload ratusan KB terbukti render di HP), jadi cover boleh 9KB. */
-  try { thumbB64 = await thumbDataUri(info.thumbnail, lyricCard && !embed ? { maxB64: 2400 } : {}); } catch { /* tanpa cover */ }
+  /* Cover 504px pas buat kotak 252px CSS di layar retina. Kartu dengan audio
+   * embed punya jatah markup besar, jadi cover boleh tajam (±24KB) — dikurangi
+   * sedikit kalau ada panel lirik biar guard payload nggak memangkas lirik.
+   * Kartu kecil (tanpa embed) wajib hemat: ada lirik ±2,4KB, kosong ±6,4KB. */
+  const coverBudget = embed ? (lyricCard ? 18000 : 24000) : lyricCard ? 2400 : 6400;
+  try { thumbB64 = await thumbDataUri(info.thumbnail, { maxB64: coverBudget }); } catch { /* tanpa cover */ }
 
   if (config.aurora && config.aurora.playerCard) {
     /* Kartu player (opt-in). WebView kartu WA offline, tapi WebSocket JALAN —
@@ -1548,29 +1550,90 @@ body{margin:0;padding:14px;background:#04090b;font-family:Arial,Helvetica,sans-s
 </body></html>`;
 }
 
-async function thumbDataUri(url, { maxB64 = 9 * 1024 } = {}) {
-  if (!url) return '';
+/**
+ * Kandidat URL thumbnail, resolusi TERTINGGI dulu.
+ *
+ * Kenapa: thumbnail dari hasil pencarian sering versi kecil (`mqdefault` /
+ * `hqdefault` ≤480px), jadi walau budget payload longgar gambarnya tetap
+ * burem. YouTube nyimpen versi asli 1280x720 di `maxresdefault.jpg` — ambil
+ * itu dulu, baru turun ke `mqdefault` (16:9, selalu ada) dan terakhir URL asli
+ * dari API. ID video dibaca dari URL thumbnail maupun URL video.
+ */
+function thumbCandidates(url) {
+  const raw = String(url || '').trim();
+  if (!raw) return [];
+  const list = [];
+  const id =
+    raw.match(/[?&]v=([\w-]{6,})/)?.[1] ||
+    raw.match(/\/vi(?:_webp)?\/([\w-]{6,})\//)?.[1] ||
+    raw.match(/youtu\.be\/([\w-]{6,})/)?.[1] ||
+    raw.match(/\/embed\/([\w-]{6,})/)?.[1];
+  if (id) {
+    list.push(`https://i.ytimg.com/vi/${id}/maxresdefault.jpg`);
+    list.push(`https://i.ytimg.com/vi/${id}/mqdefault.jpg`);
+  }
+  list.push(raw);
+  return [...new Set(list)];
+}
+
+/** Unduh satu kandidat thumbnail; `minBytes` buang placeholder abu-abu 120x90. */
+async function fetchThumbRaw(url, minBytes = 0) {
   try {
     const r = await fetch(url, { signal: AbortSignal.timeout(10000) });
-    if (!r.ok) return '';
+    if (!r.ok) return null;
     const raw = Buffer.from(await r.arrayBuffer());
-    if (!raw.length) return '';
+    if (!raw.length || raw.length < minBytes) return null;
+    return raw;
+  } catch { return null; }
+}
+
+async function thumbDataUri(url, { maxB64 = 24000 } = {}) {
+  const urls = thumbCandidates(url);
+  if (!urls.length) return '';
+  /* Kandidat hasil upgrade WAJIB kelihatan seperti gambar beneran — video lama
+   * kadang balas `maxresdefault` berupa placeholder abu-abu ±1KB. Yang tetap
+   * diterima apa adanya cuma URL asli dari API (kandidat terakhir). */
+  let raw = null;
+  let used = '';
+  for (let i = 0; i < urls.length; i += 1) {
+    const candidate = urls[i];
+    const isFallback = i === urls.length - 1;
+    raw = await fetchThumbRaw(candidate, isFallback ? 0 : 4000);
+    if (raw) { used = candidate; break; }
+  }
+  if (!raw) return '';
+  try {
     /* Cover di-embed sebagai data URI, jadi tiap KB di sini ikut membengkak
-     * 4/3 di payload base64 — dan kartu rich yang kegedean bikin WA nampilin
-     * "pesan tidak didukung". Turunin resolusi bertahap sampai masuk budget
-     * (plan diperpanjang sampai 90px — thumbnail foto asli di 160px pun bisa
-     * masih ±3.5KB, gak muat di budget kecil kartu lirik). */
-    const plan = [[400, 62], [340, 58], [300, 54], [260, 50], [220, 46], [200, 44], [180, 44], [160, 42], [140, 40], [120, 38], [110, 36], [100, 34], [90, 32]];
+     * 4/3 di payload base64. Kartu dengan audio embed punya jatah markup besar
+     * (ratusan KB terbukti render), jadi cover boleh 504px — pas buat kotak
+     * cover 252px CSS di layar retina (±2x). Kartu kecil (tanpa embed) tetap
+     * dapat budget sempit dan turun bertahap sampai muat. */
+    const plan = [
+      [640, 74], [560, 72], [504, 70], [504, 64], [480, 62], [448, 62],
+      [448, 58], [416, 58], [400, 56], [360, 54], [320, 52], [288, 50],
+      [256, 48], [224, 44], [200, 42], [176, 40], [152, 38], [128, 36], [104, 32]
+    ];
     let last = raw;
     for (const [width, quality] of plan) {
       try {
-        last = await sharp(raw).resize({ width, withoutEnlargement: true }).jpeg({ quality }).toBuffer();
-      } catch { return 'data:image/jpeg;base64,' + last.toString('base64'); }
+        /* `sharpen` ringan bikin hasil downscale nggak terasa lembek di HP. */
+        last = await sharp(raw)
+          .resize({ width, withoutEnlargement: true, kernel: 'lanczos3' })
+          .sharpen({ sigma: 0.6, m1: 0.5, m2: 0.8 })
+          .jpeg({ quality, mozjpeg: true })
+          .toBuffer();
+      } catch { return 'data:image/jpeg;base64,' + raw.toString('base64'); }
       const b64 = last.toString('base64');
-      if (b64.length <= maxB64) return 'data:image/jpeg;base64,' + b64;
+      if (b64.length <= maxB64) {
+        logger.debug(
+          `[Aurora] thumb: ${used.includes('maxresdefault') ? 'maxres' : used.includes('mqdefault') ? 'mq' : 'asli'} → ` +
+          `${width}px q${quality} • ${Math.round(b64.length / 1024)}KB (budget ${Math.round(maxB64 / 1024)}KB)`
+        );
+        return 'data:image/jpeg;base64,' + b64;
+      }
     }
     return 'data:image/jpeg;base64,' + last.toString('base64');
-  } catch { return ''; }
+  } catch { return 'data:image/jpeg;base64,' + raw.toString('base64'); }
 }
 
 /** Escape buat teks/atribut HTML (judul bisa ada `&`, `<`, kutip). */
@@ -2844,8 +2907,8 @@ async function handler(ctx) {
       // Thumbnail bisa dari sumber mana saja yang hidup — coba dua-duanya
       // paralel biar gak nambah waktu tunggu.
       const [thumbA, thumbB] = await Promise.all([
-        thumbDataUri(media.thumbnail),
-        thumbDataUri(videoInfo.thumbnail)
+        thumbDataUri(media.thumbnail, { maxB64: 18000 }),
+        thumbDataUri(videoInfo.thumbnail, { maxB64: 18000 })
       ]);
       const thumbnailb64 = thumbA || thumbB;
 
@@ -2897,4 +2960,4 @@ async function handler(ctx) {
   }
 
 export { pluginConfig as config, handler };
-export const _internals = { resolveSource, probeMedia, isIpLocked, hostOf, buildHtml, buildCoverHtml, buildSpotifyHtml, thumbDataUri, payloadB64Len, buildLyricPanelHtml, prepareEmbeddedAudio, compressOpus, durToSeconds, audioEndpoint, withoutParam, redactUrl, fetchAudioBinary, downloadAudioViaSearch, pickSearchCandidates, searchResultToInfo, createProgress, progressBar };
+export const _internals = { resolveSource, probeMedia, isIpLocked, hostOf, buildHtml, buildCoverHtml, buildSpotifyHtml, thumbDataUri, thumbCandidates, payloadB64Len, buildLyricPanelHtml, prepareEmbeddedAudio, compressOpus, durToSeconds, audioEndpoint, withoutParam, redactUrl, fetchAudioBinary, downloadAudioViaSearch, pickSearchCandidates, searchResultToInfo, createProgress, progressBar };
