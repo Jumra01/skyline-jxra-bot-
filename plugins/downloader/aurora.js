@@ -593,6 +593,7 @@ function createProgress(ctx, title = '') {
    * terakhir selalu yang menang, dan `finish()` benar-benar menunggu edit
    * terakhir terkirim. */
   let chain = Promise.resolve();
+  let editFails = 0;
 
   const body = () => {
     const pct = Math.min(100, step * 25);
@@ -605,19 +606,13 @@ function createProgress(ctx, title = '') {
   const edit = () => {
     if (!id) return chain;
     chain = chain
-      .then(() => ctx.client.message.send(ctx.chat, {
-        botForwardedMessage: {
-          message: {
-            protocolMessage: {
-              key: { remoteJid: ctx.chat, fromMe: true, id },
-              type: 14,
-              editedMessage: { conversation: body() }
-            }
-          }
-        }
-      }))
+      .then(() => ctx.client.message.send(ctx.chat, { type: 'text', text: body() }, { editKey: { id } }))
       .catch((err) => {
-        logger.debug('[Aurora] progress: edit gagal — ' + String(err?.message || err).slice(0, 120));
+        editFails += 1;
+        const line = '[Aurora] progress: edit gagal — ' + String(err?.message || err).slice(0, 160);
+        // Kegagalan pertama wajib kelihatan di log panel (sisanya debug biar
+        // gak banjir) — kalau bar diam, dari sini ketahuan sebabnya.
+        if (editFails === 1) logger.warn(line); else logger.debug(line);
       });
     return chain;
   };
