@@ -213,13 +213,6 @@ export default {
     // (±4000KB). Diisi angka (mis. '3000') = kalau lewat, lebih awal fallback
     // kompres opus.
     originalMaxKb: '',
-    // Lagu dikirim sebagai VOICE NOTE (ptt) Opus, bukan ditanam di kartu:
-    // kartu tinggal visual kecil (~25KB, anti-479), lagu jadi pesan VN
-    // terpisah yang diputar native WhatsApp. Bitrate: '32k' | '48k' |
-    // '64k' (default) | '96k' — ≥48k otomatis STEREO, di bawahnya mono.
-    // Ukuran 4 menit: 64k ≈ 1,95MB • 48k ≈ 1,47MB • 32k ≈ 0,99MB.
-    // 'off' = matikan VN, balik ke audio yang di-embed di kartu.
-    vnBitrate: '64k',
   },
 
   emerald: {

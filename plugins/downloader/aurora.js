@@ -22,13 +22,9 @@ import { writeFile, readFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-/* AURORA v4 — audio lewat KARTU + VOICE NOTE:
- *   • audio  → unduh lewat endpoint skyline, lalu di-encode Opus dan dikirim
- *              sebagai VOICE NOTE (ptt) native WhatsApp — 4 menit ≈1,95MB
- *              @64k stereo, TANPA masuk payload kartu (anti-479).
- *   • kartu  → visual kecil (cover, judul, lirik) ±25KB. Kalau
- *              `aurora.vnBitrate = 'off'` (atau encode VN gagal), audio
- *              ditanam di kartu seperti mode lama (WebAudio play2).
+/* AURORA v4 — audio CUMA lewat kartu rich HTML (tanpa pesan audio native):
+ *   • audio  → unduh lewat endpoint skyline, kompres ke Opus (ffmpeg), lalu
+ *              ditanam sebagai data: URI di kartu → WebAudio yang muter.
  *   • video  → tetap kartu HTML, tapi link-nya dari skyline & wajib lolos probe.
  */
 
@@ -110,86 +106,6 @@ async function compressOpus(inputBuffer, { bitrate, trimSec = 0, label = 'aurora
     if (!out?.byteLength) throw new Error('output kosong');
     return out;
   } finally { await cleanup(); }
-}
-
-/* ── VOICE NOTE (ptt) ────────────────────────────────────────────────────────
- * Jalur hemat: lagu di-encode Opus (ogg) lalu dikirim sebagai voice note
- * WhatsApp biasa. Ukuran 4 menit: 32k mono ≈0,99MB • 48k stereo ≈1,47MB •
- * 64k stereo ≈1,95MB (default) • 96k stereo ≈2,9MB — jauh lebih kecil dari
- * mp3 asli, dan TIDAK masuk payload kartu (jadi nggak ada lagi 479 karena
- * kartu raksasa). Bitrate ≥48k otomatis stereo biar musik tetap enak. */
-const VN_DEFAULT_BITRATE = '64k';
-
-/** Bitrate VN aktif dari config. '' = VN dimatikan (balik ke embed kartu). */
-function vnBitrate() {
-  const v = String(config.aurora?.vnBitrate ?? '').trim().toLowerCase();
-  if (v === 'off' || v === 'false' || v === '0' || v === 'no') return '';
-  return /^\d{2,3}k?$/.test(v) ? (v.endsWith('k') ? v : `${v}k`) : VN_DEFAULT_BITRATE;
-}
-
-/** ≥48k = stereo (musik), di bawahnya mono (hemat, kayak VN WA biasa). */
-function vnChannels(bitrate) {
-  return (parseInt(String(bitrate), 10) || 0) >= 48 ? 2 : 1;
-}
-
-/** Buffer audio apa pun → Opus ogg (kontainer voice note WhatsApp). */
-async function compressVn(inputBuffer, { bitrate = VN_DEFAULT_BITRATE, trimSec = 0 } = {}) {
-  const safe = 'aurora_vn';
-  const stamp = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const inPath = join(tmpdir(), `vni_${safe}_${stamp}.tmp`);
-  const outPath = join(tmpdir(), `vno_${safe}_${stamp}.ogg`);
-  const cleanup = async () => {
-    try { await unlink(inPath); } catch { /* skip */ }
-    try { await unlink(outPath); } catch { /* skip */ }
-  };
-  try { await writeFile(inPath, inputBuffer); }
-  catch (e) { throw new Error(`tulis input ffmpeg: ${e?.message || e}`); }
-  const ch = vnChannels(bitrate);
-  const args = [
-    '-y', '-i', inPath,
-    ...(trimSec > 0 ? ['-t', String(trimSec)] : []),
-    '-vn', '-ac', String(ch), '-ar', '48000',
-    // constrained VBR: target bitrate nempel (nggak meledak kayak `-vbr on`).
-    '-c:a', 'libopus', '-b:a', bitrate, '-vbr', 'constrained',
-    '-application', 'audio', '-frame_duration', '20', '-compression_level', '10',
-    '-f', 'ogg', outPath
-  ];
-  const r = await runFfmpeg(args);
-  if (r.code !== 0) {
-    await cleanup();
-    throw new Error(`ffmpeg exit ${r.code}: ${r.stderr.slice(-220).replace(/\s+/g, ' ')}`);
-  }
-  try {
-    const out = await readFile(outPath);
-    if (!out?.byteLength) throw new Error('output kosong');
-    return out;
-  } finally { await cleanup(); }
-}
-
-/**
- * Siapkan voice note: { buf, bytes, bitrate, channels, seconds } atau null.
- * NULL BUKAN ERROR — pemanggil balik ke jalur embed kartu.
- */
-async function prepareVnAudio(buffer, { bitrate = VN_DEFAULT_BITRATE, durationSec = 0 } = {}) {
-  if (!buffer?.length) return null;
-  try {
-    const buf = await compressVn(buffer, { bitrate });
-    const vn = {
-      buf,
-      bytes: buf.length,
-      bitrate,
-      channels: vnChannels(bitrate),
-      seconds: Math.max(1, Math.round(Number(durationSec) || 0))
-    };
-    logger.info(
-      `[Aurora] audio: VN siap — opus ${bitrate} ${vn.channels === 2 ? 'stereo' : 'mono'} • ` +
-      `${(vn.bytes / 1048576).toFixed(2)}MB`
-    );
-    return vn;
-  } catch (err) {
-    logger.warn(`[Aurora] audio: encode VN gagal — ${err?.message || err}`);
-    return null;
-  }
 }
 
 /** Budget embed audio dari config (`aurora.maxEmbedKb`, default 800KB). */
@@ -620,12 +536,8 @@ async function sendAuroraAudio(ctx, info, format) {
   let cover = null;
   const wantLyrics = String(info.title || '') !== 'Aurora Stream'; // input URL manual = judul palsu
   /* Embed audio (WebAudio) ikut PARALEL — ffmpeg jalan di local, nol jaringan,
-   * jadi nambah nol waktu tunggu. Gagal = null → kartu mode visual biasa.
-   * Kalau `aurora.vnBitrate` aktif (default), yang disiapkan = VOICE NOTE:
-   * kartu sengaja TANPA embed (payload kecil, anti-479) dan lagu dikirim
-   * sebagai ptt native WhatsApp. VN gagal → otomatis balik ke embed kartu. */
-  const vnRate = vnBitrate();
-  const [coverRes, lyricRes, vnRes, embedRes] = await Promise.all([
+   * jadi nambah nol waktu tunggu. Gagal = null → kartu mode visual biasa. */
+  const [coverRes, lyricRes, embedRes] = await Promise.all([
     fetchThumbBuffer(info.thumbnail, { width: 640 }).then(
       (c) => {
         logger.info(`[Aurora] audio: cover ${c ? `OK ${Math.round(c.buffer.length / 1024)}KB` : 'kosong'}`);
@@ -652,8 +564,7 @@ async function sendAuroraAudio(ctx, info, format) {
           }
         )
       : Promise.resolve(null),
-    vnRate ? prepareVnAudio(audio.buffer, { bitrate: vnRate, durationSec: durToSeconds(duration) || 0 }) : Promise.resolve(null),
-    vnRate ? Promise.resolve(null) : prepareEmbeddedAudio(audio.buffer, durToSeconds(duration) || 0, {
+    prepareEmbeddedAudio(audio.buffer, durToSeconds(duration) || 0, {
       maxB64: embedBudgetBytes(),
       preferOriginal: embedOriginalOn(),
       originalMaxB64: originalBudgetBytes(),
@@ -662,19 +573,7 @@ async function sendAuroraAudio(ctx, info, format) {
   ]);
   cover = coverRes;
   const lyricCard = lyricRes;
-  const vn = vnRes || null;
-  let embed = embedRes || null;
-  if (vnRate && !vn) {
-    // Encode VN gagal (ffmpeg/durasi aneh) — jangan biarkan user tanpa lagu:
-    // balik ke perilaku lama (audio ditanam di kartu).
-    logger.warn('[Aurora] audio: VN gagal disiapkan — fallback embed audio di kartu');
-    embed = await prepareEmbeddedAudio(audio.buffer, durToSeconds(duration) || 0, {
-      maxB64: embedBudgetBytes(),
-      preferOriginal: embedOriginalOn(),
-      originalMaxB64: originalBudgetBytes(),
-      mimetype: audio.mimetype
-    });
-  }
+  const embed = embedRes || null;
   if (embed) {
     logger.info(
       `[Aurora] audio: embed WebAudio siap — ${embed.original ? `ASLI ${embed.mimetype}` : `opus ${embed.bitrate}`} • ` +
@@ -733,8 +632,8 @@ async function sendAuroraAudio(ctx, info, format) {
   } else {
     /* DEFAULT: kartu AURORA deck. Kalau embed sukses → pemutar WebAudio
      * beneran di dalam kartu (jalur play2 — WebView mati buat <audio> remote,
-     * tapi AudioContext + data URI hidup). Mode VN: kartu sengaja TANPA
-     * embed, lagu menyusul sebagai voice note di bawah kartu. */
+     * tapi AudioContext + data URI hidup). Kalau embed null → kartu visual
+     * biasa tanpa audio (pesan audio native sudah tidak dikirim). */
     try {
       /* Batu ukur dari KASUS ASLI (error "frame is too large: 24148412"):
        * html 6,05MB → unifiedResponse.data 8,07MB → frame 24,1MB, jadi
@@ -758,10 +657,7 @@ async function sendAuroraAudio(ctx, info, format) {
                 : emb.original
                   ? 'Tekan ▶ buat putar — audio kualitas asli di dalam kartu.'
                   : 'Tekan ▶ buat putar langsung di dalam kartu.')
-            : vn
-              ? `🎙 Lagu dikirim sebagai voice note (${vn.bitrate} ${vn.channels === 2 ? 'stereo' : 'mono'}) di bawah — ketuk buat memutar.`
-              : 'Gagal menyiapkan audio di kartu — coba lagi ya.',
-          hintText: vn ? 'Lagu ada di voice note di bawah 🎙' : ''
+            : 'Gagal menyiapkan audio di kartu — coba lagi ya.'
         };
         const audioPart = audioDataUri ? Math.ceil(audioDataUri.length * 4 / 3) : 0;
         const payBudget = audioDataUri ? 60000 + audioPart : 25600;
@@ -871,43 +767,7 @@ async function sendAuroraAudio(ctx, info, format) {
     }
   }
 
-  /* Lagu sebagai VOICE NOTE (ptt) — dikirim SETELAH kartu biar urutannya
-   * kartu di atas, lagu di bawah. Kalau WhatsApp nolak ptt, dicoba sekali
-   * lagi sebagai audio biasa supaya lagu tetap sampai. */
-  let vnSent = false;
-  if (vn) {
-    const vnOpts = {
-      type: 'audio',
-      media: vn.buf,
-      mimetype: 'audio/ogg; codecs=opus',
-      ptt: true,
-      fileName: `${clean || 'aurora'}.ogg`,
-      ...(vn.seconds > 0 ? { seconds: vn.seconds } : {})
-    };
-    try {
-      await ctx.client.message.send(ctx.chat, vnOpts);
-      vnSent = true;
-      logger.info(
-        `[Aurora] audio: VN terkirim • ${(vn.bytes / 1048576).toFixed(2)}MB • ` +
-        `opus ${vn.bitrate} ${vn.channels === 2 ? 'stereo' : 'mono'}`
-      );
-    } catch (err) {
-      logger.warn(`[Aurora] audio: VN ditolak (${err?.message || err}) — coba kirim sebagai audio biasa`);
-      try {
-        await ctx.client.message.send(ctx.chat, { ...vnOpts, ptt: false, mimetype: 'audio/ogg' });
-        vnSent = true;
-        logger.info('[Aurora] audio: terkirim sebagai audio biasa (fallback VN)');
-      } catch (err2) {
-        logger.error(`[Aurora] audio: GAGAL kirim lagu — ${err2?.message || err2}`);
-      }
-    }
-  }
-
-  logger.info(
-    `[Aurora] audio: selesai — kartu ${cardSent ? 'terkirim' : 'GAGAL'}` +
-    `${vn ? ` • VN ${vnSent ? 'terkirim' : 'GAGAL'}` : ' • embed kartu'} • ` +
-    `total ${((Date.now() - t0) / 1000).toFixed(1)}s`
-  );
+  logger.info(`[Aurora] audio: selesai — kartu player ${cardSent ? 'terkirim' : 'GAGAL'} • total ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 
   /* Opsi ke-2: tombol web player (in-app browser WhatsApp). Pelengkap —
    * gagal = dilewati, kartu sudah terkirim di atas tetap utuh. */
@@ -1000,7 +860,7 @@ function buildLyricPanelHtml(lyrics, synced) {
  * Panel lirik muncul lewat tombol di baris judul; kalau synced, ada mode
  * karaoke (sinkron sama posisi audio di kartu) + auto-highlight.
  */
-function buildSpotifyHtml({ title, channel, duration, thumbnailb64, accent = '#1DB954', note, lyrics = null, audioDataUri = '', audioMeta = null, hintText = '' }) {
+function buildSpotifyHtml({ title, channel, duration, thumbnailb64, accent = '#1DB954', note, lyrics = null, audioDataUri = '', audioMeta = null }) {
   const dur = String(duration || '').trim();
   const hits = /^\d+:\d{2}(:\d{2})?$/.test(dur) ? dur : '';
   const safeTitle = escHtml(title || 'Tanpa Judul');
@@ -1208,11 +1068,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-s
  * kalau audio kartu gagal disiapkan. */
 function hint() {
   var t = document.getElementById('srcNote');
-  if (t) { t.textContent = HINT || 'Audio gagal disiapkan — coba lagi ya'; t.style.color = HINT ? '#9fd6b5' : '#ff6b6b'; }
+  if (t) { t.textContent = 'Audio gagal disiapkan — coba lagi ya'; t.style.color = '#ff6b6b'; }
   var b = document.getElementById('playBtn');
   if (b) b.className = 'play ready';
 }
-var HINT = ${JSON.stringify(String(hintText || ''))};
 </script>
 <script>
 /* Toggle panel lirik — versi ringkas dipakai kalau lirik gak ada (panel
@@ -2802,4 +2661,4 @@ async function handler(ctx) {
   }
 
 export { pluginConfig as config, handler };
-export const _internals = { resolveSource, probeMedia, isIpLocked, hostOf, buildHtml, buildCoverHtml, buildSpotifyHtml, thumbDataUri, payloadB64Len, buildLyricPanelHtml, prepareEmbeddedAudio, compressOpus, durToSeconds, vnBitrate, vnChannels, compressVn, prepareVnAudio, audioEndpoint, withoutParam, redactUrl, fetchAudioBinary, downloadAudioViaSearch };
+export const _internals = { resolveSource, probeMedia, isIpLocked, hostOf, buildHtml, buildCoverHtml, buildSpotifyHtml, thumbDataUri, payloadB64Len, buildLyricPanelHtml, prepareEmbeddedAudio, compressOpus, durToSeconds, audioEndpoint, withoutParam, redactUrl, fetchAudioBinary, downloadAudioViaSearch };
