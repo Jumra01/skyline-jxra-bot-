@@ -108,6 +108,85 @@ async function compressOpus(inputBuffer, { bitrate, trimSec = 0, label = 'aurora
   } finally { await cleanup(); }
 }
 
+/**
+ * Video MP4 → buffer audio siap-encode. Jalur PENYELAMAT saat endpoint audio
+ * skyline balas 502 ("Audio tidak bisa diunduh saat ini" — api-faa nge-block
+ * IP Cloudflare + Browser Run kuota terbatas, kasus live 2026-10-23): endpoint
+ * VIDEO (`/ytdl/download`) pakai upstream savenow yang BERBEDA dan masih sehat,
+ * dan mp4-nya selalu bawa track audio AAC.
+ *
+ * Urutan: `-c:a copy` ke M4A (tanpa re-encode, kualitas penuh, cepat) → kalau
+ * gagal (codec aneh) → re-encode MP3 128k. Hasilnya dilempar ke alur embed /
+ * kompres opus seperti audio biasa.
+ */
+async function extractAudioFromVideo(mp4Buffer, label = 'aurora') {
+  const safe = String(label).replace(/[^a-zA-Z0-9]/g, '') || 'aurora';
+  const stamp = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const inPath = join(tmpdir(), `au_vid_${safe}_${stamp}.mp4`);
+  const outM4a = join(tmpdir(), `au_aud_${safe}_${stamp}.m4a`);
+  const outMp3 = join(tmpdir(), `au_aud_${safe}_${stamp}.mp3`);
+  const cleanup = async () => {
+    for (const p of [inPath, outM4a, outMp3]) { try { await unlink(p); } catch { /* skip */ } }
+  };
+  try { await writeFile(inPath, mp4Buffer); }
+  catch (e) { throw new Error(`tulis input ffmpeg: ${e?.message || e}`); }
+  try {
+    // 1) ambil track audio apa adanya (AAC → M4A) — nol loss, nol re-encode
+    let r = await runFfmpeg(['-y', '-i', inPath, '-vn', '-c:a', 'copy', outM4a]);
+    if (r.code === 0) {
+      try {
+        const out = await readFile(outM4a);
+        if (out?.byteLength) return { buffer: out, mimetype: 'audio/mp4', ext: 'm4a' };
+      } catch { /* coba jalur mp3 */ }
+    }
+    // 2) fallback re-encode MP3 (nangkep codec yang gak bisa di-copy)
+    r = await runFfmpeg(['-y', '-i', inPath, '-vn', '-c:a', 'libmp3lame', '-b:a', '128k', outMp3]);
+    if (r.code === 0) {
+      const out = await readFile(outMp3);
+      if (out?.byteLength) return { buffer: out, mimetype: 'audio/mpeg', ext: 'mp3' };
+    }
+    throw new Error(`ffmpeg exit ${r.code}: ${r.stderr.slice(-180).replace(/\s+/g, ' ')}`);
+  } finally { await cleanup(); }
+}
+
+/**
+ * Unduh VIDEO lalu ekstrak audionya — fallback kalau endpoint audio skyline
+ * balas 502. Coba 360p dulu (paling cepat & ringan), lalu 720p. Satu budget
+ * waktu buat seluruh rantai biar gak numpuk timeout.
+ */
+async function downloadAudioViaVideo(videoUrl, { timeoutMs = 180000 } = {}) {
+  const { website, apikey } = skylineCreds();
+  if (!apikey) throw new Error('API key skyline.web.id belum diisi');
+  const deadline = Date.now() + timeoutMs;
+  const tried = [];
+  for (const quality of [360, 720]) {
+    const left = deadline - Date.now();
+    if (left < 20000) { tried.push(`${quality}p waktu habis`); break; }
+    const link = `${website}/api/tools/ytdl/download?url=${encodeURIComponent(videoUrl)}` +
+      `&quality=${quality}&apikey=${encodeURIComponent(apikey)}`;
+    try {
+      const res = await fetch(link, {
+        headers: { 'User-Agent': UA, Accept: 'video/*,application/octet-stream;q=0.9' },
+        signal: AbortSignal.timeout(left)
+      });
+      const type = (res.headers.get('content-type') || '').toLowerCase();
+      if (!res.ok) { tried.push(`${quality}p HTTP ${res.status}`); continue; }
+      if (!/^video\//.test(type)) { tried.push(`${quality}p bukan video (${type || '-'})`); continue; }
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (!buf.length) { tried.push(`${quality}p kosong`); continue; }
+      const audio = await extractAudioFromVideo(buf);
+      logger.info(
+        `[Aurora] audio: video-fallback ${quality}p ${(buf.length / 1048576).toFixed(1)}MB → ` +
+        `${audio.ext} ${(audio.buffer.length / 1048576).toFixed(2)}MB`
+      );
+      return { ...audio, via: 'video-fallback', finalUrl: redactUrl(link) };
+    } catch (err) {
+      tried.push(`${quality}p ${err?.name || 'Error'}: ${String(err?.message || err).slice(0, 100)}`);
+    }
+  }
+  throw new Error(`jalur video juga gagal — ${tried.join(' | ')}`);
+}
+
 /** Budget embed audio dari config (`aurora.maxEmbedKb`, default 800KB). */
 function embedBudgetBytes() {
   const kb = Number(config.aurora?.maxEmbedKb);
@@ -335,9 +414,13 @@ async function fetchAudioBinary(link, { timeoutMs = 180000, maxBytes = 60 * 1024
   };
   if (!res.ok) {
     const { snippet, title } = await readSnippet(200);
+    /* `definitive` = server sudah menjawab (bukan gangguan jaringan) → mengulang
+     * ke URL yang sama SEMUA percuma: jalur fallback aurora juga menembak
+     * endpoint yang sama. Kasus live 2026-10-23: 3 jalur × 53 dtk × 2 retry
+     * = 240 dtk hangus buat 502 yang sama berulang-ulang. */
     throw Object.assign(
       new Error(`[${label}] HTTP ${res.status} • ${type || '-'}${title ? ` • title="${title}"` : ''} • final=${finalUrl} • body="${snippet}"`),
-      { status: res.status }
+      { status: res.status, definitive: true }
     );
   }
   if (!/^audio\//.test(type)) {
@@ -392,26 +475,38 @@ async function downloadAudioViaSearch(videoUrl, { timeoutMs = 180000, maxBytes =
 
   const link = audioEndpoint(videoUrl);
 
-  // 1) endpoint langsung (mode=stream)
-  try { return await attempt(link, 'ytdl/audio'); } catch { /* lanjut */ }
+  /* Server sudah jawab tegas (502 "Audio tidak bisa diunduh saat ini" dll)?
+   * Jalur 2 & 3 menembak ENDPOINT YANG SAMA → pasti jawab sama. Langsung
+   * berhenti biar gak buang ±106 dtk percuma (lihat kasus 2026-10-23). */
+  let definitive = null;
 
-  // 2) endpoint langsung tanpa `mode`
-  try { return await attempt(withoutParam(link, 'mode'), 'ytdl/audio tanpa mode'); } catch { /* lanjut */ }
+  // 1) endpoint langsung (mode=stream)
+  try { return await attempt(link, 'ytdl/audio'); } catch (err) { if (err?.definitive) definitive = err; }
+
+  if (!definitive) {
+    // 2) endpoint langsung tanpa `mode`
+    try { return await attempt(withoutParam(link, 'mode'), 'ytdl/audio tanpa mode'); } catch (err) { if (err?.definitive) definitive = err; }
+  }
 
   // 3) alur resmi docs → audio.url (link sudah membawa apikey)
-  let meta = null;
-  try {
-    meta = await skylineInfo(videoUrl);
-  } catch (err) {
-    tried.push(`[info] ${String(err?.message || err).slice(0, 200)}`);
-  }
-  if (meta?.audioUrl) {
-    try { return await attempt(meta.audioUrl, 'audio.url'); } catch { /* lanjut */ }
-  } else if (meta) {
-    tried.push('[audio.url] kosong di response /api/tools/ytdl');
+  if (!definitive) {
+    let meta = null;
+    try {
+      meta = await skylineInfo(videoUrl);
+    } catch (err) {
+      tried.push(`[info] ${String(err?.message || err).slice(0, 200)}`);
+    }
+    if (meta?.audioUrl) {
+      try { return await attempt(meta.audioUrl, 'audio.url'); } catch (err) { if (err?.definitive) definitive = err; }
+    } else if (meta) {
+      tried.push('[audio.url] kosong di response /api/tools/ytdl');
+    }
   }
 
-  throw new Error(`gagal ambil audio — ${tried.length} jalur dicoba: ${tried.join(' | ')}`);
+  throw Object.assign(
+    new Error(`gagal ambil audio — ${tried.length} jalur dicoba: ${tried.join(' | ')}`),
+    { definitive: Boolean(definitive), status: definitive?.status || 0 }
+  );
 }
 
 /** Satu hasil pencarian → bentuk `info` yang dipakai handler. */
@@ -678,6 +773,7 @@ async function sendAuroraAudio(ctx, infos, format, progress = null) {
   let audio = null;
   let info = candidates[0] || null;
   const fails = [];
+  let videoFallbackTried = false;
   /* Anggaran waktu TOTAL buat seluruh kandidat (bukan per request): endpoint
    * skyline bisa nyiapin file 10-30s, tapi kalau semua kandidat bermasalah
    * command jangan menggantung belasan menit. */
@@ -692,6 +788,7 @@ async function sendAuroraAudio(ctx, infos, format, progress = null) {
   for (let i = 0; i < candidates.length && !audio; i += 1) {
     const cand = candidates[i];
     const tries = i === 0 ? 2 : 1;
+    let definitive = false;
     for (let attempt = 1; attempt <= tries; attempt += 1) {
       try {
         logger.info(
@@ -710,7 +807,29 @@ async function sendAuroraAudio(ctx, infos, format, progress = null) {
           `[Aurora] audio: kandidat ${i + 1}/${candidates.length} GAGAL (percobaan ${attempt}/${tries}) — ` +
           `status=${err?.status || 0} • pesan=${String(err?.message || err).slice(0, 500)}`
         );
+        /* Server sudah jawab tegas (502 dll) → mengulang kandidat yang SAMA
+         * pasti jawab sama — buang waktu doang. Langsung ke kandidat berikut
+         * atau jalur video-fallback. */
+        if (err?.definitive) { definitive = true; break; }
         if (attempt < tries) await new Promise((r) => setTimeout(r, 1500));
+      }
+    }
+    /* Endpoint audio skyline balas tegas "tidak bisa diunduh" (api-faa nge-
+     * block IP Cloudflare + Browser Run kuota terbatas — kasus 2026-10-23)?
+     * Endpoint VIDEO pakai upstream yang BERBEDA (savenow) dan masih sehat →
+     * ambil video kandidat ini, ekstrak track audio-nya, kartu tetap jalan.
+     * Cuma dicoba sekali per perintah (kandidat pertama yang kena 502). */
+    if (!audio && definitive && !videoFallbackTried) {
+      videoFallbackTried = true;
+      progress?.set(2, 'audio 502 — coba lewat video…', cand.title);
+      try {
+        audio = await downloadAudioViaVideo(cand.url, { timeoutMs: leftMs() });
+        info = cand;
+        logger.info(`[Aurora] audio: kandidat ${i + 1} dapat lewat VIDEO fallback (audio endpoint 502)`);
+        break;
+      } catch (err) {
+        fails.push(`#vid ${String(err?.message || err).slice(0, 200)}`);
+        logger.warn(`[Aurora] audio: video-fallback kandidat ${i + 1} GAGAL — ${String(err?.message || err).slice(0, 300)}`);
       }
     }
     if (Date.now() >= deadline) {
@@ -1653,7 +1772,7 @@ const escapeHtmlJs = (value) =>
     .replace(/</g, '\\x3C');
 
 function buildHtml({ finalTitle, finalChannel, finalDuration, videoUrl, thumbnailb64, wsUrl, isAudio: audioHint, sourceNote = '', preferWs = false }) {
-  // URL dari YT-DL/savenow gak punya ekstensi (`/api/v2/download/<hash>`),
+  // URL media dari server kadang gak punya ekstensi (URL proxy/stream),
   // jadi jenis media ditentukan dari format yang diminta, bukan dari URL.
   const isAudio = typeof audioHint === 'boolean'
     ? audioHint
