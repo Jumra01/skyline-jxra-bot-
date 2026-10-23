@@ -84,6 +84,13 @@ function installGlobalReplyStyle(client) {
 
   client.message.send = async (chat, content, opts = {}) => {
     try {
+      /* Edit (`editKey`) & pesan mentah (`noStyle`) WAJIB lewat jalur asli.
+       * Kalau dibungkus varian reply style, `opts` dibuang → editKey hilang
+       * dan tiap "edit" malah terkirim sebagai PESAN BARU (gejala nyata:
+       * loading bar Aurora muncul satu-satu sampai selesai). Pesan yang nanti
+       * mau di-edit juga harus teks polos — varian bisa berupa interactive
+       * yang tidak bisa di-edit WhatsApp. */
+      if (opts?.editKey || opts?.noStyle) return await rawSend(chat, content, opts)
       if (isStyling()) return await rawSend(chat, content, opts)
       const text = outboundText(content)
       if (!text || hasMentions(content, opts)) return await rawSend(chat, content, opts)

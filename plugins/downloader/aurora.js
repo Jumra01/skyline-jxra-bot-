@@ -613,7 +613,7 @@ function createProgress(ctx, title = '') {
       : undefined;
     const editKey = participant ? { id, participant } : { id };
     chain = chain
-      .then(() => ctx.client.message.send(ctx.chat, { type: 'text', text: body() }, { editKey }))
+      .then(() => ctx.client.message.send(ctx.chat, { type: 'text', text: body() }, { editKey, noStyle: true }))
       .catch((err) => {
         editFails += 1;
         const line = '[Aurora] progress: edit gagal — ' + String(err?.message || err).slice(0, 160);
@@ -628,7 +628,10 @@ function createProgress(ctx, title = '') {
     /** Kirim pesan progress pertama (harus di-await biar id-nya kebaca). */
     async start() {
       try {
-        const sent = await ctx.client.message.send(ctx.chat, body());
+        /* `noStyle` = kirim teks polos, jangan dibungkus varian `.setreply`:
+         * pesan ini bakal di-EDIT, dan varian (kartu/interactive) tidak bisa
+         * di-edit WhatsApp. */
+        const sent = await ctx.client.message.send(ctx.chat, body(), { noStyle: true });
         id = sent?.id || sent?.key?.id || null;
         if (id) {
           // Timer cuma nyegarin hitungan detik tetap jalan selama proses lama
