@@ -558,7 +558,116 @@ async function sendPlayerButton(ctx, info, clean, duration) {
   return true;
 }
 
-async function sendAuroraAudio(ctx, infos, format) {
+/** Judul tahap progress (1→4). Dipakai kartu loading `.aurora`. */
+const AURORA_STAGES = [
+  '1/4 mencari lagu…',
+  '2/4 mengunduh audio…',
+  '3/4 menyiapkan kartu…',
+  '4/4 mengirim…'
+];
+
+/** Bar blok sederhana: step 1..4 → ▓▓▓▓░░░░ dst. */
+function progressBar(step, total = 4) {
+  const filled = Math.max(0, Math.min(total, Math.round(Number(step) || 0)));
+  return '▓'.repeat(filled) + '░'.repeat(total - filled);
+}
+
+/**
+ * Progress "loading bar" dalam SATU pesan yang di-EDIT tiap tahap — bukan
+ * 4 pesan terpisah (spam grup). zapo belum punya API edit tingkat tinggi,
+ * jadi pakai `protocolMessage` type 14 (pola sama dengan `lib/jhrich.js`:
+ * WhatsApp menampilkan isi `editedMessage` di tempat pesan lama).
+ *
+ * Semua operasi progress bersifat OPSIONAL: kalau edit gagal (mis. pesan
+ * keburu dihapus / tidak didukung), command tetap jalan seperti biasa.
+ */
+function createProgress(ctx, title = '') {
+  const t0 = Date.now();
+  let id = null;
+  let step = 1;
+  let note = AURORA_STAGES[0];
+  let icon = '🎧';
+  let done = false;
+  let timer = null;
+  /* Edit diantrekan (bukan dijalankan paralel) biar urutannya pasti: state
+   * terakhir selalu yang menang, dan `finish()` benar-benar menunggu edit
+   * terakhir terkirim. */
+  let chain = Promise.resolve();
+
+  const body = () => {
+    const pct = Math.min(100, step * 25);
+    const secs = ((Date.now() - t0) / 1000).toFixed(0);
+    return `${icon} *AURORA*${title ? ` — ${String(title).slice(0, 60)}` : ''}\n` +
+      `${progressBar(step)} ${pct}%\n` +
+      `${note} • ${secs}s`;
+  };
+
+  const edit = () => {
+    if (!id) return chain;
+    chain = chain
+      .then(() => ctx.client.message.send(ctx.chat, {
+        botForwardedMessage: {
+          message: {
+            protocolMessage: {
+              key: { remoteJid: ctx.chat, fromMe: true, id },
+              type: 14,
+              editedMessage: { conversation: body() }
+            }
+          }
+        }
+      }))
+      .catch((err) => {
+        logger.debug('[Aurora] progress: edit gagal — ' + String(err?.message || err).slice(0, 120));
+      });
+    return chain;
+  };
+
+  return {
+    /** Kirim pesan progress pertama (harus di-await biar id-nya kebaca). */
+    async start() {
+      try {
+        const sent = await ctx.client.message.send(ctx.chat, body());
+        id = sent?.id || sent?.key?.id || null;
+        if (id) {
+          // Timer cuma nyegarin hitungan detik tetap jalan selama proses lama
+          // (mis. server skyline nyiapin file 10-30s) — tanpa kirim pesan baru.
+          timer = setInterval(() => { if (!done) edit(); }, 5000);
+          timer.unref?.();
+        }
+        logger.debug('[Aurora] progress: pesan loading terkirim | id=' + (id || '?'));
+      } catch (err) {
+        logger.debug('[Aurora] progress: gagal kirim pesan loading — ' + String(err?.message || err).slice(0, 120));
+      }
+    },
+    /** Naik ke tahap `n` (1..4) dengan catatan baru. */
+    set(n, msg, newTitle) {
+      step = Math.max(0, Math.min(4, Number(n) || 0));
+      if (msg) note = msg;
+      else if (AURORA_STAGES[step - 1]) note = AURORA_STAGES[step - 1];
+      if (newTitle) title = newTitle;
+      edit();
+    },
+    /** Selesai: bar 100% + tanda centang (pesan terakhir tetap kelihatan). */
+    async finish(msg) {
+      done = true;
+      step = 4;
+      icon = '✅';
+      note = msg || 'selesai';
+      clearInterval(timer);
+      await edit();
+    },
+    /** Gagal: bar berhenti di tahap terakhir + tanda silang. */
+    async fail(msg) {
+      done = true;
+      icon = '❌';
+      note = String(msg || 'gagal').slice(0, 120);
+      clearInterval(timer);
+      await edit();
+    }
+  };
+}
+
+async function sendAuroraAudio(ctx, infos, format, progress = null) {
   const t0 = Date.now();
   const candidates = (Array.isArray(infos) ? infos : [infos]).filter((i) => i?.url);
   let audio = null;
@@ -569,6 +678,7 @@ async function sendAuroraAudio(ctx, infos, format) {
    * command jangan menggantung belasan menit. */
   const deadline = Date.now() + 240_000;
   const leftMs = () => Math.max(20_000, deadline - Date.now());
+  progress?.set(2, undefined, info?.title);
 
   /* Satu video gagal TIDAK berarti lagunya gak ada: coba kandidat
    * pencarian berikutnya (reupload lagu yang sama). Kandidat pertama dicoba
@@ -619,6 +729,7 @@ async function sendAuroraAudio(ctx, infos, format) {
    * Lirik (LRCLIB) diambil PARALEL sama cover biar nambah nol waktu tunggu. */
   let cover = null;
   const wantLyrics = String(info.title || '') !== 'Aurora Stream'; // input URL manual = judul palsu
+  progress?.set(3, 'menyiapkan kartu (lirik + audio)…', info.title);
   /* Embed audio (WebAudio) ikut PARALEL — ffmpeg jalan di local, nol jaringan,
    * jadi nambah nol waktu tunggu. Gagal = null → kartu mode visual biasa. */
   const [coverRes, lyricRes, embedRes] = await Promise.all([
@@ -683,6 +794,7 @@ async function sendAuroraAudio(ctx, infos, format) {
 
   let cardSent = false;
   let thumbB64 = '';
+  progress?.set(4, 'mengirim kartu…');
   /* Cover di kartu lirik dibikin kecil (2,4KB) — markup panel lirik ikut
    * nambah payload. KECUALI ada audio embed: kartu masuk regime play2
    * (payload ratusan KB terbukti render di HP), jadi cover boleh 9KB. */
@@ -2655,8 +2767,14 @@ async function handler(ctx) {
     const mFmt = query.match(/^(.*?)\s+(mp3|m4a|144|240|360|480|720|1080|1440|2160)$/i);
     if (mFmt) { customFormat = mFmt[2].toLowerCase(); query = mFmt[1].trim(); }
     const format = customFormat || 'mp3';
+    const t0 = Date.now();
 
     await ctx.react('🎧');
+
+    /* Loading bar (satu pesan yang di-edit, tahap 1→4). Dikirim paling awal
+     * supaya user langsung tahu botnya kerja — proses skyline bisa 10-30s. */
+    const progress = createProgress(ctx, query.slice(0, 60));
+    await progress.start();
 
     try {
       let candidates = [];
@@ -2667,6 +2785,7 @@ async function handler(ctx) {
         }];
       } else if (skylineReady()) {
         try {
+          progress.set(1, 'mencari lagu di YouTube…');
           const results = await skylineSearch(query, 8);
           candidates = pickSearchCandidates(results, { forAudio: AUDIO_FORMAT.test(format) });
           if (!candidates.length) {
@@ -2684,7 +2803,8 @@ async function handler(ctx) {
 
       // AUDIO → unduh lewat skyline lalu kirim kartu player berisi audio.
       if (AUDIO_FORMAT.test(format)) {
-        await sendAuroraAudio(ctx, candidates, format);
+        await sendAuroraAudio(ctx, candidates, format, progress);
+        await progress.finish(`selesai — kartu terkirim (${((Date.now() - t0) / 1000).toFixed(0)}s)`);
         await ctx.react('🎛️');
         return;
       }
@@ -2694,6 +2814,7 @@ async function handler(ctx) {
       let media = null;
       let videoInfo = info;
       const vFails = [];
+      progress.set(2, 'mengambil link video…', info.title);
       for (const cand of candidates.slice(0, 3)) {
         try {
           media = await resolveSource(cand, format);
@@ -2706,6 +2827,7 @@ async function handler(ctx) {
       }
       if (!media?.url) throw new Error('Link final gak dapet' + (vFails.length ? ` — ${vFails.join(' | ')}` : ''));
 
+      progress.set(3, 'menyiapkan kartu video…', videoInfo.title);
       const finalTitle = media.title || videoInfo.title || 'Unknown Video';
       const finalChannel = videoInfo.artist || 'Unknown Channel';
       const finalDuration = media.duration || '';
@@ -2735,6 +2857,7 @@ async function handler(ctx) {
       const sourceNote = media.preview
         ? `${media.preview} — tekan play`
         : 'Tekan play buat mulai';
+      progress.set(4, 'mengirim kartu…', finalTitle);
       const htmlPayload = buildHtml({
         finalTitle, finalChannel, finalDuration,
         videoUrl: media.url, thumbnailb64, wsUrl,
@@ -2745,6 +2868,7 @@ async function handler(ctx) {
       const sent = await sendNativeHtml(ctx.client, ctx.chat, htmlPayload);
 
       logger.info('[Aurora] kartu terkirim | id=' + (sent?.id || '?') + ' | sumber=' + media.via + (media.probe?.locked ? ' (locked → WS)' : ''));
+      await progress.finish(`selesai — kartu terkirim (${((Date.now() - t0) / 1000).toFixed(0)}s)`);
       await ctx.react('🎛️');
     } catch (e) {
       logger.error(
@@ -2752,6 +2876,7 @@ async function handler(ctx) {
         `pesan=${String(e?.message || e).slice(0, 900)}`
       );
       await ctx.react('❎');
+      await progress.fail(e?.message || e);
       /* Error multi-baris (rincian tiap kandidat) jangan dipotong di tengah —
        * baris pertama buat user, sisanya sudah ada di log. */
       const lines = String(e?.message || e).split('\n');
@@ -2762,4 +2887,4 @@ async function handler(ctx) {
   }
 
 export { pluginConfig as config, handler };
-export const _internals = { resolveSource, probeMedia, isIpLocked, hostOf, buildHtml, buildCoverHtml, buildSpotifyHtml, thumbDataUri, payloadB64Len, buildLyricPanelHtml, prepareEmbeddedAudio, compressOpus, durToSeconds, audioEndpoint, withoutParam, redactUrl, fetchAudioBinary, downloadAudioViaSearch, pickSearchCandidates, searchResultToInfo };
+export const _internals = { resolveSource, probeMedia, isIpLocked, hostOf, buildHtml, buildCoverHtml, buildSpotifyHtml, thumbDataUri, payloadB64Len, buildLyricPanelHtml, prepareEmbeddedAudio, compressOpus, durToSeconds, audioEndpoint, withoutParam, redactUrl, fetchAudioBinary, downloadAudioViaSearch, pickSearchCandidates, searchResultToInfo, createProgress, progressBar };
