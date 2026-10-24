@@ -452,7 +452,7 @@ async function runReplyVariant(ctx, text, style) {
       if (firstLine >= 0) lines[firstLine] = toBoldSans(lines[firstLine])
       const richBody = lines.join('\n')
       let imageUrl = await senderAvatar(ctx)
-      if (!imageUrl) {
+      if (Number(style) !== 9 && !imageUrl) {
         const fallbackImage = await thumb300()
         if (fallbackImage && client.message?.upload) {
           try {
@@ -462,19 +462,18 @@ async function runReplyVariant(ctx, text, style) {
         }
       }
       if (Number(style) === 9) {
-        const SMALL_CAPS = {
-          a: 'ᴀ', b: 'ʙ', c: 'ᴄ', d: 'ᴅ', e: 'ᴇ', f: 'ꜰ', g: 'ɢ', h: 'ʜ',
-          i: 'ɪ', j: 'ᴊ', k: 'ᴋ', l: 'ʟ', m: 'ᴍ', n: 'ɴ', o: 'ᴏ', p: 'ᴘ',
-          q: 'ǫ', r: 'ʀ', s: 's', t: 'ᴛ', u: 'ᴜ', v: 'ᴠ', w: 'ᴡ', x: 'x', y: 'ʏ', z: 'ᴢ'
-        }
-        const toSmallCaps = (value) => Array.from(String(value ?? '').toLowerCase(), (char) => SMALL_CAPS[char] || char).join('')
-        // Small-caps Unicode has no dedicated bold alphabet; apply one consistent
-        // markdown bold wrapper instead of mixing unrelated Unicode alphabets.
-        const toBoldSmallCaps = (value) => `**${toSmallCaps(value)}**`
-        const styledText = toBoldSmallCaps(text)
-        const styledCommand = ctx.command ? toBoldSmallCaps(ctx.command) : toBoldSmallCaps('pesan')
-        const status = toBoldSmallCaps('Online')
-        let productImage = imageUrl || ''
+        const toBoldFont = (value) => Array.from(String(value ?? ''), (char) => {
+          const code = char.codePointAt(0)
+          if (code >= 0x41 && code <= 0x5a) return String.fromCodePoint(0x1d5d4 + code - 0x41)
+          if (code >= 0x61 && code <= 0x7a) return String.fromCodePoint(0x1d5ee + code - 0x61)
+          if (code >= 0x30 && code <= 0x39) return String.fromCodePoint(0x1d7ec + code - 0x30)
+          return char
+        }).join('')
+        const styledText = toBoldFont(text)
+        const styledCommand = ctx.command ? toBoldFont(ctx.command) : toBoldFont('pesan')
+        const status = toBoldFont('Online')
+        const configuredV9Thumbnail = String(config.reply?.v9ThumbnailUrl || '').trim()
+        let productImage = /^https:\/\//i.test(configuredV9Thumbnail) ? configuredV9Thumbnail : ''
         try {
           const credentials = client.auth?.getCurrentCredentials?.() || client.getCurrentCredentials?.()
           const meJid = client.getCurrentMeJid?.() || credentials?.meJid || credentials?.meLid
@@ -483,13 +482,15 @@ async function runReplyVariant(ctx, text, style) {
             new Promise((resolve) => setTimeout(() => resolve(null), 3500))
           ])
           const botAvatar = typeof profile === 'string' ? profile : profile?.url
-          // Product-card image URL is a remote preview URL, not an uploaded-media path.
-          // Passing directPath/mediaUrl here makes WhatsApp render its generic logo.
-          if (botAvatar && /^https?:\/\//i.test(botAvatar)) productImage = botAvatar
+          // Prefer the v9-specific thumbnail from config; use the bot profile only
+          // when the configured URL is empty or invalid.
+          if (!/^https:\/\//i.test(configuredV9Thumbnail) && botAvatar && /^https?:\/\//i.test(botAvatar)) {
+            productImage = botAvatar
+          }
         } catch {}
         const product = {
           __typename: 'GenAIProductItemCardPrimitive',
-          title: toBoldSmallCaps(config.botName || 'skyline-JXRA'),
+          title: toBoldFont(config.botName || 'skyline-JXRA'),
           brand: styledCommand,
           price: status,
           sale_price: '',

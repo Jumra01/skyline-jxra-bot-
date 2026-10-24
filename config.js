@@ -270,6 +270,8 @@ export default {
   // 6 SIMPLE DOCUMENT · 7 FAKE LOCATION
   reply: {
     variant: 1,
+    // Khusus .setreply v9: URL gambar thumbnail product card/header.
+    v9ThumbnailUrl: 'https://skyline.web.id/uploads/6a0484983cb9e74ec0ac32d5.png',
     website: 'skyline.web.id',        // dipakai v4 (OG preview otomatis)
     v4: {
       title: 'skyline-JXRA',
