@@ -481,7 +481,9 @@ async function runReplyVariant(ctx, text, style) {
           price: status,
           sale_price: '',
           product_url: String(config.reactChannel?.dedicatedChannelUrl || '').trim() || 'https://skyline.web.id',
-          image: { url: productImage }
+          image: { url: productImage },
+          // Reuse configured thumbnail for the product card's small secondary icon too.
+          additional_images: productImage ? [{ url: productImage }] : []
         }
         const productPayload = {
           response_id: crypto.randomUUID(),
