@@ -505,7 +505,7 @@ async function runReplyVariant(ctx, text, style) {
             message: {
               richResponseMessage: {
                 messageType: 1,
-                submessages: [{ messageType: 2, messageText: styledText }],
+                submessages: [{ messageType: 2, messageText: '[ CANNOT_LOAD_PRODUCT - NIXEL ]' }],
                 unifiedResponse: { data: Buffer.from(JSON.stringify(productPayload)).toString('base64') },
                 contextInfo: { isForwarded: true, forwardOrigin: 4 }
               }
