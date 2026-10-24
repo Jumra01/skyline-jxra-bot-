@@ -23,10 +23,12 @@
  *   .tesheader v1 s/d .tesheader v7
  *
  * ─────────────────────── Pemakaian ───────────────────────
- *   .tesheader                   → kirim semua varian berurutan + ringkasan
- *   .tesheader card-large        → satu varian saja
- *   .tesheader kombo-saluran     → varian kombo saluran + kartu
- *   .tesheader v1,v4,kombo-order → beberapa varian pilihan (pisahkan koma)
+ *   .tesheader                   → kirim 4 varian yang terbukti work + ringkasan
+ *   .tesheader kombo-saluran     → varian kombo banner saluran
+ *   .tesheader media-btn         → varian media header + tombol
+ *   .tesheader location-hdr      → varian header lokasi
+ *   .tesheader ig                → varian kartu Instagram
+ *   .tesheader v1,v4              → tetap bisa menguji varian eksperimen (pisahkan koma)
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -448,7 +450,9 @@ const BY_ID = new Map(VARIANTS.map((v) => [v.id, v]))
 async function handler(ctx) {
   const arg = (ctx.args[0] || '').toLowerCase()
 
-  let picked = VARIANTS.filter((v) => !v.id.startsWith('v')) // default: 9 varian header wrapper unggulan
+  // Default hanya varian yang sudah terbukti tampil di device owner.
+  const WORKING_DEFAULTS = new Set(['kombo-saluran', 'media-btn', 'location-hdr', 'ig'])
+  let picked = VARIANTS.filter((v) => WORKING_DEFAULTS.has(v.id))
   if (arg === 'all' || arg === 'semua') {
     picked = VARIANTS // semua termasuk v1-v7
   } else if (arg) {
