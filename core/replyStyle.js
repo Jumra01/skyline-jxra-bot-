@@ -2,7 +2,7 @@
  * © skyline-JXRA
  * Hapus credit gak bikin u jago dumbass.
  * Hargai sebagaimana u mau dihargai.
- * replyStyle.js — Varian gaya reply pesan bot (.setreply): v1 BASIC s/d v7.
+ * replyStyle.js — Varian gaya reply pesan bot (.setreply): v1 BASIC s/d v8.
  * Persist di src/data/replyStyle.json (fallback config.reply.variant).
  * Dikirim oleh core/context.js tiap ctx.reply() DAN global hook di
  * buildContext (semua pesan teks bot kena varian aktif); diatur via .setreply.
@@ -14,6 +14,7 @@ import config from '../config.js'
 import { logger } from './logger.js'
 import { getThumbBuffer, getAdReply } from './cta.js'
 import { isPremiumActive } from './database.js'
+import { generateVerificationMetadata } from '../lib/jhrich.js'
 
 const DATA_DIR = path.join(process.cwd(), 'src', 'data')
 const FILE = path.join(DATA_DIR, 'replyStyle.json')
@@ -426,19 +427,7 @@ async function runReplyVariant(ctx, text, style) {
         hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
         timeZone: 'Asia/Jakarta'
       }).format(new Date(ctx.receivedAt || Date.now())) + ' WIB'
-      const profileText = [
-        `👤 *PROFIL PENGGUNA*`,
-        ``,
-        `Nama: *${ctx.pushName || 'Tidak diketahui'}*`,
-        `Nomor: \`${number}\``,
-        `Role: *${role}*`,
-        `Status: *${tier}*`,
-        `Chat: *${ctx.isGroup ? 'Grup' : 'Pribadi'}*`,
-        `Command: *${ctx.command ? `.${ctx.command}` : 'Reply / pesan'}*`,
-        `Dipakai: *${when}*`,
-        ``,
-        text
-      ].join('\n')
+      const richBody = text
       let imageUrl = await senderAvatar(ctx)
       if (!imageUrl) {
         const fallbackImage = await thumb300()
@@ -465,7 +454,7 @@ async function runReplyVariant(ctx, text, style) {
         response_id: crypto.randomUUID(),
         sections: [
           { view_model: { primitive: entity, __typename: 'GenAISingleLayoutViewModel' } },
-          { view_model: { primitive: { text: profileText, __typename: 'GenAIMarkdownTextUXPrimitive' }, __typename: 'GenAISingleLayoutViewModel' } }
+          { view_model: { primitive: { text: richBody, __typename: 'GenAIMarkdownTextUXPrimitive' }, __typename: 'GenAISingleLayoutViewModel' } }
         ]
       }
       try {
@@ -474,19 +463,66 @@ async function runReplyVariant(ctx, text, style) {
             message: {
               richResponseMessage: {
                 messageType: 1,
-                submessages: [{ messageType: 2, messageText: profileText }],
+                submessages: [{ messageType: 2, messageText: richBody }],
                 unifiedResponse: { data: Buffer.from(JSON.stringify(payload)).toString('base64') },
-                contextInfo: { isForwarded: true, forwardOrigin: 4 }
+                contextInfo: { forwardingScore: 1, isForwarded: true, forwardedAiBotMessageInfo: { botJid: '236911050403982@bot' }, forwardOrigin: 4 }
               }
             }
+          },
+          messageContextInfo: {
+            deviceListMetadata: {},
+            deviceListMetadataVersion: 2,
+            botMetadata: {
+              messageDisclaimerText: '',
+              verificationMetadata: generateVerificationMetadata(),
+              botResponseId: crypto.randomUUID()
+            }
           }
-        }, { quote: event, additionalAttributes: { type: 'text' } })
-        if (richResult?.id || richResult?.key?.id || richResult?.messageId) return richResult
+        }, { additionalAttributes: { type: 'text' } })
+        const richId = richResult?.id || richResult?.key?.id || richResult?.messageId
+        if (richId) {
+          try {
+            await client.message.send(chat, {
+              botForwardedMessage: {
+                message: {
+                  protocolMessage: {
+                    key: {
+                      remoteJid: chat,
+                      fromMe: true,
+                      id: richId,
+                      ...(String(chat).endsWith('@g.us') ? { participant: client.getCurrentMeJid?.() || client.getCurrentCredentials?.()?.meJid } : {})
+                    },
+                    type: 14,
+                    editedMessage: {
+                      botForwardedMessage: {
+                        message: {
+                          richResponseMessage: {
+                            messageType: 1,
+                            submessages: [{ messageType: 2, messageText: richBody }],
+                            unifiedResponse: { data: Buffer.from(JSON.stringify(payload)).toString('base64') },
+                            contextInfo: { forwardingScore: 1, isForwarded: true, forwardedAiBotMessageInfo: { botJid: '236911050403982@bot' }, forwardOrigin: 4 }
+                          }
+                        }
+                      },
+                      messageContextInfo: {
+                        deviceListMetadata: {}, deviceListMetadataVersion: 2,
+                        botMetadata: { messageDisclaimerText: '', verificationMetadata: generateVerificationMetadata(), botResponseId: crypto.randomUUID() }
+                      }
+                    }
+                  }
+                }
+              }
+            }, { additionalAttributes: { type: 'text' } })
+          } catch (editErr) {
+            logger.warn({ err: String(editErr?.message ?? editErr) }, 'reply v8 rich edit-bypass gagal')
+          }
+          return richResult
+        }
         logger.warn('reply v8 rich entity tidak mendapat ack message id — fallback teks')
       } catch (err) {
         logger.warn({ err: String(err?.message ?? err) }, 'reply v8 rich entity gagal — fallback teks')
       }
-      return client.message.send(chat, { type: 'text', text: profileText }, { quote: event, noStyle: true })
+      return client.message.send(chat, { type: 'text', text }, { quote: event, noStyle: true })
     }
 
     default:
