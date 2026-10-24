@@ -410,8 +410,7 @@ async function runReplyVariant(ctx, text, style) {
 
     /* v8 USER PROFILE — rich entity card ala owner Type 5 */
     case 8: {
-      const sender = ctx.sender || ''
-      const number = ctx.senderNumber || String(sender).split('@')[0].split(':')[0] || '-'
+      const number = ctx.senderNumber || String(ctx.sender || '').split('@')[0].split(':')[0] || '-'
       const premium = (() => {
         try {
           return ctx.isOwner ? false : Boolean(
@@ -462,14 +461,10 @@ async function runReplyVariant(ctx, text, style) {
       }
       const entity = {
         __typename: 'GenAICompactEntityPrimitive',
-        title: senderLabel,
-        subtitle: `${role} • ${tier}`,
+        title: config.botName || 'skyline-JXRA',
+        subtitle: ctx.isGroup ? senderLabel : `${role} • ${tier}`,
         secondary_subtitle: `${ctx.isGroup ? 'Grup' : 'Pribadi'} • ${when} • ${ctx.command ? `.${ctx.command}` : 'pesan'}`,
         entity_id: Number(String(number).replace(/\D/g, '').slice(-8)) || 12345678,
-        entity_url: String(config.reactChannel?.dedicatedChannelUrl || '').trim() || (sender.includes('@') ? `https://wa.me/${number}` : ''),
-        entity_type: 'PERSON',
-        action_type: 'MESSAGE',
-        is_verified: Boolean(ctx.isOwner),
         ...(imageUrl ? { image: { url: imageUrl } } : {})
       }
       const payload = {
