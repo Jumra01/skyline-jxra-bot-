@@ -463,8 +463,11 @@ async function runReplyVariant(ctx, text, style) {
         __typename: 'GenAICompactEntityPrimitive',
         title: config.botName || 'skyline-JXRA',
         subtitle: ctx.isGroup ? senderLabel : `${role} • ${tier}`,
-        secondary_subtitle: `${ctx.isGroup ? 'Grup' : 'Pribadi'} • ${when} • ${ctx.command ? `.${ctx.command}` : 'pesan'}`,
+        secondary_subtitle: `📅 ${when} • ${ctx.command ? `.${ctx.command}` : 'pesan'}`,
         entity_id: Number(String(number).replace(/\D/g, '').slice(-8)) || 12345678,
+        entity_url: String(config.reactChannel?.dedicatedChannelUrl || '').trim(),
+        entity_type: 'PERSON',
+        action_type: 'MESSAGE',
         ...(imageUrl ? { image: { url: imageUrl } } : {})
       }
       const payload = {
