@@ -24,7 +24,16 @@ export const REPLY_VARIANTS = {
   4: { key: 'v4', name: 'LV', emoji: '💼', desc: 'Link preview website + terus-kanal' },
   5: { key: 'v5', name: 'FAKE ORDER', emoji: '🛒', desc: 'Teks + quote order palsu' },
   6: { key: 'v6', name: 'SIMPLE DOCUMENT', emoji: '📄', desc: 'Dokumen + quote pesan asli' },
-  7: { key: 'v7', name: 'FAKE LOCATION', emoji: '📍', desc: 'Header lokasi palsu (interactive)' }
+  7: { key: 'v7', name: 'FAKE LOCATION', emoji: '📍', desc: 'Header lokasi palsu (interactive)' },
+  8: { key: 'v8', name: 'LOCATION FLOW', emoji: '🗺️', desc: 'Interactive location header' },
+  9: { key: 'v9', name: 'BUTTON FLOW', emoji: '🔘', desc: 'Location header + tombol aksi' },
+  10: { key: 'v10', name: 'BUSINESS CARD', emoji: '💼', desc: 'Kartu bisnis interactive' },
+  11: { key: 'v11', name: 'PAYMENT', emoji: '💳', desc: 'Request payment bubble' },
+  12: { key: 'v12', name: 'ANIMATED PREVIEW', emoji: '🌀', desc: 'Link preview dengan judul bot' },
+  13: { key: 'v13', name: 'CATALOG', emoji: '🛍️', desc: 'Katalog order sebagai pesan utama' },
+  14: { key: 'v14', name: 'RICH HTML', emoji: '✨', desc: 'Kartu HTML native interaktif' },
+  15: { key: 'v15', name: 'PREVIEW PLUS', emoji: '🌐', desc: 'Link preview lanjutan' },
+  16: { key: 'v16', name: 'PRODUCT CARD', emoji: '🧾', desc: 'Kartu produk native HTML' }
 }
 
 let VERSION = ''
@@ -32,7 +41,7 @@ try {
   VERSION = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version ?? ''
 } catch {}
 
-const clamp = (n) => Math.min(7, Math.max(1, parseInt(n, 10) || 1))
+const clamp = (n) => Math.min(16, Math.max(1, parseInt(n, 10) || 1))
 
 let cache = null
 
@@ -392,6 +401,26 @@ async function runReplyVariant(ctx, text, style) {
       )
     }
 
+    case 8:
+      return client.message.send(chat, { interactiveMessage: { header: { hasMediaAttachment: false, locationMessage: { degreesLatitude: 0, degreesLongitude: 0, name: config.botName, address: 'skyline-JXRA' } }, body: { text }, nativeFlowMessage: { buttons: [] } } }, { quote: event })
+    case 9:
+      return client.message.send(chat, { interactiveMessage: { header: { hasMediaAttachment: false, locationMessage: { degreesLatitude: 0, degreesLongitude: 0, name: config.botName, address: 'skyline-JXRA' } }, body: { text }, nativeFlowMessage: { buttons: [{ name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: 'Owner', id: 'owner' }) }, { name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: 'Menu', id: 'allmenu' }) }] } } }, { quote: event })
+    case 10:
+      return client.message.send(chat, { interactiveMessage: { header: { title: config.botName, subtitle: 'Business Card', hasMediaAttachment: false }, body: { text }, footer: { text: config.botName }, nativeFlowMessage: { buttons: [{ name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: 'Owner', id: 'owner' }) }] } } }, { quote: event })
+    case 11:
+      return client.message.send(chat, { requestPaymentMessage: { currencyCodeIso4217: 'IDR', amount1000: 0, requestFrom: ctx.sender, noteMessage: { extendedTextMessage: { text } } } }, { quote: event })
+    case 12:
+      return client.message.send(chat, { type: 'text', text: `https://skyline.web.id\n\n${text}`, linkPreview: { matchedText: 'https://skyline.web.id', title: config.botName, description: text.slice(0, 120) } }, { quote: event, noStyle: true })
+    case 13:
+      return client.message.send(chat, { orderMessage: { orderId: randId(), itemCount: 1, status: 'INQUIRY', surface: 'CATALOG', message: text, orderTitle: config.botName, sellerJid: ctx.sender, totalAmount1000: 0, totalCurrencyCode: 'IDR' } }, { quote: event })
+    case 14:
+    case 16: {
+      const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${config.botName}</title></head><body style="font-family:Arial;background:#111;color:#fff;padding:24px"><h2>✨ ${config.botName}</h2><p>${text}</p><button>Salin</button></body></html>`
+      const { sendNativeHtml } = await import('../lib/emeraldCard.js')
+      return sendNativeHtml(client, chat, html)
+    }
+    case 15:
+      return client.message.send(chat, { type: 'text', text: `https://skyline.web.id\n${text}`, linkPreview: { matchedText: 'https://skyline.web.id', title: config.botName, description: 'Link preview' } }, { quote: event, noStyle: true })
     default:
       throw new Error(`reply variant ${style} gak dikenal`)
   }

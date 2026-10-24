@@ -77,7 +77,7 @@ const pluginConfig = {
   name: "setreply",
   alias: ['replyvariant', 'replystyle'],
   category: "owner",
-  description: "Atur gaya reply bot (v1-v7)",
+  description: "Atur gaya reply bot (v1-v16)",
   usage: ".setreply",
   example: ".setreply",
   isOwner: true,
@@ -94,13 +94,12 @@ const pluginConfig = {
 async function handler(ctx) {
     const sub = (ctx.args[0] || '').toLowerCase()
     const current = getReplyStyle()
-    const pick = sub.match(/^v?([1-7])$/)
+    const pick = sub.match(/^v?([1-9]|1[0-6])$/)
 
     if (pick) {
       await applyVariant(ctx, Number(pick[1]))
       return
     }
-
     if (sub === 'thumb') {
       const target = (ctx.args[1] || '').toLowerCase() === 'v4' ? 'v4' : 'global'
       const rel = target === 'v4' ? V4_THUMB : CARD_THUMB
@@ -133,7 +132,7 @@ async function handler(ctx) {
     if (sub) {
       await ctx.reply(
         `❌ *VARIANT TIDAK VALID*\n\n` +
-        `Gunakan: *v1* s/d *v7*, atau:\n` +
+        `Gunakan: *v1* s/d *v16*, atau:\n` +
         `• \`thumb\` — balas foto → thumbnail kartu global\n` +
         `• \`thumb v4\` — balas foto → thumbnail preview v4\n` +
         `Contoh: \`${ctx.prefix}setreply v5\``
