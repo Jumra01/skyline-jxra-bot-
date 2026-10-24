@@ -282,10 +282,15 @@ function htmlCard(html) {
 
 /* ────────────────────── registry varian ────────────────────── */
 
-// URL render LaTeX → PNG. Dicek hidup (HTTP 200, image/png) saat file ini dibuat.
+// PNG hasil render LaTeX. Buat varian `latexurl` — sudah dites di device dan
+// TIDAK digambar WA, jadi dipertahankan cuma sebagai control/regresi.
 const LATEX_PNG = 'https://latex.codecogs.com/png.image?E%20%3D%20mc%5E2'
-// Gambar demo buat varian yang butuh URL polos (InlineImageMetadata.imageUrl).
-const DEMO_IMG = LATEX_PNG
+// Gambar demo buat `inlineimg`: PNG milik sendiri di skyline.web.id (56×56,
+// HTTP 200 image/png, tetap 200 walau User-Agent dikosongkan → tanpa blokir
+// hotlink/UA). Sengaja BUKAN codecogs biar tes ini menutup satu-satunya
+// keraguan tersisa: kalau tetap gak muncul, berarti WA memang tidak meng-fetch
+// URL external apa pun — bukan urusan domain atau hotlink.
+const DEMO_IMG = 'https://skyline.web.id/assets/img/logo-nav.png'
 
 /**
  * Registry varian rich response. Nambah fitur = tambah entri di sini.
@@ -382,11 +387,11 @@ const VARIANTS = [
   },
   {
     id: 'inlineimg',
-    label: 'Gambar inline (URL polos)',
-    note: 'submessage type 3 — TIDAK digambar WA; fallback jadi teks. Konfirmasi: URL external gak di-fetch, jadi gak ada domain yang menolong',
+    label: 'Gambar inline (domain sendiri)',
+    note: 'submessage type 3 dengan PNG di skyline.web.id — tes penutup: sebelumnya codecogs gagal, sekarang domain sendiri biar kebuktian bukan urusan hotlink',
     build: () => ({
       submessages: [
-        { messageType: 2, messageText: '🧪 *TES RICH — INLINE IMAGE (URL polos)*' },
+        { messageType: 2, messageText: '🧪 *TES RICH — INLINE IMAGE*\nURL: PNG di skyline.web.id (domain sendiri, tanpa blokir hotlink)' },
         {
           messageType: 3,
           imageMetadata: {
@@ -398,7 +403,7 @@ const VARIANTS = [
               imageHighResUrl: DEMO_IMG,
               sourceUrl: DEMO_IMG
             },
-            imageText: 'gambar dari URL polos'
+            imageText: 'fallback teks — gambarnya gak digambar'
           }
         }
       ]
