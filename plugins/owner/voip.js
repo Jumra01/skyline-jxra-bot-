@@ -229,7 +229,13 @@ async function handler(ctx) {
     )
   }
 
-  const fileInput = ctx.args?.slice(ctx.mentioned?.[0] ? 0 : 1).join(' ').trim()
+  // args[0] selalu target (nomor atau token @mention) → nama file dari args[1]+.
+  // Token '@...' dibuang biar mention gak ikut jadi bagian nama file.
+  const fileInput = ctx.args
+    ?.slice(1)
+    .filter((a) => !String(a).startsWith('@'))
+    .join(' ')
+    .trim()
   const audioPath = resolveAudio(fileInput)
   if (fileInput && !audioPath) {
     return ctx.reply(`❌ File audio tidak ditemukan: \`${fileInput}\``)
