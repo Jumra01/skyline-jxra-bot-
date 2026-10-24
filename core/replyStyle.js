@@ -683,11 +683,37 @@ async function runReplyVariant(ctx, text, style) {
       )
     }
 
-    /* v14 RICH HTML — FOAHtmlPrimitiveDemoDONOTUSE GenAI UnifiedResponse */
+    /* v14 RICH PROTO — submessages native AI rich response (type 2 text + type 5 code) */
     case 14: {
-      const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${config.botName}</title></head><body style="margin:0;padding:16px;background:#0d1117;color:#e6edf3;font-family:sans-serif"><div style="border:1px solid #30363d;border-radius:12px;padding:16px;background:#161b22"><h3 style="margin-top:0;color:#58a6ff">✨ ${config.botName}</h3><p style="white-space:pre-wrap;line-height:1.5">${text}</p><div style="font-size:12px;color:#8b949e;border-top:1px solid #30363d;padding-top:8px">skyline-JXRA • Rich Response</div></div></body></html>`
-      const { sendNativeHtml } = await import('../lib/emeraldCard.js')
-      return sendNativeHtml(client, chat, html)
+      return client.message.send(
+        chat,
+        {
+          botForwardedMessage: {
+            message: {
+              richResponseMessage: {
+                messageType: 1,
+                submessages: [
+                  {
+                    messageType: 2,
+                    messageText: `✨ *${config.botName}*\n\n${text}`
+                  },
+                  {
+                    messageType: 5,
+                    codeMetadata: {
+                      codeLanguage: 'text',
+                      codeBlocks: [
+                        { highlightType: 0, codeContent: text }
+                      ]
+                    }
+                  }
+                ],
+                contextInfo: { isForwarded: true, forwardOrigin: 4 }
+              }
+            }
+          }
+        },
+        { quote: event, additionalAttributes: { type: 'text' } }
+      )
     }
 
     /* v15 PREVIEW PLUS — linkPreview dengan OG image buffer dinamis */
@@ -711,45 +737,52 @@ async function runReplyVariant(ctx, text, style) {
       )
     }
 
-    /* v16 PRODUCT CARD — Product Card resmi zapo dengan upload ulang media */
+    /* v16 RICH PROTO PRODUCT-STYLE — rich submessages, tanpa HTML/WebView/download */
     case 16: {
-      let productImage = null
       const thumb = await thumb300()
-      if (thumb && client.message?.upload) {
-        try {
-          const up = await client.message.upload(thumb, { type: 'image', mimetype: 'image/jpeg' })
-          productImage = {
-            url: up.url,
-            directPath: up.directPath,
-            mediaKey: up.mediaKey,
-            fileSha256: up.fileSha256,
-            fileEncSha256: up.fileEncSha256,
-            fileLength: up.fileLength,
-            mediaKeyTimestamp: up.mediaKeyTimestamp,
-            mimetype: 'image/jpeg'
-          }
-        } catch {}
-      }
+      const imageUrl = thumb ? `data:image/jpeg;base64,${thumb.toString('base64')}` : ''
       return client.message.send(
         chat,
         {
-          productMessage: {
-            businessOwnerJid: ctx.sender,
-            body: text,
-            footer: `${config.botName} Product Showcase`,
-            product: {
-              productId: `PROD-${Date.now().toString().slice(-6)}`,
-              title: `${config.botName} Multi-Device Bot`,
-              description: 'Layanan bot WhatsApp modern dengan arsitektur zapo-js penuh.',
-              currencyCode: 'IDR',
-              priceAmount1000: 50000000,
-              retailerId: 'sky-jxra-01',
-              url: 'https://skyline.web.id',
-              ...(productImage ? { productImage } : {})
+          botForwardedMessage: {
+            message: {
+              richResponseMessage: {
+                messageType: 1,
+                submessages: [
+                  {
+                    messageType: 2,
+                    messageText: `🧾 *${config.botName} Product Card*\n\n${text}`
+                  },
+                  {
+                    messageType: 4,
+                    tableMetadata: {
+                      title: config.botName,
+                      rows: [
+                        { items: ['Product', config.botName], isHeading: true },
+                        { items: ['Status', 'Available'], isHeading: false },
+                        { items: ['Website', 'https://skyline.web.id'], isHeading: false }
+                      ]
+                    }
+                  },
+                  ...(imageUrl
+                    ? [{
+                        messageType: 3,
+                        imageMetadata: {
+                          imageUrl: {
+                            imagePreviewUrl: imageUrl,
+                            imageHighResUrl: imageUrl,
+                            sourceUrl: imageUrl
+                          }
+                        }
+                      }]
+                    : [])
+                ],
+                contextInfo: { isForwarded: true, forwardOrigin: 4 }
+              }
             }
           }
         },
-        { quote: event }
+        { quote: event, additionalAttributes: { type: 'text' } }
       )
     }
     default:
