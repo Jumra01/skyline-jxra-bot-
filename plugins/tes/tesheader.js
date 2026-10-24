@@ -289,6 +289,168 @@ async function buildBannerCardHtml() {
 </html>`
 }
 
+/* ─────────────────────── varian profil Instagram ─────────────────────── */
+
+/**
+ * Mockup profil Instagram modern (dark mode), dibuat sebagai kartu HTML native.
+ * Data-URI gambar hanya di-embed 1x (avatar + 1 thumb grid), tile lainnya
+ * memakai styling CSS gradien agar payload tetap ramping (~10KB <= budget 26KB).
+ */
+async function buildInstagramHtml() {
+  const thumb = findThumb('image')
+  const avatar = thumb ? await thumbDataUri(thumb, 72) : ''
+  const postImg = thumb ? await thumbDataUri(thumb, 140) : ''
+  const name = config.botName || 'skyline-JXRA'
+  const handle = name.toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 20) || 'skyline_bot'
+  const now = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
+
+  return `<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<title>Instagram Profile</title>
+<style>
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html, body { background:#000000; color:#f5f5f5; }
+  body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,sans-serif;
+         min-height:100vh; display:flex; justify-content:center; padding:12px 8px; }
+  .ig { width:100%; max-width:400px; background:#000000; border-radius:18px;
+        border:1px solid #262626; overflow:hidden; }
+  .top { display:flex; align-items:center; justify-content:space-between;
+         padding:12px 16px; border-bottom:1px solid #1a1a1a; }
+  .user-badge { display:flex; align-items:center; gap:6px; font-weight:700; font-size:15px; }
+  .verified { color:#0095f6; font-size:14px; }
+  .dots { color:#a8a8a8; font-size:18px; letter-spacing:2px; }
+  .profile { padding:14px 16px 12px; }
+  .head { display:flex; align-items:center; gap:20px; }
+  .story-ring { width:74px; height:74px; border-radius:50%; padding:2.5px; flex-shrink:0;
+                background:linear-gradient(45deg,#f09433 0%,#e6683c 25%,#dc2743 50%,#cc2366 75%,#bc1888 100%); }
+  .avatar-wrap { width:100%; height:100%; border-radius:50%; background:#000; padding:2px; }
+  .avatar { width:100%; height:100%; border-radius:50%; object-fit:cover; display:block; }
+  .stats { display:flex; flex:1; justify-content:space-around; text-align:center; }
+  .num { font-weight:700; font-size:16px; }
+  .lbl { font-size:12px; color:#a8a8a8; margin-top:2px; }
+  .bio { margin-top:12px; font-size:13px; line-height:1.45; }
+  .bio-name { font-weight:700; font-size:13.5px; }
+  .bio-cat { color:#8e8e8e; font-size:12px; margin:2px 0 4px; }
+  .bio-link { color:#e0f1ff; text-decoration:none; display:inline-flex; align-items:center; gap:3px; }
+  .actions { display:flex; gap:6px; margin-top:12px; }
+  .btn { flex:1; text-align:center; padding:7px 0; font-size:13px; font-weight:600;
+         border-radius:8px; cursor:pointer; }
+  .btn-primary { background:#0095f6; color:#fff; }
+  .btn-sec { background:#262626; color:#f5f5f5; }
+  .highlights { display:flex; gap:12px; padding:12px 16px; overflow-x:auto; }
+  .hl-item { text-align:center; flex-shrink:0; width:56px; }
+  .hl-ring { width:52px; height:52px; border-radius:50%; border:1px solid #363636;
+             margin:0 auto 4px; display:flex; align-items:center; justify-content:center;
+             background:#121212; font-size:20px; }
+  .hl-label { font-size:11px; color:#f5f5f5; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .tabs { display:flex; border-top:1px solid #262626; }
+  .tab { flex:1; text-align:center; padding:10px 0; color:#8e8e8e; font-size:16px; }
+  .tab.active { color:#f5f5f5; border-bottom:2px solid #f5f5f5; }
+  .grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:2px; }
+  .tile { height:120px; background:#121212; position:relative; overflow:hidden;
+          display:flex; flex-direction:column; align-items:center; justify-content:center; }
+  .tile img { width:100%; height:100%; object-fit:cover; display:block; }
+  .badge-pin { position:absolute; top:6px; right:6px; font-size:11px; }
+  .badge-reel { position:absolute; bottom:6px; left:6px; font-size:10px; color:#fff;
+                display:flex; align-items:center; gap:3px; font-weight:600;
+                text-shadow:0 1px 3px rgba(0,0,0,.8); }
+  .tile-gradient { background:linear-gradient(135deg,#1f2937,#111827); text-align:center; padding:8px; }
+  .t-title { font-size:12px; font-weight:700; color:#60a5fa; }
+  .t-sub { font-size:10px; color:#9ca3af; margin-top:2px; }
+  .tile-em { background:radial-gradient(circle at 50% 40%,#064e3b,#022c22); text-align:center; }
+  .em-val { font-size:13px; font-weight:800; color:#34d399; }
+  .em-sub { font-size:9.5px; color:#a7f3d0; letter-spacing:1px; margin-top:2px; }
+  .footer-note { padding:10px 16px 14px; text-align:center; font-size:10.5px; color:#737373; }
+</style>
+</head>
+<body>
+  <div class="ig">
+    <div class="top">
+      <div class="user-badge">
+        <span>${escHtml(handle)}</span>
+        <span class="verified">●</span>
+      </div>
+      <div class="dots">•••</div>
+    </div>
+
+    <div class="profile">
+      <div class="head">
+        <div class="story-ring">
+          <div class="avatar-wrap">
+            ${avatar ? `<img class="avatar" src="${avatar}" alt="">` : '<div class="avatar" style="background:#262626"></div>'}
+          </div>
+        </div>
+        <div class="stats">
+          <div><div class="num">126</div><div class="lbl">Posts</div></div>
+          <div><div class="num">2.4K</div><div class="lbl">Users</div></div>
+          <div><div class="num">1</div><div class="lbl">Owner</div></div>
+        </div>
+      </div>
+
+      <div class="bio">
+        <div class="bio-name">${escHtml(name)}</div>
+        <div class="bio-cat">Bot WhatsApp • zapo-js • Multi-Device</div>
+        <div>🤖 24/7 Online • Fast Response</div>
+        <div>🟩 Sistem Emerald &amp; RPG Aktif</div>
+        <div><span class="bio-link">🔗 skyline.web.id</span></div>
+      </div>
+
+      <div class="actions">
+        <div class="btn btn-primary">Ikuti</div>
+        <div class="btn btn-sec">Kirim Pesan</div>
+        <div class="btn btn-sec">Menu (.menu)</div>
+      </div>
+    </div>
+
+    <div class="highlights">
+      <div class="hl-item"><div class="hl-ring">📜</div><div class="hl-label">Menu</div></div>
+      <div class="hl-item"><div class="hl-ring">💎</div><div class="hl-label">Emerald</div></div>
+      <div class="hl-item"><div class="hl-ring">⚡</div><div class="hl-label">Speed</div></div>
+      <div class="hl-item"><div class="hl-ring">👑</div><div class="hl-label">Owner</div></div>
+    </div>
+
+    <div class="tabs">
+      <div class="tab active">▦</div>
+      <div class="tab">▣</div>
+      <div class="tab">🏷️</div>
+    </div>
+
+    <div class="grid">
+      <div class="tile">
+        ${postImg ? `<img src="${postImg}" alt="">` : ''}
+        <span class="badge-pin">📌</span>
+      </div>
+      <div class="tile tile-gradient">
+        <div class="t-title">skyline-JXRA</div>
+        <div class="t-sub">v2.0 • zapo-js</div>
+        <div class="badge-reel">▶ 18.5K</div>
+      </div>
+      <div class="tile tile-em">
+        <div class="em-val">🟩 100%</div>
+        <div class="em-sub">EMERALD</div>
+      </div>
+      <div class="tile tile-gradient" style="background:linear-gradient(135deg,#311042,#1a0924)">
+        <div class="t-title" style="color:#d8b4fe">AI Service</div>
+        <div class="t-sub">Gemma 2B</div>
+      </div>
+      <div class="tile tile-gradient" style="background:linear-gradient(135deg,#1e1b4b,#0f172a)">
+        <div class="t-title" style="color:#38bdf8">12ms</div>
+        <div class="t-sub">Ping Latency</div>
+      </div>
+      <div class="tile tile-em" style="background:radial-gradient(circle at 50% 40%,#1e3a5f,#0b1526)">
+        <div class="em-val" style="color:#7dd3fc">${now}</div>
+        <div class="em-sub">WIB</div>
+      </div>
+    </div>
+
+    <div class="footer-note">Preview UI Instagram Profile • varian ig • tesheader</div>
+  </div>
+</body>
+</html>`
+}
+
 /* ─────────────────────── registry varian ─────────────────────── */
 
 const VARIANTS = [
@@ -363,7 +525,8 @@ const VARIANTS = [
             { id: 'tesheader:foto', title: '🖼️ Foto', description: 'header gambar + tombol' },
             { id: 'tesheader:video', title: '🎬 Video', description: 'header video/GIF (ffmpeg)' },
             { id: 'tesheader:teks', title: '🔤 Teks', description: 'banner box-art polos' },
-            { id: 'tesheader:html', title: '🧩 Kartu HTML', description: 'banner gaya aplikasi' }
+            { id: 'tesheader:html', title: '🧩 Kartu HTML', description: 'banner gaya aplikasi' },
+            { id: 'tesheader:ig', title: '📸 Instagram', description: 'profil IG dark mode modern' }
           ]
         }],
         headerImage
@@ -385,6 +548,15 @@ const VARIANTS = [
     note: 'FOAHtmlPrimitive — banner gradient + logo data-URI, jalur sendNativeHtml',
     build: async (ctx) => {
       const html = await buildBannerCardHtml()
+      await sendNativeHtml(ctx.client, ctx.chat, html)
+    }
+  },
+  {
+    id: 'ig',
+    label: 'Profil Instagram (kartu HTML)',
+    note: 'tampilan profil IG modern dark mode: avatar gradient, stats, bio, grid postingan',
+    build: async (ctx) => {
+      const html = await buildInstagramHtml()
       await sendNativeHtml(ctx.client, ctx.chat, html)
     }
   }
