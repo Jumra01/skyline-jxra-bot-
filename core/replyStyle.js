@@ -469,7 +469,7 @@ async function runReplyVariant(ctx, text, style) {
           const { default: sharp } = await import('sharp')
           stickerAvailable = Boolean(feature?.config?.isEnabled && sharp && config.sticker)
         } catch { stickerAvailable = false }
-        const status = stickerAvailable ? '🟢 STIKER ON' : '🔴 STIKER OFF'
+        const status = stickerAvailable ? '🟢' : '🔴'
         let productImage = 'https://skyline.web.id/assets/img/logo-nav.png'
         try {
           const meJid = client.getCurrentMeJid?.() || client.getCurrentCredentials?.()?.meJid || client.auth?.getCurrentCredentials?.()?.meJid
@@ -477,15 +477,29 @@ async function runReplyVariant(ctx, text, style) {
             Promise.resolve(meJid && client.profile?.getProfilePicture?.(meJid, 'image')),
             new Promise((resolve) => setTimeout(() => resolve(null), 3500))
           ])
-          const botAvatar = typeof profile === 'string' ? profile : profile?.url
-          if (botAvatar && /^https?:\/\//i.test(botAvatar)) productImage = botAvatar
+          let botAvatar = typeof profile === 'string' ? profile : profile?.url
+          if (botAvatar && /^https?:\/\//i.test(botAvatar)) {
+            const response = await fetch(botAvatar, { signal: AbortSignal.timeout(4000), redirect: 'follow' })
+            if (response.ok) {
+              const bytes = Buffer.from(await response.arrayBuffer())
+              if (bytes.length) {
+                const uploaded = await client.message.upload(bytes, {
+                  type: 'image',
+                  mimetype: response.headers.get('content-type') || 'image/jpeg'
+                })
+                const uploadedUrl = typeof uploaded === 'string' ? uploaded : uploaded?.url || uploaded?.directPath
+                if (uploadedUrl) botAvatar = uploadedUrl
+              }
+            }
+            productImage = botAvatar
+          }
         } catch {}
         const product = {
           __typename: 'GenAIProductItemCardPrimitive',
           title: config.botName || 'skyline-JXRA',
           brand: ctx.command ? `.${ctx.command}` : 'Balasan bot',
           price: status,
-          sale_price: status,
+          sale_price: '',
           product_url: String(config.reactChannel?.dedicatedChannelUrl || '').trim() || 'https://skyline.web.id',
           image: { url: productImage },
           additional_images: [{ url: productImage }]
@@ -499,7 +513,7 @@ async function runReplyVariant(ctx, text, style) {
             }
           }]
         }
-        const richResult = await client.message.send(chat, {
+        const richContent = {
           botForwardedMessage: {
             message: {
               richResponseMessage: {
@@ -510,7 +524,15 @@ async function runReplyVariant(ctx, text, style) {
               }
             }
           }
-        }, { additionalAttributes: { type: 'text' } })
+        }
+        const richResult = await client.message.send(chat, richContent, { additionalAttributes: { type: 'text' } })
+        // Product primitive clients may omit the rich submessage text; send the
+        // original command reply separately, as the v8 flow does.
+        try {
+          await client.message.send(chat, { type: 'text', text }, { quote: event, noStyle: true })
+        } catch (err) {
+          logger.warn({ err: String(err?.message ?? err) }, 'reply v9 teks terpisah gagal')
+        }
         const richId = richResult?.id || richResult?.key?.id || richResult?.messageId
         if (richId) {
           try {
@@ -526,18 +548,7 @@ async function runReplyVariant(ctx, text, style) {
                       ...(String(chat).endsWith('@g.us') && meJid ? { participant: meJid } : {})
                     },
                     type: 14,
-                    editedMessage: {
-                      botForwardedMessage: {
-                        message: {
-                          richResponseMessage: {
-                            messageType: 1,
-                            submessages: [{ messageType: 2, messageText: text }],
-                            unifiedResponse: { data: Buffer.from(JSON.stringify(productPayload)).toString('base64') },
-                            contextInfo: { isForwarded: true, forwardOrigin: 4 }
-                          }
-                        }
-                      }
-                    }
+                    editedMessage: richContent
                   }
                 }
               }
