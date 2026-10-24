@@ -38,16 +38,22 @@
  *
  * ─────────────────────── Temuan (sudah dites di device owner) ───────────────────────
  * Submessage rich type 3 & 8 TIDAK digambar oleh WhatsApp — keduanya jatuh
- * ke teks biasa:
- *   • type 8 (`AI_RICH_RESPONSE_LATEX`), `latex` (tanpa url) DAN `latexurl`
+ * ke teks biasa. SUDAH DITES DUA KALI biar bukan tebakan:
+ *   • type 8 (`AI_RICH_RESPONSE_LATEX`): `latex` (tanpa url) DAN `latexurl`
  *     (url PNG codecogs) → sama-sama teks.
- *   • type 3 (`AI_RICH_RESPONSE_INLINE_IMAGE`), `inlineimg` → URL-nya gak
- *     pernah di-fetch; `imageText`-nya yang tampil sebagai teks.
- * Artinya URL external polos TIDAK dipakai renderer WA (Meta AI sendiri
- * nyajiin asetnya dari CDN Meta). Konsekuensinya: ganti domain URL — termasuk
- * domain sendiri kayak skyline.web.id — TIDAK menolong, karena URL itu
- * di-fetch oleh client WA, bukan bot. `contentItemsMetadata` juga bukan wadah
- * alternatif (isinya cuma `reelItem`).
+ *   • type 3 (`AI_RICH_RESPONSE_INLINE_IMAGE`): codecogs gagal, lalu diganti
+ *     PNG domain sendiri (`skyline.web.id`, dicek tetap HTTP 200 walau
+ *     `User-Agent` dikosongkan → tanpa blokir hotlink/UA) → TETAP gak ada
+ *     gambar, `imageText`-nya yang tampil.
+ * Dua domain beda + tanpa hotlink protection = keruguan "bukan urusan domain"
+ * sudah tertutup. WA memang TIDAK meng-fetch URL external apa pun di
+ * submessage rich native (Meta AI sendiri nyajiin asetnya dari CDN Meta).
+ * `contentItemsMetadata` juga bukan wadah alternatif (isinya cuma `reelItem`).
+ *
+ * Konsekuensi buat fitur ke depan: SEMUA aset visual — foto, rumus, chart,
+ * logo — harus lewat kartu HTML (`htmlCard`) sebagai data-URI. Jalur native
+ * type 3/type 8 cuma layak dipakai sebagai control/regresi: kalau suatu saat
+ * update WA mengaktifkan renderer-nya, varian ini langsung kelihatan berubah.
  *
  * Yang TERBUKTI tampil: kartu HTML (`htmlCard`) — aset ditandai sebagai
  * data-URI, karena remote <img> diblok WebView kartu tapi data-URI jalan
@@ -387,8 +393,8 @@ const VARIANTS = [
   },
   {
     id: 'inlineimg',
-    label: 'Gambar inline (domain sendiri)',
-    note: 'submessage type 3 dengan PNG di skyline.web.id — tes penutup: sebelumnya codecogs gagal, sekarang domain sendiri biar kebuktian bukan urusan hotlink',
+    label: 'Gambar inline (URL domain sendiri)',
+    note: 'type 3 — TIDAK digambar WA. Sudah dites 2×: codecogs & PNG skyline.web.id sendiri (tanpa blokir hotlink) → tetap teks. Control/regresi',
     build: () => ({
       submessages: [
         { messageType: 2, messageText: '🧪 *TES RICH — INLINE IMAGE*\nURL: PNG di skyline.web.id (domain sendiri, tanpa blokir hotlink)' },
