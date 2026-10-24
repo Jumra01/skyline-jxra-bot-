@@ -604,53 +604,82 @@ async function runReplyVariant(ctx, text, style) {
       return sent
     }
 
-    /* v13 CATALOG — generic order flow card dengan review_and_pay */
+    /* v13 CATALOG — carousel produk katalog resmi zapo (MIXED_BIZ_OPTIONS + cta_catalog + cta_url) */
     case 13: {
+      const pn = ctx.client.auth?.getCurrentCredentials?.()?.meJid?.split('@')?.[0] || '628000000000'
+      const thumb = await thumb300()
+      let uploadedImage = null
+      if (thumb && client.message?.upload) {
+        try {
+          const up = await client.message.upload(thumb, { type: 'image', mimetype: 'image/jpeg' })
+          uploadedImage = {
+            url: up.url,
+            directPath: up.directPath,
+            mediaKey: up.mediaKey,
+            fileSha256: up.fileSha256,
+            fileEncSha256: up.fileEncSha256,
+            fileLength: up.fileLength,
+            mediaKeyTimestamp: up.mediaKeyTimestamp,
+            mimetype: 'image/jpeg'
+          }
+        } catch {}
+      }
+
+      const cards = [
+        {
+          header: {
+            title: `${config.botName} Service`,
+            hasMediaAttachment: Boolean(uploadedImage),
+            ...(uploadedImage ? { imageMessage: uploadedImage } : {})
+          },
+          body: { text: `${text.slice(0, 80)}\nIDR 50.000` },
+          nativeFlowMessage: {
+            messageVersion: 1,
+            buttons: [
+              {
+                name: 'cta_url',
+                buttonParamsJson: JSON.stringify({
+                  display_text: '🌐 Website',
+                  url: 'https://skyline.web.id',
+                  merchant_url: 'https://skyline.web.id'
+                })
+              },
+              {
+                name: 'cta_catalog',
+                buttonParamsJson: JSON.stringify({
+                  business_phone_number: pn
+                })
+              }
+            ]
+          }
+        }
+      ]
+
       return client.message.send(
         chat,
         {
           interactiveMessage: {
-            header: {
-              title: `🛒 ${config.botName} Catalog`,
-              subtitle: 'Official Store Item',
-              hasMediaAttachment: false
-            },
             body: { text },
-            footer: { text: 'Klik tombol di bawah untuk melihat rincian katalog.' },
-            nativeFlowMessage: {
-              messageVersion: 1,
-              buttons: [
+            footer: { text: config.botName },
+            carouselMessage: { messageVersion: 1, cards }
+          }
+        },
+        {
+          quote: event,
+          customNodes: [
+            {
+              tag: 'biz',
+              attrs: {},
+              content: [
                 {
-                  name: 'review_and_pay',
-                  buttonParamsJson: JSON.stringify({
-                    currency: 'IDR',
-                    reference_id: `CAT-${Date.now()}`,
-                    total_amount: { value: 0, offset: 100 },
-                    order: {
-                      status: 'payment_requested',
-                      subtotal: { value: 0, offset: 100 },
-                      order_type: 'CATALOG',
-                      items: [
-                        {
-                          name: `${config.botName} Multi-Device Bot`,
-                          amount: { value: 0, offset: 100 },
-                          quantity: 1,
-                          isCustomItem: true,
-                          isQuantitySet: true
-                        }
-                      ]
-                    }
-                  })
-                },
-                {
-                  name: 'quick_reply',
-                  buttonParamsJson: JSON.stringify({ display_text: '👑 Hubungi Admin', id: '.owner' })
+                  tag: 'interactive',
+                  attrs: { type: 'native_flow', v: '1' },
+                  content: [{ tag: 'native_flow', attrs: { v: '9', name: 'mixed' }, content: undefined }]
                 }
               ]
             }
-          }
-        },
-        { quote: event }
+          ]
+        }
       )
     }
 
@@ -688,7 +717,17 @@ async function runReplyVariant(ctx, text, style) {
       const thumb = await thumb300()
       if (thumb && client.message?.upload) {
         try {
-          productImage = await client.message.upload(thumb, { type: 'image', mimetype: 'image/jpeg' })
+          const up = await client.message.upload(thumb, { type: 'image', mimetype: 'image/jpeg' })
+          productImage = {
+            url: up.url,
+            directPath: up.directPath,
+            mediaKey: up.mediaKey,
+            fileSha256: up.fileSha256,
+            fileEncSha256: up.fileEncSha256,
+            fileLength: up.fileLength,
+            mediaKeyTimestamp: up.mediaKeyTimestamp,
+            mimetype: 'image/jpeg'
+          }
         } catch {}
       }
       return client.message.send(
