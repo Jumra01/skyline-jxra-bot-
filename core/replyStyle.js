@@ -92,24 +92,16 @@ function readVersionedFile(rel) {
 }
 
 async function senderAvatar(ctx) {
-  const jids = [...new Set([ctx.sender, ctx.senderLid].filter(Boolean))]
-  for (const jid of jids) {
-    try {
-      const result = await Promise.race([
-        Promise.resolve(ctx.client?.profile?.getProfilePicture?.(jid, 'image')),
-        new Promise((resolve) => setTimeout(() => resolve(null), 4000))
-      ])
-      const url = typeof result === 'string' ? result : result?.url
-      if (!url || !/^https?:\/\//i.test(url)) continue
-      const response = await fetch(url, { signal: AbortSignal.timeout(4000), redirect: 'follow' })
-      if (!response.ok) continue
-      const buf = Buffer.from(await response.arrayBuffer())
-      if (!buf.length) continue
-      const sharp = (await import('sharp')).default
-      return await sharp(buf).flatten({ background: '#ffffff' }).resize(300, 300, { fit: 'cover' }).jpeg({ quality: 70 }).toBuffer()
-    } catch {}
+  try {
+    const result = await Promise.race([
+      Promise.resolve(ctx.client?.profile?.getProfilePicture?.(ctx.sender, 'image')),
+      new Promise((resolve) => setTimeout(() => resolve(null), 4000))
+    ])
+    const url = typeof result === 'string' ? result : result?.url
+    return url && /^https?:\/\//i.test(url) ? url : null
+  } catch {
+    return null
   }
-  return null
 }
 
 async function thumb300() {
@@ -447,20 +439,14 @@ async function runReplyVariant(ctx, text, style) {
         ``,
         text
       ].join('\n')
-      let imageMessage
-      try {
-        const image = await senderAvatar(ctx)
-        if (image && client.message?.upload) {
-          imageMessage = await client.message.upload(image, { type: 'image', mimetype: 'image/jpeg' })
-        }
-      } catch (err) {
-        logger.warn({ err: String(err?.message ?? err) }, 'reply v8 gagal menyiapkan avatar')
-      }
-      const imageUrl = imageMessage?.url || imageMessage?.directPath
+      let imageUrl = await senderAvatar(ctx)
       if (!imageUrl) {
         const fallbackImage = await thumb300()
         if (fallbackImage && client.message?.upload) {
-          try { imageMessage = await client.message.upload(fallbackImage, { type: 'image', mimetype: 'image/jpeg' }) } catch {}
+          try {
+            const uploaded = await client.message.upload(fallbackImage, { type: 'image', mimetype: 'image/jpeg' })
+            imageUrl = uploaded?.url || uploaded?.directPath || ''
+          } catch {}
         }
       }
       const entity = {
@@ -473,13 +459,13 @@ async function runReplyVariant(ctx, text, style) {
         entity_type: 'PERSON',
         action_type: 'MESSAGE',
         is_verified: Boolean(ctx.isOwner),
-        ...(imageUrl ? { image: { url: imageUrl, ...(imageMessage?.directPath ? { direct_path: imageMessage.directPath } : {}) } } : {})
+        ...(imageUrl ? { image: { url: imageUrl } } : {})
       }
       const payload = {
         response_id: crypto.randomUUID(),
         sections: [
-          { view_model: { primitive: { text: profileText, __typename: 'GenAIMarkdownTextUXPrimitive' }, __typename: 'GenAISingleLayoutViewModel' } },
-          { view_model: { primitive: entity, __typename: 'GenAISingleLayoutViewModel' } }
+          { view_model: { primitive: entity, __typename: 'GenAISingleLayoutViewModel' } },
+          { view_model: { primitive: { text: profileText, __typename: 'GenAIMarkdownTextUXPrimitive' }, __typename: 'GenAISingleLayoutViewModel' } }
         ]
       }
       try {
