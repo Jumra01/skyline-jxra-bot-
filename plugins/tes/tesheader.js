@@ -1,110 +1,193 @@
 /**
  * © skyline-JXRA
- * Lab reply/header Hoshino Ai v2.5.5 yang diterjemahkan ke API zapo-js secara penuh.
- * Varian v1-v16, context c1-c3, rich/html, business, location, buttons.
+ * Lab layout rich alternatif dari Hoshino AIRich yang dipetakan ke zapo-js.
+ * Mencoba HScroll, ActionRow, MetadataText, Post, dan Product primitives.
  */
-import { sendReplyVariant } from '../../core/replyStyle.js'
-import { sendNativeHtml } from '../../lib/emeraldCard.js'
+import crypto from 'node:crypto'
 
 const pluginConfig = {
-  name: 'tesheader', alias: ['testheader', 'headerlab'], category: 'tools',
-  description: 'Lab semua varian reply/header ala Hoshino Ai v2.5.5 (zapo-js)',
-  usage: '.tesheader [v1-v16|c1-c3|all]', example: '.tesheader all',
-  isOwner: true, isPremium: false, isGroup: false, isPrivate: false,
-  isAdmin: false, isBotAdmin: false, cooldown: 5, limit: 0, isEnabled: true, energi: 0
+  name: 'tesheader',
+  alias: ['testheader', 'headerlab'],
+  category: 'tools',
+  description: 'Tes alternatif layout rich Hoshino (HScroll, ActionRow, Post, Product)',
+  usage: '.tesheader [hscroll|actionrow|tip|post|product|all]',
+  example: '.tesheader all',
+  isOwner: true,
+  isPremium: false,
+  isGroup: false,
+  isPrivate: false,
+  isAdmin: false,
+  isBotAdmin: false,
+  cooldown: 5,
+  limit: 0,
+  isEnabled: true,
+  energi: 0,
+}
+
+const samplePost = (n) => ({
+  title: `Contoh Post ${n}`,
+  subtitle: 'Layout Hoshino AIRich',
+  username: 'skyline-JXRA',
+  profile_picture_url: 'https://skyline.web.id/assets/img/logo-nav.png',
+  is_verified: false,
+  thumbnail_url: 'https://skyline.web.id/assets/img/logo-nav.png',
+  post_caption: `Tes GenAIPostPrimitive nomor ${n}`,
+  likes_count: 128,
+  comments_count: 12,
+  shares_count: 4,
+  post_url: 'https://skyline.web.id',
+  post_deeplink: 'https://skyline.web.id',
+  source_app: 'INSTAGRAM',
+  footer_label: 'skyline-JXRA',
+  footer_icon: 'https://skyline.web.id/assets/img/logo-nav.png',
+  is_carousel: true,
+  orientation: 'LANDSCAPE',
+  post_type: 'PHOTO',
+  __typename: 'GenAIPostPrimitive',
+})
+
+const product = {
+  title: 'Contoh Product Card',
+  brand: 'skyline-JXRA',
+  price: 'Rp 10.000',
+  sale_price: 'Rp 8.000',
+  product_url: 'https://skyline.web.id',
+  image: { url: 'https://skyline.web.id/assets/img/logo-nav.png' },
+  additional_images: [{ url: 'https://skyline.web.id/assets/img/logo-nav.png' }],
+  __typename: 'GenAIProductItemCardPrimitive',
 }
 
 const VARIANTS = [
-  ['v1', 'Teks biasa (default)'],
-  ['v2', 'Dokumen + fake contact quoted'],
-  ['v3', 'Video GIF + caption'],
-  ['v4', 'Link preview + forwarded newsletter'],
-  ['v5', 'Fake order quoted + kartu CTA'],
-  ['v6', 'Dokumen + quoted pesan asli'],
-  ['v7', 'Fake location header interactive'],
-  ['v8', 'Interactive location flow + cta buttons'],
-  ['v9', 'Legacy buttonsMessage via document wrapper'],
-  ['v10', 'Interactive business card header'],
-  ['v11', 'Native review_and_pay flow payment'],
-  ['v12', 'Animated preview via editKey sequence'],
-  ['v13', 'Catalog order review_and_pay flow'],
-  ['v14', 'GenAI UnifiedResponse HTML card'],
-  ['v15', 'Link preview plus dinamis'],
-  ['v16', 'ProductMessage resmi zapo (fresh upload)'],
-  ['c1', 'Context standard reply'],
-  ['c2', 'Context document reply'],
-  ['c3', 'Context link preview reply']
+  {
+    id: 'hscroll',
+    label: 'HScroll dengan dua entity',
+    sections: [{
+      view_model: {
+        __typename: 'GenAIHScrollLayoutViewModel',
+        primitives: [1, 2].map((n) => ({
+          __typename: 'GenAICompactEntityPrimitive',
+          title: n === 1 ? 'skyline-JXRA' : 'Nama Grup Contoh',
+          subtitle: `Entity ${n} • HScroll`,
+          secondary_subtitle: 'Tes layout horizontal Hoshino',
+          entity_id: 12000000 + n,
+          entity_url: 'https://skyline.web.id',
+          entity_type: 'PERSON',
+          action_type: 'MESSAGE',
+          is_verified: false,
+          image: { url: 'https://skyline.web.id/assets/img/logo-nav.png' },
+        })),
+      },
+    }],
+    submessages: [{ messageType: 2, messageText: 'Tes HScroll entity' }],
+  },
+  {
+    id: 'actionrow',
+    label: 'ActionRow suggestion pills',
+    sections: [{
+      view_model: {
+        __typename: 'GenAIActionRowLayoutViewModel',
+        primitives: ['Header besar', 'Nama bot', 'Nama grup'].map((text) => ({
+          prompt_text: text,
+          prompt_type: 'SUGGESTED_PROMPT',
+          __typename: 'GenAIFollowUpSuggestionPillPrimitive',
+        })),
+      },
+    }],
+    submessages: [{ messageType: 2, messageText: 'Tes ActionRow suggestion pills' }],
+  },
+  {
+    id: 'tip',
+    label: 'MetadataText primitive',
+    sections: [{
+      view_model: {
+        __typename: 'GenAISingleLayoutViewModel',
+        primitive: {
+          text: 'skyline-JXRA  •  Header contoh lebih menonjol',
+          __typename: 'GenAIMetadataTextPrimitive',
+        },
+      },
+    }],
+    submessages: [{ messageType: 2, messageText: 'Tes metadata text' }],
+  },
+  {
+    id: 'post',
+    label: 'HScroll post cards',
+    sections: [{
+      view_model: {
+        __typename: 'GenAIHScrollLayoutViewModel',
+        primitives: [samplePost(1), samplePost(2)],
+      },
+    }],
+    submessages: [{ messageType: 2, messageText: 'Tes HScroll post cards' }],
+  },
+  {
+    id: 'product',
+    label: 'Single product card',
+    sections: [{
+      view_model: {
+        __typename: 'GenAISingleLayoutViewModel',
+        primitive: product,
+      },
+    }],
+    submessages: [{ messageType: 2, messageText: 'Tes single product card' }],
+  },
 ]
-const LABEL = new Map(VARIANTS)
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-const textOf = (id) => `🧪 TES HEADER ${id.toUpperCase()}\n\nVarian Hoshino Ai v2.5.5 yang telah diporting penuh ke arsitektur zapo-js tanpa fallback rusak.`
 
-async function direct(ctx, id, text) {
-  const { client, chat, event } = ctx
-  if (/^v(?:[1-9]|1[0-6])$/.test(id)) {
-    return sendReplyVariant(ctx, text, Number(id.slice(1)))
-  }
-  if (id === 'c1') {
-    return client.message.send(chat, { type: 'text', text }, { quote: event, noStyle: true })
-  }
-  if (id === 'c2') {
-    return client.message.send(
-      chat,
-      {
-        type: 'document',
-        media: Buffer.from('skyline-JXRA context verification'),
-        mimetype: 'text/plain',
-        fileName: 'context.txt',
-        caption: text
+const byId = new Map(VARIANTS.map((variant) => [variant.id, variant]))
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+function makePayload(variant) {
+  return {
+    botForwardedMessage: {
+      message: {
+        richResponseMessage: {
+          messageType: 1,
+          submessages: variant.submessages,
+          unifiedResponse: {
+            data: Buffer.from(JSON.stringify({
+              __typename: 'GenAIUnifiedResponse',
+              response_id: crypto.randomUUID(),
+              sections: variant.sections,
+            })).toString('base64'),
+          },
+          contextInfo: { isForwarded: true, forwardOrigin: 4 },
+        },
       },
-      { quote: event }
-    )
+    },
   }
-  if (id === 'c3') {
-    return client.message.send(
-      chat,
-      {
-        type: 'text',
-        text: `https://skyline.web.id\n\n${text}`,
-        linkPreview: {
-          matchedText: 'https://skyline.web.id',
-          title: 'skyline-JXRA Context',
-          description: 'Hoshino Context 3 preview via zapo'
-        }
-      },
-      { quote: event, noStyle: true }
-    )
-  }
-  throw new Error(`varian ${id} belum dikenal`)
 }
 
 async function handler(ctx) {
-  const raw = String(ctx.args?.[0] || '').toLowerCase().trim()
-  const ids = raw === 'all'
-    ? VARIANTS.map(([id]) => id)
-    : raw
-      ? raw.split(',').map((x) => x.trim()).filter(Boolean)
-      : ['v8', 'v9', 'v10', 'v11', 'v12', 'v13', 'v14', 'v15', 'v16']
-  const invalid = ids.filter((id) => !LABEL.has(id))
+  const requested = String(ctx.args?.[0] || '').trim().toLowerCase()
+  const ids = requested === 'all'
+    ? VARIANTS.map((variant) => variant.id)
+    : requested
+      ? requested.split(',').map((id) => id.trim()).filter(Boolean)
+      : VARIANTS.map((variant) => variant.id)
+  const invalid = ids.filter((id) => !byId.has(id))
   if (invalid.length) {
-    return ctx.reply(`Varian tidak dikenal: ${invalid.join(', ')}\nGunakan opsi: v1-v16, c1-c3, atau all.`)
+    return ctx.reply(`Varian tidak dikenal: ${invalid.join(', ')}\nPilih: ${VARIANTS.map((v) => v.id).join(', ')}, atau all.`)
   }
-  const out = []
+
+  const results = []
   for (const id of ids) {
+    const variant = byId.get(id)
     const started = Date.now()
     try {
-      await direct(ctx, id, textOf(id))
-      out.push(`✅ ${id} — ${LABEL.get(id)} — ${Date.now() - started}ms`)
-    } catch (e) {
-      out.push(`❌ ${id} — ${LABEL.get(id)} — ${e?.message || e}`)
+      await ctx.client.message.send(ctx.chat, makePayload(variant), {
+        additionalAttributes: { type: 'text' },
+      })
+      results.push(`✅ ${id} — ${variant.label} (${Date.now() - started}ms)`)
+    } catch (err) {
+      results.push(`❌ ${id} — ${variant.label}: ${err?.message || String(err)}`)
     }
-    if (ids.length > 1) await sleep(400)
+    if (ids.length > 1) await sleep(600)
   }
-  await ctx.client.message.send(
-    ctx.chat,
-    { type: 'text', text: `🧪 HASIL TES HEADER HOSHINO (ZAPO FULL)\n\n${out.join('\n')}` },
-    { noStyle: true }
-  )
+
+  await ctx.client.message.send(ctx.chat, {
+    type: 'text',
+    text: `🧪 HASIL TES LAYOUT RICH HOSHINO\n\n${results.join('\n')}\n\nAck terkirim belum tentu berarti layout dirender WhatsApp.`,
+  }, { noStyle: true })
 }
 
 export { pluginConfig as config, handler }
