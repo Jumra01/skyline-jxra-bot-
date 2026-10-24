@@ -467,7 +467,7 @@ async function runReplyVariant(ctx, text, style) {
           const { getFeature } = await import('../plugins/loader.js')
           const feature = getFeature('sticker')
           const { default: sharp } = await import('sharp')
-          stickerAvailable = Boolean(feature?.config?.isEnabled && sharp && config.sticker)
+          stickerAvailable = Boolean(feature && sharp && config.sticker)
         } catch { stickerAvailable = false }
         const status = stickerAvailable ? '🟢' : '🔴'
         let productImage = 'https://skyline.web.id/assets/img/logo-nav.png'
@@ -506,12 +506,20 @@ async function runReplyVariant(ctx, text, style) {
         }
         const productPayload = {
           response_id: crypto.randomUUID(),
-          sections: [{
-            view_model: {
-              __typename: 'GenAISingleLayoutViewModel',
-              primitive: product
+          sections: [
+            {
+              view_model: {
+                __typename: 'GenAISingleLayoutViewModel',
+                primitive: product
+              }
+            },
+            {
+              view_model: {
+                __typename: 'GenAISingleLayoutViewModel',
+                primitive: { text: richBody, __typename: 'GenAIMarkdownTextUXPrimitive' }
+              }
             }
-          }]
+          ]
         }
         const richContent = {
           botForwardedMessage: {
@@ -526,13 +534,6 @@ async function runReplyVariant(ctx, text, style) {
           }
         }
         const richResult = await client.message.send(chat, richContent, { additionalAttributes: { type: 'text' } })
-        // Product primitive clients may omit the rich submessage text; send the
-        // original command reply separately, as the v8 flow does.
-        try {
-          await client.message.send(chat, { type: 'text', text }, { quote: event, noStyle: true })
-        } catch (err) {
-          logger.warn({ err: String(err?.message ?? err) }, 'reply v9 teks terpisah gagal')
-        }
         const richId = richResult?.id || richResult?.key?.id || richResult?.messageId
         if (richId) {
           try {
