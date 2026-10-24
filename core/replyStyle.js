@@ -437,14 +437,18 @@ async function runReplyVariant(ctx, text, style) {
         hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
         timeZone: 'Asia/Jakarta'
       }).format(new Date(ctx.receivedAt || Date.now())) + ' WIB'
-      // WhatsApp rich markdown supports emphasis, not custom font faces.
-      // Bold only the opening line so the result feels clearer without changing
-      // the message wording or adding a heavier HTML card.
+      // WA does not expose custom fonts in rich text. Use Unicode bold sans-serif
+      // for the first non-empty line so the emphasis is visibly rendered without HTML.
+      const toBoldSans = (value) => Array.from(value, (char) => {
+        const code = char.codePointAt(0)
+        if (code >= 0x41 && code <= 0x5a) return String.fromCodePoint(0x1d5d4 + code - 0x41)
+        if (code >= 0x61 && code <= 0x7a) return String.fromCodePoint(0x1d5ee + code - 0x61)
+        if (code >= 0x30 && code <= 0x39) return String.fromCodePoint(0x1d7ec + code - 0x30)
+        return char
+      }).join('')
       const lines = String(text ?? '').split('\n')
       const firstLine = lines.findIndex((line) => line.trim())
-      if (firstLine >= 0 && !/^\s*\*\*?.+\*\*?\s*$/.test(lines[firstLine])) {
-        lines[firstLine] = `*${lines[firstLine].trim()}*`
-      }
+      if (firstLine >= 0) lines[firstLine] = toBoldSans(lines[firstLine])
       const richBody = lines.join('\n')
       let imageUrl = await senderAvatar(ctx)
       if (!imageUrl) {
@@ -458,7 +462,7 @@ async function runReplyVariant(ctx, text, style) {
       }
       const entity = {
         __typename: 'GenAICompactEntityPrimitive',
-        title: ctx.pushName || 'Pengguna',
+        title: senderLabel,
         subtitle: `${role} • ${tier}`,
         secondary_subtitle: `${ctx.isGroup ? 'Grup' : 'Pribadi'} • ${when} • ${ctx.command ? `.${ctx.command}` : 'pesan'}`,
         entity_id: Number(String(number).replace(/\D/g, '').slice(-8)) || 12345678,
