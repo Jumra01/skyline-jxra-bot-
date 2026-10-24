@@ -361,6 +361,53 @@ const VARIANTS = [
     }
   },
   {
+    id: 'combo-user',
+    label: 'Profil Pemanggil + Status Bot + Saluran',
+    note: 'foto profil user di header, status bot bergaya v4, forward score, tombol Lihat Saluran',
+    build: async (ctx) => {
+      const profileJid = ctx.sender || ctx.senderLid || ctx.chat
+      let raw = null
+      try {
+        raw = await Promise.race([
+          Promise.resolve(ctx.client.profile?.getProfilePicture?.(profileJid, 'image')),
+          new Promise((resolve) => setTimeout(() => resolve(null), 4000))
+        ])
+        if (typeof raw === 'string') {
+          const res = await fetch(raw, { signal: AbortSignal.timeout(4000) })
+          if (res.ok) raw = Buffer.from(await res.arrayBuffer())
+          else raw = null
+        }
+      } catch { raw = null }
+      if (!raw) raw = await getThumbBuffer()
+      if (!raw) throw new Error('foto profil user dan thumb bot sama-sama tidak tersedia')
+
+      const sharp = (await import('sharp')).default
+      const avatar = await sharp(raw).rotate().flatten({ background: '#ffffff' })
+        .resize(720, 720, { fit: 'cover' }).jpeg({ quality: 82 }).toBuffer()
+      const media = await ctx.client.message.upload(avatar, { type: 'image', mimetype: 'image/jpeg' })
+      const channelUrl = config.reactChannel?.dedicatedChannelUrl || 'https://skyline.web.id'
+      const pushName = ctx.pushName || 'Pengguna WhatsApp'
+      const status = `✅ ${config.botName} aktif • zapo-js • online 24/7\n📡 Status: stabil • 🟩 Emerald aktif\n↗️ Diteruskan • skor 999`
+      const headerImage = {
+        kind: 'imageMessage',
+        url: media.url,
+        directPath: media.directPath,
+        mediaKey: media.mediaKey,
+        fileSha256: media.fileSha256,
+        fileEncSha256: media.fileEncSha256,
+        fileLength: media.fileLength,
+        mediaKeyTimestamp: media.mediaKeyTimestamp,
+        mimetype: 'image/jpeg', width: 720, height: 720
+      }
+      await ctx.client.message.send(ctx.chat, richButtons({
+        text: `🔵 *${pushName}*\n\n${status}\n\n${getSampleText('combo-user')}`,
+        footer: `Dibuat untuk ${pushName} • ${config.botName}`,
+        buttons: [{ url: channelUrl, text: '📣 Lihat Saluran' }, { id: 'combo-user:ok', text: '✅ Oke' }],
+        headerImage
+      }), interactiveSendOptions(ctx.chat))
+    }
+  },
+  {
     id: 'media-btn',
     label: 'Header Media CDN + Teks + Tombol',
     note: 'interactive buttons: foto resolusi tinggi di header + teks + tombol aksi',
