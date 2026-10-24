@@ -455,7 +455,7 @@ async function runReplyVariant(ctx, text, style) {
         subtitle: `${role} • ${tier}`,
         secondary_subtitle: `${ctx.isGroup ? 'Grup' : 'Pribadi'} • ${when} • ${ctx.command ? `.${ctx.command}` : 'pesan'}`,
         entity_id: Number(String(number).replace(/\D/g, '').slice(-8)) || 12345678,
-        entity_url: sender.includes('@') ? `https://wa.me/${number}` : '',
+        entity_url: String(config.reactChannel?.dedicatedChannelUrl || '').trim() || (sender.includes('@') ? `https://wa.me/${number}` : ''),
         entity_type: 'PERSON',
         action_type: 'MESSAGE',
         is_verified: Boolean(ctx.isOwner),
