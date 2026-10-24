@@ -33,12 +33,24 @@
  *
  * ID harus unik (dipakai sebagai argumen: `.tesrich namavarian`), urutan
  * tampil = urutan array, dan otomatis ikut validasi + ringkasan. Jangan
- * sentuh handler buat nambah varian.
+ * sentuh handler buat nambah varian. `build()` BOLEH async (dihandler) —
+ * dipakai varian yang perlu fetch dulu, kayak `latexcard`.
+ *
+ * ─────────────────────── Temuan: LaTeX ───────────────────────
+ * Submessage type 8 (`AI_RICH_RESPONSE_LATEX`) TIDAK dirender di device
+ * owner — baik `latex` (tanpa url) maupun `latexurl` (url PNG codecogs)
+ * sama-sama jatuh ke teks biasa. Ganti domain URL juga gak menolong, karena
+ * URL itu di-fetch oleh client WA, bukan bot. Yang TERBUKTI tampil: kartu
+ * HTML (`htmlCard`) — render LaTeX di sisi bot lalu tanam sebagai data-URI
+ * (remote <img> diblok WebView kartu). Pakai `latexcard` buat itu.
+ * Helper siap pakai: `renderLatexPng(tex)` → `{ buf, mime, width, height }`,
+ * `dataUriOf(img)`, `htmlCard(html)`.
  *
  * ─────────────────────── Pemakaian ───────────────────────
- *   .tesrich           → semua varian berurutan + ringkasan
- *   .tesrich tabel      → satu varian saja
- *   .tesrich latexurl   → LaTeX ber-URL (kandidat perbaikan "tampil teks biasa")
+ *   .tesrich            → semua varian berurutan + ringkasan
+ *   .tesrich tabel       → satu varian saja
+ *   .tesrich latexcard   → LaTeX jalan (kartu HTML + data-URI)
+ *   .tesrich latexurl    → LaTeX jalur native type 8 (control, tampil teks)
  *
  * Envelope contextInfo WAJIB polos `{ isForwarded, forwardOrigin }` — jangan
  * tambah forwardingScore / forwardedAiBotMessageInfo, bikin WA minta update
@@ -52,8 +64,8 @@ const pluginConfig = {
   alias: ['tesr', 'richsend'],
   category: 'tools',
   description: 'Lab tes AI rich response (teks/tabel/code/LaTeX/gambar/HTML) + validasi payload',
-  usage: '.tesrich [teks|tabel|code|latex|latexurl|inlineimg|html]',
-  example: '.tesrich latexurl',
+  usage: '.tesrich [teks|tabel|code|latex|latexurl|inlineimg|html|latexcard]',
+  example: '.tesrich latexcard',
   isOwner: true,
   isPremium: false,
   isGroup: false,
@@ -134,6 +146,127 @@ function verifyPayload(payload) {
     return { ok: missing.length === 0, bytes, missing }
   } catch (err) {
     return { ok: false, bytes: 0, missing: [`encode gagal: ${err?.message || err}`] }
+  }
+}
+
+/* ────────────────────── render LaTeX → gambar ────────────────────── */
+
+// Endpoint render publik (gratis, tanpa API key). Yang fetch ini BOT, bukan
+// WhatsApp — PNG-nya lalu ditanam sebagai data-URI di kartu HTML, karena
+// WebView kartu memblokir <img> remote (lihat log 2026-10-22; itu juga
+// sebabnya cover Aurora ditanam sebagai data-URI).
+const LATEX_RENDER = 'https://latex.codecogs.com/png.image?'
+
+/** Baca dimensi PNG dari header IHDR — tanpa dependency tambahan. */
+function pngSize(buf) {
+  // Signature PNG = 89 50 4E 47; offset 16/20 = width & height (uint32 BE).
+  if (buf.length < 24 || buf.readUInt32BE(0) !== 0x89504e47) return { width: 0, height: 0 }
+  return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) }
+}
+
+/** data-URI — satu-satunya bentuk gambar yang bisa digambar WebView kartu. */
+function dataUriOf({ buf, mime }) {
+  return `data:${mime};base64,${buf.toString('base64')}`
+}
+
+/**
+ * Fetch buffer dengan jalur cadangan.
+ *
+ * Kenapa perlu: `fetch` bawaan Node bisa gagal di jaringan NAT64/DNS64 —
+ * Happy Eyeballs-nya nyoba IPv6 yang gak ada lalu nyerah sebelum IPv4 keburu
+ * nyambung (terbukti di mesin dev: ETIMEDOUT ~260ms padahal `curl` ke IP yang
+ * sama sukses 200). Setting global `net.setDefaultAutoSelectFamily(false)`
+ * memang menolong, tapi itu EFEK KE SELURUH PROSES bot, jadi jangan. Yang
+ * dipakai di sini: retry per-request lewat axios (sudah dependency repo) dengan
+ * `family: 4`. Gagal lewat sini = memang jaringan/servicenya, bukan urusan IP.
+ *
+ * HTTP error (404/500) TIDAK di-retry — cuma error jaringan.
+ */
+async function httpGetBuffer(url, { timeoutMs = 20_000, accept = 'image/*' } = {}) {
+  const headers = { accept }
+  let res = null
+  let netErr = null
+  try {
+    res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs), headers })
+  } catch (err) {
+    netErr = err
+  }
+  if (res) {
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return {
+      status: res.status,
+      contentType: res.headers.get('content-type') || '',
+      buf: Buffer.from(await res.arrayBuffer())
+    }
+  }
+
+  try {
+    const { default: axios } = await import('axios')
+    const r = await axios.get(url, {
+      timeout: timeoutMs,
+      responseType: 'arraybuffer',
+      family: 4,
+      headers
+    })
+    return {
+      status: r.status,
+      contentType: r.headers?.['content-type'] || '',
+      buf: Buffer.from(r.data)
+    }
+  } catch (err) {
+    const via = netErr?.cause?.code || netErr?.message || '?'
+    const now = err?.response?.status
+      ? `HTTP ${err.response.status}`
+      : (err?.code || err?.message || String(err))
+    throw new Error(`${now} (fetch: ${via})`)
+  }
+}
+
+/**
+ * Render satu ekspresi LaTeX jadi PNG.
+ * @returns {Promise<{ buf: Buffer, mime: string, width: number, height: number }>}
+ */
+async function renderLatexPng(tex) {
+  const r = await httpGetBuffer(LATEX_RENDER + encodeURIComponent(tex))
+  const mime = (r.contentType || '').split(';')[0].trim()
+  if (!mime.startsWith('image/')) throw new Error(`balasan bukan gambar (${mime || 'tanpa content-type'})`)
+  if (r.buf.length < 64) throw new Error('PNG kosong/truncated')
+  return { buf: r.buf, mime, ...pngSize(r.buf) }
+}
+
+/** Escape teks buat disisipkan aman ke dalam HTML kartu. */
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ))
+}
+
+/**
+ * Bungkus HTML jadi `richResponseMessage.unifiedResponse` (GenAI).
+ * Jalur ini yang terbukti render di bot ini (Aurora / ping2 / emeraldCard).
+ */
+function htmlCard(html) {
+  return {
+    unifiedResponse: {
+      // `data` bertipe proto `bytes`: string yang dilempar di-BASE64-DECODE
+      // protobufjs. Harus string base64 (atau Buffer) — string JSON mentah
+      // dirusak senyap. Persis seperti lib/emeraldCard.js sendNativeHtml.
+      data: Buffer.from(JSON.stringify({
+        __typename: 'GenAIUnifiedResponse',
+        response_id: crypto.randomUUID(),
+        sections: [{
+          __typename: 'GenAIUnifiedResponseSection',
+          view_model: {
+            __typename: 'GenAISingleLayoutViewModel',
+            primitive: {
+              __typename: 'FOAHtmlPrimitiveDemoDONOTUSE',
+              trusted_sources: [],
+              payload: html
+            }
+          }
+        }]
+      })).toString('base64')
+    }
   }
 }
 
@@ -265,30 +398,83 @@ const VARIANTS = [
     id: 'html',
     label: 'HTML unifiedResponse',
     note: 'GenAI unifiedResponse — envelope sama dengan kartu native bot (Aurora/ping2)',
-    build: () => ({
-      unifiedResponse: {
-        // `data` bertipe proto `bytes`: string yang dilempar akan di-BASE64-DECODE
-        // oleh protobufjs. Jadi WAJIB string base64 (atau Buffer) — dilempar string
-        // JSON mentah, payloadnya rusak senyap. Persis seperti lib/emeraldCard.js.
-        data: Buffer.from(JSON.stringify({
-          __typename: 'GenAIUnifiedResponse',
-          response_id: crypto.randomUUID(),
-          sections: [{
-            __typename: 'GenAIUnifiedResponseSection',
-            view_model: {
-              __typename: 'GenAISingleLayoutViewModel',
-              primitive: {
-                __typename: 'FOAHtmlPrimitiveDemoDONOTUSE',
-                trusted_sources: [],
-                payload: '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Tes Rich</title></head><body style="margin:0;background:#0b1220;color:#e7ecff;font-family:sans-serif"><div style="padding:24px"><h2 style="color:#7dd3fc">🧪 Tes Rich — HTML unifiedResponse</h2><p>Kartu HTML native lewat <b>richResponseMessage.unifiedResponse</b>.</p><p style="color:#94a3b8">Kalau kotak ini tampil, jalur GenAI unified response sehat.</p></div></body></html>'
-              }
-            }
-          }]
-        })).toString('base64')
-      }
-    })
+    build: () => htmlCard(
+      '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Tes Rich</title></head>' +
+      '<body style="margin:0;background:#0b1220;color:#e7ecff;font-family:sans-serif;min-height:100vh">' +
+      '<div style="padding:24px">' +
+      '<h2 style="color:#7dd3fc;margin:0 0 12px">🧪 Tes Rich — HTML unifiedResponse</h2>' +
+      '<p style="margin:0 0 8px">Kartu HTML native lewat <b>richResponseMessage.unifiedResponse</b>.</p>' +
+      '<p style="color:#94a3b8;margin:0">Kalau kotak ini tampil, jalur GenAI unified response sehat.</p>' +
+      '</div></body></html>'
+    )
+  },
+  {
+    id: 'latexcard',
+    label: 'LaTeX via kartu HTML (data-URI)',
+    // build() boleh async — handler meng-await-nya.
+    note: 'jalur TERBUKTI: render LaTeX → PNG di sisi bot → tanam data-URI di kartu HTML',
+    build: async () => htmlCard(await buildLatexCardHtml())
   }
 ]
+
+/**
+ * Kartu HTML berisi rumus hasil render. Gambar ditanam sebagai data-URI
+ * (remote <img> diblok WebView kartu), jadi kartu ini tidak bergantung pada
+ * apakah WhatsApp mau render submessage type 8.
+ */
+async function buildLatexCardHtml() {
+  // Dua rumus: satu sederhana, satu kompleks — biar kelihatan ini typeset
+  // beneran, bukan teks biasa yang kebetulan rapi.
+  const demos = [
+    { label: 'Relativitas', tex: 'E = mc^2' },
+    {
+      label: 'Rumus kuadrat',
+      tex: String.raw`x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}`
+    }
+  ]
+
+  const blocks = []
+  for (const d of demos) {
+    let inner
+    try {
+      // `\color{white}` — codecogs ngerender default hitam, yang nyaris
+      // hilang di latar kartu yang gelap. Dites: balik PNG valid.
+      const img = await renderLatexPng(`\\color{white} ${d.tex}`)
+      // codecogs ngerender kecil; diskalakan 2x biar jelas di layar HP.
+      const w = img.width > 0 ? Math.min(img.width * 2, 480) : 0
+      const h = img.width > 0 ? Math.round(img.height * (w / img.width)) : 0
+      inner =
+        `<img src="${dataUriOf(img)}" width="${w}" height="${h}" alt="rumus" ` +
+        'style="display:block;margin:0 auto;max-width:100%;height:auto">' +
+        `<p style="color:#64748b;font-size:11px;text-align:center;margin:10px 0 0">` +
+        `${img.width}×${img.height}px • ${Math.round(img.buf.length / 102.4) / 10}KB • data-URI</p>`
+    } catch (err) {
+      inner = `<p style="color:#f87171;margin:0">Render gagal: ${esc(err?.message || String(err))}</p>`
+    }
+    blocks.push(
+      '<div style="background:rgba(255,255,255,.04);border:1px solid rgba(125,211,252,.18);' +
+      'border-radius:14px;padding:16px;margin:0 0 14px">' +
+      `<div style="color:#7dd3fc;font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin:0 0 12px">${esc(d.label)}</div>` +
+      inner +
+      // Sumber LaTeX ditampilin polos (tanpa delimiter \( \)) — kartu ini gak
+      // punya engine math, delimiter-nya bakal kebaca literal dan bikin berantakan.
+      `<div style="color:#94a3b8;font-size:11px;margin:12px 0 0;word-break:break-all">` +
+      `<span style="color:#64748b">sumber:</span> ${esc(d.tex)}</div>` +
+      '</div>'
+    )
+  }
+
+  return (
+    '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>LaTeX</title></head>' +
+    '<body style="margin:0;background:#0b1220;color:#e7ecff;font-family:sans-serif;min-height:100vh">' +
+    '<div style="padding:20px">' +
+    '<h2 style="color:#7dd3fc;margin:0 0 4px">🧮 Tes Rich — LaTeX via kartu HTML</h2>' +
+    '<p style="color:#94a3b8;font-size:12px;margin:0 0 16px">' +
+    'Render di sisi bot lalu ditanam sebagai data-URI. Gak butuh submessage type 8.</p>' +
+    blocks.join('') +
+    '</div></body></html>'
+  )
+}
 
 const BY_ID = Object.fromEntries(VARIANTS.map(v => [v.id, v]))
 
@@ -312,20 +498,29 @@ async function handler(ctx) {
   for (let i = 0; i < targets.length; i++) {
     const v = targets[i]
 
-    // Validasi dulu — biar payload salah ketik ketahuan SEBELUM buang kuota
-    // kirim, bukan sebagai "kok tampilnya biasa aja".
-    const payload = envelope(v.build())
-    const chk = verifyPayload(payload)
     const tag = `[${i + 1}/${targets.length}] ${v.id}`
+
+    // Penanda singkat per varian (mode semua saja) — dikirim SEBELUM build
+    // karena latexcard butuh waktu fetch hasil render; user perlu tanda
+    // sedang proses, bukan diam tanpa kabar.
+    if (targets.length > 1) await ctx.reply(`▶ ${tag}`)
+
+    // Validasi dulu — biar payload salah ketik ketahuan SEBELUM buang kuota
+    // kirim, bukan sebagai "kok tampilnya biasa aja". `build()` boleh async
+    // (mis. latexcard fetch hasil render dulu).
+    let payload
+    try {
+      payload = envelope(await v.build())
+    } catch (err) {
+      rows.push(`[❌] ${tag} — build gagal: ${err?.message || String(err)}`)
+      continue
+    }
+    const chk = verifyPayload(payload)
 
     if (!chk.ok) {
       rows.push(`[⚠️] ${tag} — payload rusak sebelum kirim: ${chk.missing.slice(0, 4).join(', ')}${chk.missing.length > 4 ? `, +${chk.missing.length - 4} lagi` : ''}`)
       continue
     }
-
-    // Penanda singkat per varian (mode semua saja) — kalau rich-nya dibuang
-    // server, user tetap tahu varian mana yang hilang dari chat.
-    if (targets.length > 1) await ctx.reply(`▶ ${tag}`)
 
     try {
       const res = await ctx.client.message.send(ctx.chat, payload, {
@@ -362,6 +557,12 @@ async function handler(ctx) {
 }
 
 // Buat tes programatik (lihat catatan verifikasi) — bukan bagian API publik.
-const _internals = { envelope, verifyPayload, missingPaths, VARIANTS, BY_ID }
+// `renderLatexPng`/`htmlCard` ikut diekspor karena bakal dipakai ulang waktu
+// jalur ini naik jadi fitur beneran (bukan cuma plugin tes).
+const _internals = {
+  envelope, verifyPayload, missingPaths, VARIANTS, BY_ID,
+  renderLatexPng, pngSize, dataUriOf, esc, htmlCard, buildLatexCardHtml,
+  httpGetBuffer
+}
 
 export { pluginConfig as config, handler, _internals }
