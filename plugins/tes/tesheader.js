@@ -372,10 +372,14 @@ const VARIANTS = [
           Promise.resolve(ctx.client.profile?.getProfilePicture?.(profileJid, 'image')),
           new Promise((resolve) => setTimeout(() => resolve(null), 4000))
         ])
-        if (typeof raw === 'string') {
-          const res = await fetch(raw, { signal: AbortSignal.timeout(4000) })
+        // zapo mengembalikan envelope { url, directPath, id }, bukan Buffer/string.
+        const pictureUrl = typeof raw === 'string' ? raw : raw?.url
+        if (pictureUrl) {
+          const res = await fetch(pictureUrl, { signal: AbortSignal.timeout(4000) })
           if (res.ok) raw = Buffer.from(await res.arrayBuffer())
           else raw = null
+        } else {
+          raw = null
         }
       } catch { raw = null }
       if (!raw) raw = await getThumbBuffer()
