@@ -13,6 +13,7 @@ import crypto from 'node:crypto'
 import config from '../config.js'
 import { logger } from './logger.js'
 import { getThumbBuffer, getAdReply } from './cta.js'
+import { isPremiumActive } from './database.js'
 
 const DATA_DIR = path.join(process.cwd(), 'src', 'data')
 const FILE = path.join(DATA_DIR, 'replyStyle.json')
@@ -25,15 +26,7 @@ export const REPLY_VARIANTS = {
   5: { key: 'v5', name: 'FAKE ORDER', emoji: '🛒', desc: 'Teks + quote order palsu' },
   6: { key: 'v6', name: 'SIMPLE DOCUMENT', emoji: '📄', desc: 'Dokumen + quote pesan asli' },
   7: { key: 'v7', name: 'FAKE LOCATION', emoji: '📍', desc: 'Header lokasi palsu (interactive)' },
-  8: { key: 'v8', name: 'LOCATION FLOW', emoji: '🗺️', desc: 'Interactive location header' },
-  9: { key: 'v9', name: 'BUTTON FLOW', emoji: '🔘', desc: 'Location header + tombol aksi' },
-  10: { key: 'v10', name: 'BUSINESS CARD', emoji: '💼', desc: 'Kartu bisnis interactive' },
-  11: { key: 'v11', name: 'PAYMENT', emoji: '💳', desc: 'Request payment bubble' },
-  12: { key: 'v12', name: 'ANIMATED PREVIEW', emoji: '🌀', desc: 'Link preview dengan judul bot' },
-  13: { key: 'v13', name: 'CATALOG', emoji: '🛍️', desc: 'Katalog order sebagai pesan utama' },
-  14: { key: 'v14', name: 'RICH HTML', emoji: '✨', desc: 'Kartu HTML native interaktif' },
-  15: { key: 'v15', name: 'PREVIEW PLUS', emoji: '🌐', desc: 'Link preview lanjutan' },
-  16: { key: 'v16', name: 'PRODUCT CARD', emoji: '🧾', desc: 'Kartu produk native HTML' }
+  8: { key: 'v8', name: 'USER PROFILE', emoji: '👤', desc: 'Profil user, role, status premium, command, dan waktu penggunaan' }
 }
 
 let VERSION = ''
@@ -41,7 +34,7 @@ try {
   VERSION = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version ?? ''
 } catch {}
 
-const clamp = (n) => Math.min(16, Math.max(1, parseInt(n, 10) || 1))
+const clamp = (n) => Math.min(8, Math.max(1, parseInt(n, 10) || 1))
 
 let cache = null
 
@@ -401,390 +394,45 @@ async function runReplyVariant(ctx, text, style) {
       )
     }
 
-    /* v8 LOCATION FLOW — interactive location header + companion biz */
+    /* v8 USER PROFILE — metadata pengguna yang menjalankan command */
     case 8: {
-      const jpeg = await thumb300()
-      return client.message.send(
-        chat,
-        {
-          interactiveMessage: {
-            header: {
-              hasMediaAttachment: true,
-              locationMessage: {
-                degreesLatitude: -6.2088,
-                degreesLongitude: 106.8456,
-                name: config.botName,
-                address: 'skyline-JXRA • Location Flow',
-                ...(jpeg ? { jpegThumbnail: jpeg } : {})
-              }
-            },
-            body: { text },
-            footer: { text: config.botName },
-            nativeFlowMessage: {
-              messageVersion: 1,
-              buttons: [
-                {
-                  name: 'quick_reply',
-                  buttonParamsJson: JSON.stringify({ display_text: '👑 Owner', id: '.owner' })
-                },
-                {
-                  name: 'cta_url',
-                  buttonParamsJson: JSON.stringify({ display_text: '🌐 Website', url: 'https://skyline.web.id' })
-                }
-              ]
-            }
-          }
-        },
-        { quote: event }
-      )
-    }
-
-    /* v9 BUTTON FLOW — buttonsMessage dibungkus documentWithCaptionMessage (sesuai delivery-matrix zapo) */
-    case 9: {
-      const jpeg = await thumb300()
-      return client.message.send(
-        chat,
-        {
-          documentWithCaptionMessage: {
-            message: {
-              buttonsMessage: {
-                contentText: text,
-                footerText: config.botName,
-                headerType: 1,
-                buttons: [
-                  {
-                    buttonId: '.owner',
-                    buttonText: { displayText: '👑 Kontak Owner' },
-                    type: 1,
-                    nativeFlowInfo: {}
-                  },
-                  {
-                    buttonId: '.allmenu',
-                    buttonText: { displayText: '📜 Semua Menu' },
-                    type: 1,
-                    nativeFlowInfo: {}
-                  }
-                ]
-              }
-            }
-          }
-        },
-        { quote: event }
-      )
-    }
-
-    /* v10 BUSINESS CARD — interactiveMessage dengan header text/sub + cta_url/quick_reply */
-    case 10: {
-      return client.message.send(
-        chat,
-        {
-          interactiveMessage: {
-            header: {
-              title: `💼 ${config.botName}`,
-              subtitle: 'Verified Service Provider',
-              hasMediaAttachment: false
-            },
-            body: { text },
-            footer: { text: 'WhatsApp Business Solution • zapo-js' },
-            nativeFlowMessage: {
-              messageVersion: 1,
-              buttons: [
-                {
-                  name: 'quick_reply',
-                  buttonParamsJson: JSON.stringify({ display_text: '💬 Hubungi Owner', id: '.owner' })
-                },
-                {
-                  name: 'cta_url',
-                  buttonParamsJson: JSON.stringify({ display_text: '🌐 Official Portal', url: 'https://skyline.web.id' })
-                }
-              ]
-            }
-          }
-        },
-        { quote: event }
-      )
-    }
-
-    /* v11 PAYMENT — review_and_pay native flow resmi zapo (isCustomItem: true) */
-    case 11: {
-      const referenceId = `PAY-${Date.now()}`
-      return client.message.send(
-        chat,
-        {
-          interactiveMessage: {
-            body: { text },
-            footer: { text: `${config.botName} • Invoice Payment` },
-            nativeFlowMessage: {
-              messageVersion: 1,
-              buttons: [
-                {
-                  name: 'review_and_pay',
-                  buttonParamsJson: JSON.stringify({
-                    currency: 'IDR',
-                    reference_id: referenceId,
-                    total_amount: { value: 1000000, offset: 100 },
-                    payment_settings: [
-                      {
-                        type: 'custom_payment_method',
-                        custom_payment_method: {
-                          name: 'QRIS / Transfer Bank',
-                          reference_id: referenceId
-                        }
-                      }
-                    ],
-                    order: {
-                      status: 'payment_requested',
-                      subtotal: { value: 1000000, offset: 100 },
-                      order_type: 'ORDER',
-                      items: [
-                        {
-                          name: `${config.botName} Premium Order`,
-                          amount: { value: 1000000, offset: 100 },
-                          quantity: 1,
-                          isCustomItem: true,
-                          isQuantitySet: true
-                        }
-                      ]
-                    }
-                  })
-                }
-              ]
-            }
-          }
-        },
-        { quote: event }
-      )
-    }
-
-    /* v12 ANIMATED PREVIEW — update linkPreview title bertahap via editKey */
-    case 12: {
-      const delay = (ms) => new Promise((r) => setTimeout(r, ms))
-      const frames = [
-        '🌐 Menghubungkan...',
-        `🌐 [ ${config.botName} ]`,
-        `🌐 [ ${config.botName} v${VERSION || '1.0'} ]`,
-        `🌐 ${config.botName} Online`
-      ]
-      const sent = await client.message.send(
-        chat,
-        {
-          type: 'text',
-          text,
-          linkPreview: {
-            matchedText: 'https://skyline.web.id',
-            title: frames[0],
-            description: 'skyline-JXRA Animated Preview'
-          }
-        },
-        { quote: event, noStyle: true }
-      )
-      const editKey = sent?.key?.id || sent?.message?.key?.id || sent?.id
-      if (editKey) {
-        for (let i = 1; i < frames.length; i++) {
-          await delay(700)
-          await client.message.send(
-            chat,
-            {
-              type: 'text',
-              text,
-              linkPreview: {
-                matchedText: 'https://skyline.web.id',
-                title: frames[i],
-                description: 'skyline-JXRA Animated Preview'
-              }
-            },
-            {
-              quote: event,
-              editKey: { id: editKey, participant: ctx.isGroup ? client.auth?.getCurrentCredentials?.()?.meJid : undefined },
-              noStyle: true
-            }
-          ).catch(() => null)
-        }
-      }
-      return sent
-    }
-
-    /* v13 CATALOG — carousel produk katalog resmi zapo (MIXED_BIZ_OPTIONS + cta_catalog + cta_url) */
-    case 13: {
-      const pn = ctx.client.auth?.getCurrentCredentials?.()?.meJid?.split('@')?.[0] || '628000000000'
-      const thumb = await thumb300()
-      let uploadedImage = null
-      if (thumb && client.message?.upload) {
+      const sender = ctx.sender || ''
+      const number = ctx.senderNumber || String(sender).split('@')[0].split(':')[0] || '-'
+      const premium = (() => {
         try {
-          const up = await client.message.upload(thumb, { type: 'image', mimetype: 'image/jpeg' })
-          uploadedImage = {
-            url: up.url,
-            directPath: up.directPath,
-            mediaKey: up.mediaKey,
-            fileSha256: up.fileSha256,
-            fileEncSha256: up.fileEncSha256,
-            fileLength: up.fileLength,
-            mediaKeyTimestamp: up.mediaKeyTimestamp,
-            mimetype: 'image/jpeg'
-          }
-        } catch {}
-      }
-
-      const cards = [
-        {
-          header: {
-            title: `${config.botName} Service`,
-            hasMediaAttachment: Boolean(uploadedImage),
-            ...(uploadedImage ? { imageMessage: uploadedImage } : {})
-          },
-          body: { text: `${text.slice(0, 80)}\nIDR 50.000` },
-          nativeFlowMessage: {
-            messageVersion: 1,
-            buttons: [
-              {
-                name: 'cta_url',
-                buttonParamsJson: JSON.stringify({
-                  display_text: '🌐 Website',
-                  url: 'https://skyline.web.id',
-                  merchant_url: 'https://skyline.web.id'
-                })
-              },
-              {
-                name: 'cta_catalog',
-                buttonParamsJson: JSON.stringify({
-                  business_phone_number: pn
-                })
-              }
-            ]
-          }
-        }
-      ]
-
-      return client.message.send(
-        chat,
-        {
-          interactiveMessage: {
-            body: { text },
-            footer: { text: config.botName },
-            carouselMessage: { messageVersion: 1, cards }
-          }
-        },
-        {
-          quote: event,
-          customNodes: [
-            {
-              tag: 'biz',
-              attrs: {},
-              content: [
-                {
-                  tag: 'interactive',
-                  attrs: { type: 'native_flow', v: '1' },
-                  content: [{ tag: 'native_flow', attrs: { v: '9', name: 'mixed' }, content: undefined }]
-                }
-              ]
-            }
-          ]
-        }
-      )
-    }
-
-    /* v14 RICH PROTO — submessages native AI rich response (type 2 text + type 5 code) */
-    case 14: {
-      return client.message.send(
-        chat,
-        {
-          botForwardedMessage: {
-            message: {
-              richResponseMessage: {
-                messageType: 1,
-                submessages: [
-                  {
-                    messageType: 2,
-                    messageText: `✨ *${config.botName}*\n\n${text}`
-                  },
-                  {
-                    messageType: 5,
-                    codeMetadata: {
-                      codeLanguage: 'text',
-                      codeBlocks: [
-                        { highlightType: 0, codeContent: text }
-                      ]
-                    }
-                  }
-                ],
-                contextInfo: { isForwarded: true, forwardOrigin: 4 }
-              }
-            }
-          }
-        },
-        { quote: event, additionalAttributes: { type: 'text' } }
-      )
-    }
-
-    /* v15 PREVIEW PLUS — linkPreview dengan OG image buffer dinamis */
-    case 15: {
-      const website = 'https://skyline.web.id'
-      const og = await fetchOgPreviewCached(website)
-      const jpeg = await thumb300()
-      return client.message.send(
-        chat,
-        {
-          type: 'text',
-          text: `${website}\n\n${text}`,
-          linkPreview: {
-            matchedText: website,
-            title: `🌐 ${config.botName} Hub`,
-            description: og?.description || 'WhatsApp Multi-Device Assistant with zapo-js',
-            ...(og?.thumbnail || jpeg ? { thumbnail: { bytes: og?.thumbnail || jpeg } } : {})
-          }
-        },
-        { quote: event, noStyle: true }
-      )
-    }
-
-    /* v16 RICH PROTO PRODUCT-STYLE — rich submessages, tanpa HTML/WebView/download */
-    case 16: {
+          return ctx.isOwner ? false : Boolean(
+            (ctx.sender && isPremiumActive(ctx.sender)) ||
+            (ctx.senderLid && isPremiumActive(ctx.senderLid))
+          )
+        } catch { return false }
+      })()
+      const role = !ctx.isGroup ? 'Pengguna pribadi' : ctx.isOwner ? 'Owner' : ctx.role === 'admin' || ctx.isAdmin ? 'Admin grup' : 'Member grup'
+      const tier = ctx.isOwner ? 'Owner' : premium ? 'Premium' : 'User biasa'
+      const when = new Intl.DateTimeFormat('id-ID', {
+        weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+        timeZone: 'Asia/Jakarta'
+      }).format(new Date()) + ' WIB'
+      const profileText = [
+        `👤 *PROFIL PENGGUNA*`,
+        ``,
+        `Nama: *${ctx.pushName || 'Tidak diketahui'}*`,
+        `Nomor: \`${number}\``,
+        `Role: *${role}*`,
+        `Status: *${tier}*`,
+        `Chat: *${ctx.isGroup ? 'Grup' : 'Pribadi'}*`,
+        `Command: *${ctx.command ? `.${ctx.command}` : 'Reply / pesan'}*`,
+        `Dipakai: *${when}*`,
+        ``,
+        text
+      ].join('\n')
       const thumb = await thumb300()
-      const imageUrl = thumb ? `data:image/jpeg;base64,${thumb.toString('base64')}` : ''
-      return client.message.send(
-        chat,
-        {
-          botForwardedMessage: {
-            message: {
-              richResponseMessage: {
-                messageType: 1,
-                submessages: [
-                  {
-                    messageType: 2,
-                    messageText: `🧾 *${config.botName} Product Card*\n\n${text}`
-                  },
-                  {
-                    messageType: 4,
-                    tableMetadata: {
-                      title: config.botName,
-                      rows: [
-                        { items: ['Product', config.botName], isHeading: true },
-                        { items: ['Status', 'Available'], isHeading: false },
-                        { items: ['Website', 'https://skyline.web.id'], isHeading: false }
-                      ]
-                    }
-                  },
-                  ...(imageUrl
-                    ? [{
-                        messageType: 3,
-                        imageMetadata: {
-                          imageUrl: {
-                            imagePreviewUrl: imageUrl,
-                            imageHighResUrl: imageUrl,
-                            sourceUrl: imageUrl
-                          }
-                        }
-                      }]
-                    : [])
-                ],
-                contextInfo: { isForwarded: true, forwardOrigin: 4 }
-              }
-            }
-          }
-        },
-        { quote: event, additionalAttributes: { type: 'text' } }
-      )
+      const content = thumb
+        ? { type: 'image', media: thumb, mimetype: 'image/jpeg', caption: profileText }
+        : { type: 'text', text: profileText }
+      return client.message.send(chat, content, { quote: event, noStyle: true })
     }
+
     default:
       throw new Error(`reply variant ${style} gak dikenal`)
   }

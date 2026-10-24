@@ -290,36 +290,41 @@ async function handler(ctx) {
       }
     }))
 
-    const sections = [
-      {
-        view_model: {
-          primitives: entities,
-          __typename: 'GenAIHScrollLayoutViewModel'
-        }
+    // AIRich.newLayout('Single', entity) membuat satu section per entity.
+    // HScroll berisi primitives entity tidak dikenali renderer untuk compact entity.
+    const sections = entities.map((entity) => ({
+      view_model: {
+        primitive: entity,
+        __typename: 'GenAISingleLayoutViewModel'
       }
-    ]
+    }))
 
     const payload = {
       response_id: crypto.randomUUID(),
       sections
     }
 
-    return client.message.send(chat, {
-      botForwardedMessage: {
-        message: {
-          richResponseMessage: {
-            messageType: 1,
-            submessages: [
-              { messageType: 2, messageText: `👑 *Pusat Kontak Owner & Developer — ${botName}*` }
-            ],
-            unifiedResponse: {
-              data: Buffer.from(JSON.stringify(payload)).toString('base64')
-            },
-            contextInfo: { isForwarded: true, forwardOrigin: 4 }
+    try {
+      return await client.message.send(chat, {
+        botForwardedMessage: {
+          message: {
+            richResponseMessage: {
+              messageType: 1,
+              submessages: [
+                { messageType: 2, messageText: `👑 *Pusat Kontak Owner & Developer — ${botName}*` }
+              ],
+              unifiedResponse: {
+                data: Buffer.from(JSON.stringify(payload)).toString('base64')
+              },
+              contextInfo: { isForwarded: true, forwardOrigin: 4 }
+            }
           }
         }
-      }
-    }, { quote: event, additionalAttributes: { type: 'text' } })
+      }, { quote: event, additionalAttributes: { type: 'text' } })
+    } catch (err) {
+      // Jangan diam jika renderer rich entity ditolak client/server.
+      return ctx.reply(`👑 *Pusat Kontak Owner — ${botName}*\n\n${ownerList.map(({ num, label }) => `${label}: https://wa.me/${num}`).join('\\n')}`)
+    }
   }
 }
 

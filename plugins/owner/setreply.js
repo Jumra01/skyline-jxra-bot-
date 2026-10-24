@@ -24,21 +24,57 @@ import {
 import { setCta } from '../../core/cta.js'
 import { downloadMedia } from '../../lib/media.js'
 import { onRichReply } from '../../handlers/messageHandler.js'
+import { isPremiumActive } from '../../core/database.js'
 
 // Thumbnail kartu global (externalAdReply) — berlaku di semua chat
 const CARD_THUMB = 'assets/thumb/cta-thumb.jpg'
 // Thumbnail preview v4 (link preview) — assets/thumb/v4-thumb.jpg, path di config.reply.v4.thumb
 const V4_THUMB = config.reply?.v4?.thumb || 'assets/thumb/v4-thumb.jpg'
 
-function applyVariant(ctx, n) {
+function formatUsageDate(date = new Date()) {
+  return new Intl.DateTimeFormat('id-ID', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+    timeZone: 'Asia/Jakarta'
+  }).format(date) + ' WIB'
+}
+
+function usageRole(ctx) {
+  if (!ctx.isGroup) return 'Pengguna pribadi'
+  if (ctx.isOwner) return 'Owner'
+  if (ctx.role === 'admin' || ctx.isAdmin) return 'Admin grup'
+  return 'Member grup'
+}
+
+function usageTier(ctx) {
+  if (ctx.isOwner) return 'Owner'
+  const premium = isPremiumActive(ctx.sender) || (ctx.senderLid && isPremiumActive(ctx.senderLid))
+  return premium ? 'Premium' : 'User biasa'
+}
+
+async function applyVariant(ctx, n) {
   const v = setReplyStyle(n)
   const info = REPLY_VARIANTS[v]
-  // Balasan ini otomatis tampil pakai gaya baru
+  const timestamp = formatUsageDate(new Date())
+  const profile = ctx.pushName || ctx.senderNumber || ctx.sender || 'Pengguna'
+  const role = usageRole(ctx)
+  const tier = usageTier(ctx)
   return ctx.reply(
     `✅ *REPLY VARIANT DIGANTI*\n\n` +
     `${info.emoji} *${info.key.toUpperCase()} — ${info.name}*\n` +
     `_${info.desc}_\n\n` +
-    `Balasan ini sudah pakai gaya baru, Kak 🎯`
+    `👤 *Profil:* ${profile}\n` +
+    `🪪 *Nomor:* ${ctx.senderNumber || '-'}\n` +
+    `🛡️ *Role:* ${role}\n` +
+    `💎 *Status:* ${tier}\n` +
+    `🕒 *Dipakai:* ${timestamp}\n\n` +
+    `Balasan ini sudah memakai gaya baru, Kak 🎯`
   )
 }
 
@@ -78,7 +114,7 @@ const pluginConfig = {
   alias: ['replyvariant', 'replystyle'],
   category: "owner",
   description: "Atur gaya reply bot (v1-v16)",
-  usage: ".setreply",
+  usage: ".setreply <v1-v8>",
   example: ".setreply",
   isOwner: true,
   isPremium: false,
@@ -94,7 +130,7 @@ const pluginConfig = {
 async function handler(ctx) {
     const sub = (ctx.args[0] || '').toLowerCase()
     const current = getReplyStyle()
-    const pick = sub.match(/^v?([1-9]|1[0-6])$/)
+    const pick = sub.match(/^v?([1-8])$/)
 
     if (pick) {
       await applyVariant(ctx, Number(pick[1]))
@@ -132,7 +168,7 @@ async function handler(ctx) {
     if (sub) {
       await ctx.reply(
         `❌ *VARIANT TIDAK VALID*\n\n` +
-        `Gunakan: *v1* s/d *v16*, atau:\n` +
+        `Gunakan: *v1* s/d *v8*, atau:\n` +
         `• \`thumb\` — balas foto → thumbnail kartu global\n` +
         `• \`thumb v4\` — balas foto → thumbnail preview v4\n` +
         `Contoh: \`${ctx.prefix}setreply v5\``
