@@ -36,15 +36,25 @@
  * sentuh handler buat nambah varian. `build()` BOLEH async (dihandler) —
  * dipakai varian yang perlu fetch dulu, kayak `latexcard`.
  *
- * ─────────────────────── Temuan: LaTeX ───────────────────────
- * Submessage type 8 (`AI_RICH_RESPONSE_LATEX`) TIDAK dirender di device
- * owner — baik `latex` (tanpa url) maupun `latexurl` (url PNG codecogs)
- * sama-sama jatuh ke teks biasa. Ganti domain URL juga gak menolong, karena
- * URL itu di-fetch oleh client WA, bukan bot. Yang TERBUKTI tampil: kartu
- * HTML (`htmlCard`) — render LaTeX di sisi bot lalu tanam sebagai data-URI
- * (remote <img> diblok WebView kartu). Pakai `latexcard` buat itu.
+ * ─────────────────────── Temuan (sudah dites di device owner) ───────────────────────
+ * Submessage rich type 3 & 8 TIDAK digambar oleh WhatsApp — keduanya jatuh
+ * ke teks biasa:
+ *   • type 8 (`AI_RICH_RESPONSE_LATEX`), `latex` (tanpa url) DAN `latexurl`
+ *     (url PNG codecogs) → sama-sama teks.
+ *   • type 3 (`AI_RICH_RESPONSE_INLINE_IMAGE`), `inlineimg` → URL-nya gak
+ *     pernah di-fetch; `imageText`-nya yang tampil sebagai teks.
+ * Artinya URL external polos TIDAK dipakai renderer WA (Meta AI sendiri
+ * nyajiin asetnya dari CDN Meta). Konsekuensinya: ganti domain URL — termasuk
+ * domain sendiri kayak skyline.web.id — TIDAK menolong, karena URL itu
+ * di-fetch oleh client WA, bukan bot. `contentItemsMetadata` juga bukan wadah
+ * alternatif (isinya cuma `reelItem`).
+ *
+ * Yang TERBUKTI tampil: kartu HTML (`htmlCard`) — aset ditandai sebagai
+ * data-URI, karena remote <img> diblok WebView kartu tapi data-URI jalan
+ * (lihat log 2026-10-22). Jadi buat gambar ATAU rumus, jalurnya sama:
+ * render/fetch di sisi bot → data-URI → tanam di kartu.
  * Helper siap pakai: `renderLatexPng(tex)` → `{ buf, mime, width, height }`,
- * `dataUriOf(img)`, `htmlCard(html)`.
+ * `dataUriOf(img)`, `htmlCard(html)`, `pngSize()`, `esc()`, `httpGetBuffer()`.
  *
  * ─────────────────────── Pemakaian ───────────────────────
  *   .tesrich            → semua varian berurutan + ringkasan
@@ -373,7 +383,7 @@ const VARIANTS = [
   {
     id: 'inlineimg',
     label: 'Gambar inline (URL polos)',
-    note: 'submessage type 3 — ngetes apakah URL external polos diizinkan WA (indikator kuat buat `latexurl`)',
+    note: 'submessage type 3 — TIDAK digambar WA; fallback jadi teks. Konfirmasi: URL external gak di-fetch, jadi gak ada domain yang menolong',
     build: () => ({
       submessages: [
         { messageType: 2, messageText: '🧪 *TES RICH — INLINE IMAGE (URL polos)*' },
