@@ -401,26 +401,318 @@ async function runReplyVariant(ctx, text, style) {
       )
     }
 
-    case 8:
-      return client.message.send(chat, { interactiveMessage: { header: { hasMediaAttachment: false, locationMessage: { degreesLatitude: 0, degreesLongitude: 0, name: config.botName, address: 'skyline-JXRA' } }, body: { text }, nativeFlowMessage: { buttons: [] } } }, { quote: event })
-    case 9:
-      return client.message.send(chat, { interactiveMessage: { header: { hasMediaAttachment: false, locationMessage: { degreesLatitude: 0, degreesLongitude: 0, name: config.botName, address: 'skyline-JXRA' } }, body: { text }, nativeFlowMessage: { buttons: [{ name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: 'Owner', id: 'owner' }) }, { name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: 'Menu', id: 'allmenu' }) }] } } }, { quote: event })
-    case 10:
-      return client.message.send(chat, { interactiveMessage: { header: { title: config.botName, subtitle: 'Business Card', hasMediaAttachment: false }, body: { text }, footer: { text: config.botName }, nativeFlowMessage: { buttons: [{ name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: 'Owner', id: 'owner' }) }] } } }, { quote: event })
-    case 11:
-      return client.message.send(chat, { requestPaymentMessage: { currencyCodeIso4217: 'IDR', amount1000: 0, requestFrom: ctx.sender, noteMessage: { extendedTextMessage: { text } } } }, { quote: event })
-    case 12:
-      return client.message.send(chat, { type: 'text', text: `https://skyline.web.id\n\n${text}`, linkPreview: { matchedText: 'https://skyline.web.id', title: config.botName, description: text.slice(0, 120) } }, { quote: event, noStyle: true })
-    case 13:
-      return client.message.send(chat, { orderMessage: { orderId: randId(), itemCount: 1, status: 'INQUIRY', surface: 'CATALOG', message: text, orderTitle: config.botName, sellerJid: ctx.sender, totalAmount1000: 0, totalCurrencyCode: 'IDR' } }, { quote: event })
-    case 14:
-    case 16: {
-      const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${config.botName}</title></head><body style="font-family:Arial;background:#111;color:#fff;padding:24px"><h2>✨ ${config.botName}</h2><p>${text}</p><button>Salin</button></body></html>`
+    /* v8 LOCATION FLOW — interactive location header + companion biz */
+    case 8: {
+      const jpeg = await thumb300()
+      return client.message.send(
+        chat,
+        {
+          interactiveMessage: {
+            header: {
+              hasMediaAttachment: true,
+              locationMessage: {
+                degreesLatitude: -6.2088,
+                degreesLongitude: 106.8456,
+                name: config.botName,
+                address: 'skyline-JXRA • Location Flow',
+                ...(jpeg ? { jpegThumbnail: jpeg } : {})
+              }
+            },
+            body: { text },
+            footer: { text: config.botName },
+            nativeFlowMessage: {
+              messageVersion: 1,
+              buttons: [
+                {
+                  name: 'quick_reply',
+                  buttonParamsJson: JSON.stringify({ display_text: '👑 Owner', id: '.owner' })
+                },
+                {
+                  name: 'cta_url',
+                  buttonParamsJson: JSON.stringify({ display_text: '🌐 Website', url: 'https://skyline.web.id' })
+                }
+              ]
+            }
+          }
+        },
+        { quote: event }
+      )
+    }
+
+    /* v9 BUTTON FLOW — buttonsMessage dibungkus documentWithCaptionMessage (sesuai delivery-matrix zapo) */
+    case 9: {
+      const jpeg = await thumb300()
+      return client.message.send(
+        chat,
+        {
+          documentWithCaptionMessage: {
+            message: {
+              buttonsMessage: {
+                contentText: text,
+                footerText: config.botName,
+                headerType: 1,
+                buttons: [
+                  {
+                    buttonId: '.owner',
+                    buttonText: { displayText: '👑 Kontak Owner' },
+                    type: 1,
+                    nativeFlowInfo: {}
+                  },
+                  {
+                    buttonId: '.allmenu',
+                    buttonText: { displayText: '📜 Semua Menu' },
+                    type: 1,
+                    nativeFlowInfo: {}
+                  }
+                ]
+              }
+            }
+          }
+        },
+        { quote: event }
+      )
+    }
+
+    /* v10 BUSINESS CARD — interactiveMessage dengan header text/sub + cta_url/quick_reply */
+    case 10: {
+      return client.message.send(
+        chat,
+        {
+          interactiveMessage: {
+            header: {
+              title: `💼 ${config.botName}`,
+              subtitle: 'Verified Service Provider',
+              hasMediaAttachment: false
+            },
+            body: { text },
+            footer: { text: 'WhatsApp Business Solution • zapo-js' },
+            nativeFlowMessage: {
+              messageVersion: 1,
+              buttons: [
+                {
+                  name: 'quick_reply',
+                  buttonParamsJson: JSON.stringify({ display_text: '💬 Hubungi Owner', id: '.owner' })
+                },
+                {
+                  name: 'cta_url',
+                  buttonParamsJson: JSON.stringify({ display_text: '🌐 Official Portal', url: 'https://skyline.web.id' })
+                }
+              ]
+            }
+          }
+        },
+        { quote: event }
+      )
+    }
+
+    /* v11 PAYMENT — review_and_pay native flow resmi zapo (isCustomItem: true) */
+    case 11: {
+      const referenceId = `PAY-${Date.now()}`
+      return client.message.send(
+        chat,
+        {
+          interactiveMessage: {
+            body: { text },
+            footer: { text: `${config.botName} • Invoice Payment` },
+            nativeFlowMessage: {
+              messageVersion: 1,
+              buttons: [
+                {
+                  name: 'review_and_pay',
+                  buttonParamsJson: JSON.stringify({
+                    currency: 'IDR',
+                    reference_id: referenceId,
+                    total_amount: { value: 1000000, offset: 100 },
+                    payment_settings: [
+                      {
+                        type: 'custom_payment_method',
+                        custom_payment_method: {
+                          name: 'QRIS / Transfer Bank',
+                          reference_id: referenceId
+                        }
+                      }
+                    ],
+                    order: {
+                      status: 'payment_requested',
+                      subtotal: { value: 1000000, offset: 100 },
+                      order_type: 'ORDER',
+                      items: [
+                        {
+                          name: `${config.botName} Premium Order`,
+                          amount: { value: 1000000, offset: 100 },
+                          quantity: 1,
+                          isCustomItem: true,
+                          isQuantitySet: true
+                        }
+                      ]
+                    }
+                  })
+                }
+              ]
+            }
+          }
+        },
+        { quote: event }
+      )
+    }
+
+    /* v12 ANIMATED PREVIEW — update linkPreview title bertahap via editKey */
+    case 12: {
+      const delay = (ms) => new Promise((r) => setTimeout(r, ms))
+      const frames = [
+        '🌐 Menghubungkan...',
+        `🌐 [ ${config.botName} ]`,
+        `🌐 [ ${config.botName} v${VERSION || '1.0'} ]`,
+        `🌐 ${config.botName} Online`
+      ]
+      const sent = await client.message.send(
+        chat,
+        {
+          type: 'text',
+          text,
+          linkPreview: {
+            matchedText: 'https://skyline.web.id',
+            title: frames[0],
+            description: 'skyline-JXRA Animated Preview'
+          }
+        },
+        { quote: event, noStyle: true }
+      )
+      const editKey = sent?.key?.id || sent?.message?.key?.id || sent?.id
+      if (editKey) {
+        for (let i = 1; i < frames.length; i++) {
+          await delay(700)
+          await client.message.send(
+            chat,
+            {
+              type: 'text',
+              text,
+              linkPreview: {
+                matchedText: 'https://skyline.web.id',
+                title: frames[i],
+                description: 'skyline-JXRA Animated Preview'
+              }
+            },
+            {
+              quote: event,
+              editKey: { id: editKey, participant: ctx.isGroup ? client.auth?.getCurrentCredentials?.()?.meJid : undefined },
+              noStyle: true
+            }
+          ).catch(() => null)
+        }
+      }
+      return sent
+    }
+
+    /* v13 CATALOG — generic order flow card dengan review_and_pay */
+    case 13: {
+      return client.message.send(
+        chat,
+        {
+          interactiveMessage: {
+            header: {
+              title: `🛒 ${config.botName} Catalog`,
+              subtitle: 'Official Store Item',
+              hasMediaAttachment: false
+            },
+            body: { text },
+            footer: { text: 'Klik tombol di bawah untuk melihat rincian katalog.' },
+            nativeFlowMessage: {
+              messageVersion: 1,
+              buttons: [
+                {
+                  name: 'review_and_pay',
+                  buttonParamsJson: JSON.stringify({
+                    currency: 'IDR',
+                    reference_id: `CAT-${Date.now()}`,
+                    total_amount: { value: 0, offset: 100 },
+                    order: {
+                      status: 'payment_requested',
+                      subtotal: { value: 0, offset: 100 },
+                      order_type: 'CATALOG',
+                      items: [
+                        {
+                          name: `${config.botName} Multi-Device Bot`,
+                          amount: { value: 0, offset: 100 },
+                          quantity: 1,
+                          isCustomItem: true,
+                          isQuantitySet: true
+                        }
+                      ]
+                    }
+                  })
+                },
+                {
+                  name: 'quick_reply',
+                  buttonParamsJson: JSON.stringify({ display_text: '👑 Hubungi Admin', id: '.owner' })
+                }
+              ]
+            }
+          }
+        },
+        { quote: event }
+      )
+    }
+
+    /* v14 RICH HTML — FOAHtmlPrimitiveDemoDONOTUSE GenAI UnifiedResponse */
+    case 14: {
+      const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${config.botName}</title></head><body style="margin:0;padding:16px;background:#0d1117;color:#e6edf3;font-family:sans-serif"><div style="border:1px solid #30363d;border-radius:12px;padding:16px;background:#161b22"><h3 style="margin-top:0;color:#58a6ff">✨ ${config.botName}</h3><p style="white-space:pre-wrap;line-height:1.5">${text}</p><div style="font-size:12px;color:#8b949e;border-top:1px solid #30363d;padding-top:8px">skyline-JXRA • Rich Response</div></div></body></html>`
       const { sendNativeHtml } = await import('../lib/emeraldCard.js')
       return sendNativeHtml(client, chat, html)
     }
-    case 15:
-      return client.message.send(chat, { type: 'text', text: `https://skyline.web.id\n${text}`, linkPreview: { matchedText: 'https://skyline.web.id', title: config.botName, description: 'Link preview' } }, { quote: event, noStyle: true })
+
+    /* v15 PREVIEW PLUS — linkPreview dengan OG image buffer dinamis */
+    case 15: {
+      const website = 'https://skyline.web.id'
+      const og = await fetchOgPreviewCached(website)
+      const jpeg = await thumb300()
+      return client.message.send(
+        chat,
+        {
+          type: 'text',
+          text: `${website}\n\n${text}`,
+          linkPreview: {
+            matchedText: website,
+            title: `🌐 ${config.botName} Hub`,
+            description: og?.description || 'WhatsApp Multi-Device Assistant with zapo-js',
+            ...(og?.thumbnail || jpeg ? { thumbnail: { bytes: og?.thumbnail || jpeg } } : {})
+          }
+        },
+        { quote: event, noStyle: true }
+      )
+    }
+
+    /* v16 PRODUCT CARD — Product Card resmi zapo dengan upload ulang media */
+    case 16: {
+      let productImage = null
+      const thumb = await thumb300()
+      if (thumb && client.message?.upload) {
+        try {
+          productImage = await client.message.upload(thumb, { type: 'image', mimetype: 'image/jpeg' })
+        } catch {}
+      }
+      return client.message.send(
+        chat,
+        {
+          productMessage: {
+            businessOwnerJid: ctx.sender,
+            body: text,
+            footer: `${config.botName} Product Showcase`,
+            product: {
+              productId: `PROD-${Date.now().toString().slice(-6)}`,
+              title: `${config.botName} Multi-Device Bot`,
+              description: 'Layanan bot WhatsApp modern dengan arsitektur zapo-js penuh.',
+              currencyCode: 'IDR',
+              priceAmount1000: 50000000,
+              retailerId: 'sky-jxra-01',
+              url: 'https://skyline.web.id',
+              ...(productImage ? { productImage } : {})
+            }
+          }
+        },
+        { quote: event }
+      )
+    }
     default:
       throw new Error(`reply variant ${style} gak dikenal`)
   }
