@@ -9,6 +9,7 @@
 import { createStore, WaClient } from 'zapo-js'
 import { createSqliteStore } from '@zapo-js/store-sqlite'
 import { createMediaProcessor } from '@zapo-js/media-utils'
+import { voipPlugin } from '@zapo-js/voip' // VOIP (panggilan WA) — dipakai plugin owner `.voip`
 import { createInterface } from 'node:readline'
 import fs from 'node:fs'
 import config from './config.js'
@@ -171,7 +172,13 @@ const client = new WaClient(
       generateThumbnail: true,
       generateWaveform: true,
       normalizeVoiceNote: true
-    }
+    },
+    // Plugin WaClient — VOIP (@zapo-js/voip): wajib dipasang saat konstruksi
+    // client. Setup-nya ringan (codec WASM & ffmpeg hanya dipakai saat ada
+    // panggilan), jadi aman walau fitur .voip jarang dipakai.
+    plugins: [
+      voipPlugin({ maxConcurrentCalls: 1, logLevel: 'warn' })
+    ]
   },
   clientLogger
 )
