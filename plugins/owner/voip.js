@@ -91,22 +91,31 @@ function installNotifier(client) {
 }
 
 // Auto-end: begitu audio selesai diputar, panggilan ditutup + laporan ke chat.
+// Kalau panggilan berakhir DULUAN (peer nutup / koneksi putus) laporannya
+// dibedain biar gak salah bilang "audio selesai".
 function autoEndAfterAudio(client, callId, chat) {
+  let audioDone = false
   const onEnd = (call) => {
     if (call.callId !== callId) return
     client.off('voip_call_outbound_audio_finished', onFinished)
     client.message
-      .send(chat, '✅ Audio selesai diputar — panggilan ditutup.')
+      .send(
+        chat,
+        audioDone
+          ? '✅ Audio selesai diputar — panggilan ditutup.'
+          : '📴 Panggilan berakhir sebelum audio selesai (ditutup pihak lain / koneksi putus).'
+      )
       .catch(() => {})
   }
   const onFinished = (call) => {
     if (call.callId !== callId) return
+    audioDone = true
     client.off('voip_call_ended', onEnd)
     client.voip
       ?.endCall(callId, EndCallReason.UserEnded)
       .then(() => client.message.send(chat, '✅ Audio selesai diputar — panggilan ditutup.').catch(() => {}))
       .catch((err) =>
-        client.message.send(chat, `⚠️ Audio selesai tapi gagal nutup panggilan: ${err?.message}`).catch(() => {})
+        client.message.send(chat, `⚠️ Audio selesai tapi gagal nutup panggilan: ${err?.message}\nKetik \`.voip end\` buat manual.`).catch(() => {})
       )
   }
   client.on('voip_call_outbound_audio_finished', onFinished)
