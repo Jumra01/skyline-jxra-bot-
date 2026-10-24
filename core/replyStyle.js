@@ -27,7 +27,8 @@ export const REPLY_VARIANTS = {
   5: { key: 'v5', name: 'FAKE ORDER', emoji: '🛒', desc: 'Teks + quote order palsu' },
   6: { key: 'v6', name: 'SIMPLE DOCUMENT', emoji: '📄', desc: 'Dokumen + quote pesan asli' },
   7: { key: 'v7', name: 'FAKE LOCATION', emoji: '📍', desc: 'Header lokasi palsu (interactive)' },
-  8: { key: 'v8', name: 'USER PROFILE', emoji: '👤', desc: 'Profil user, role, status premium, command, dan waktu penggunaan' }
+  8: { key: 'v8', name: 'USER PROFILE', emoji: '👤', desc: 'Profil user, role, status premium, command, dan waktu penggunaan' },
+  9: { key: 'v9', name: 'PRODUCT PROFILE', emoji: '🛍️', desc: 'Header product card, nama bot, command, dan status stiker' }
 }
 
 let VERSION = ''
@@ -35,7 +36,7 @@ try {
   VERSION = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version ?? ''
 } catch {}
 
-const clamp = (n) => Math.min(8, Math.max(1, parseInt(n, 10) || 1))
+const clamp = (n) => Math.min(9, Math.max(1, parseInt(n, 10) || 1))
 
 let cache = null
 
@@ -409,7 +410,8 @@ async function runReplyVariant(ctx, text, style) {
     }
 
     /* v8 USER PROFILE — rich entity card ala owner Type 5 */
-    case 8: {
+    case 8:
+    case 9: {
       const number = ctx.senderNumber || String(ctx.sender || '').split('@')[0].split(':')[0] || '-'
       const premium = (() => {
         try {
@@ -458,6 +460,93 @@ async function runReplyVariant(ctx, text, style) {
             imageUrl = uploaded?.url || uploaded?.directPath || ''
           } catch {}
         }
+      }
+      if (Number(style) === 9) {
+        let stickerAvailable = false
+        try {
+          const { getFeature } = await import('../plugins/loader.js')
+          const feature = getFeature('sticker')
+          const { default: sharp } = await import('sharp')
+          stickerAvailable = Boolean(feature?.config?.isEnabled && sharp && config.sticker)
+        } catch { stickerAvailable = false }
+        const status = stickerAvailable ? '🟢 STIKER ON' : '🔴 STIKER OFF'
+        let productImage = 'https://skyline.web.id/assets/img/logo-nav.png'
+        try {
+          const meJid = client.getCurrentMeJid?.() || client.getCurrentCredentials?.()?.meJid || client.auth?.getCurrentCredentials?.()?.meJid
+          const profile = await Promise.race([
+            Promise.resolve(meJid && client.profile?.getProfilePicture?.(meJid, 'image')),
+            new Promise((resolve) => setTimeout(() => resolve(null), 3500))
+          ])
+          const botAvatar = typeof profile === 'string' ? profile : profile?.url
+          if (botAvatar && /^https?:\/\//i.test(botAvatar)) productImage = botAvatar
+        } catch {}
+        const product = {
+          __typename: 'GenAIProductItemCardPrimitive',
+          title: config.botName || 'skyline-JXRA',
+          brand: ctx.command ? `.${ctx.command}` : 'Balasan bot',
+          price: status,
+          sale_price: status,
+          product_url: String(config.reactChannel?.dedicatedChannelUrl || '').trim() || 'https://skyline.web.id',
+          image: { url: productImage },
+          additional_images: [{ url: productImage }]
+        }
+        const productPayload = {
+          response_id: crypto.randomUUID(),
+          sections: [{
+            view_model: {
+              __typename: 'GenAISingleLayoutViewModel',
+              primitive: product
+            }
+          }]
+        }
+        const richResult = await client.message.send(chat, {
+          botForwardedMessage: {
+            message: {
+              richResponseMessage: {
+                messageType: 1,
+                submessages: [{ messageType: 2, messageText: text }],
+                unifiedResponse: { data: Buffer.from(JSON.stringify(productPayload)).toString('base64') },
+                contextInfo: { isForwarded: true, forwardOrigin: 4 }
+              }
+            }
+          }
+        }, { additionalAttributes: { type: 'text' } })
+        const richId = richResult?.id || richResult?.key?.id || richResult?.messageId
+        if (richId) {
+          try {
+            const meJid = client.getCurrentMeJid?.() || client.getCurrentCredentials?.()?.meJid
+            await client.message.send(chat, {
+              botForwardedMessage: {
+                message: {
+                  protocolMessage: {
+                    key: {
+                      remoteJid: chat,
+                      fromMe: true,
+                      id: richId,
+                      ...(String(chat).endsWith('@g.us') && meJid ? { participant: meJid } : {})
+                    },
+                    type: 14,
+                    editedMessage: {
+                      botForwardedMessage: {
+                        message: {
+                          richResponseMessage: {
+                            messageType: 1,
+                            submessages: [{ messageType: 2, messageText: text }],
+                            unifiedResponse: { data: Buffer.from(JSON.stringify(productPayload)).toString('base64') },
+                            contextInfo: { isForwarded: true, forwardOrigin: 4 }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }, { additionalAttributes: { type: 'text' } })
+          } catch (err) {
+            logger.warn({ err: String(err?.message ?? err) }, 'reply v9 rich edit-identik gagal')
+          }
+        }
+        return richResult
       }
       const entity = {
         __typename: 'GenAICompactEntityPrimitive',

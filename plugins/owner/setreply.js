@@ -2,11 +2,11 @@
  * © skyline-JXRA
  * Hapus credit gak bikin u jago dumbass.
  * Hargai sebagaimana u mau dihargai.
- * setreply.js — Atur gaya reply bot (.setreply): v1–v7.
+ * setreply.js — Atur gaya reply bot (.setreply): v1–v9.
  *
  * Pakai:
  *   .setreply          → daftar varian via list (ada ceklis varian aktif)
- *   .setreply v1-v7    → pilih varian (langsung kelihatan di balasannya)
+ *   .setreply v1-v9    → pilih varian (langsung kelihatan di balasannya)
  *   .setreply thumb    → balas foto: jadi thumbnail KARTU GLOBAL semua balasan
  *                        (varian kartu — v1 BASIC / v5 — di semua chat)
  *   .setreply thumb v4 → balas foto: jadi thumbnail PREVIEW v4 (link preview);
@@ -113,8 +113,8 @@ const pluginConfig = {
   name: "setreply",
   alias: ['replyvariant', 'replystyle'],
   category: "owner",
-  description: "Atur gaya reply bot (v1-v16)",
-  usage: ".setreply <v1-v8>",
+  description: "Atur gaya reply bot (v1-v9)",
+  usage: ".setreply <v1-v9>",
   example: ".setreply",
   isOwner: true,
   isPremium: false,
@@ -130,7 +130,7 @@ const pluginConfig = {
 async function handler(ctx) {
     const sub = (ctx.args[0] || '').toLowerCase()
     const current = getReplyStyle()
-    const pick = sub.match(/^v?([1-8])$/)
+    const pick = sub.match(/^v?([1-9])$/)
 
     if (pick) {
       await applyVariant(ctx, Number(pick[1]))
@@ -168,7 +168,7 @@ async function handler(ctx) {
     if (sub) {
       await ctx.reply(
         `❌ *VARIANT TIDAK VALID*\n\n` +
-        `Gunakan: *v1* s/d *v8*, atau:\n` +
+        `Gunakan: *v1* s/d *v9*, atau:\n` +
         `• \`thumb\` — balas foto → thumbnail kartu global\n` +
         `• \`thumb v4\` — balas foto → thumbnail preview v4\n` +
         `Contoh: \`${ctx.prefix}setreply v5\``
