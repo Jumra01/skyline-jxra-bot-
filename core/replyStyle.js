@@ -462,17 +462,26 @@ async function runReplyVariant(ctx, text, style) {
         }
       }
       if (Number(style) === 9) {
-        let stickerAvailable = false
+        const toSmallCaps = (value) => Array.from(String(value ?? ''), (char) => {
+          const lower = char.toLowerCase()
+          const code = lower.codePointAt(0)
+          if (code >= 0x61 && code <= 0x7a) {
+            const mapped = {
+              a: 'ᴀ', b: 'ʙ', c: 'ᴄ', d: 'ᴅ', e: 'ᴇ', f: 'ꜰ', g: 'ɢ', h: 'ʜ',
+              i: 'ɪ', j: 'ᴊ', k: 'ᴋ', l: 'ʟ', m: 'ᴍ', n: 'ɴ', o: 'ᴏ', p: 'ᴘ',
+              q: 'ǫ', r: 'ʀ', s: 's', t: 'ᴛ', u: 'ᴜ', v: 'ᴠ', w: 'ᴡ', x: 'x', y: 'ʏ', z: 'ᴢ'
+            }
+            return mapped[lower] || char
+          }
+          return char
+        }).join('')
+        const styledText = toSmallCaps(text)
+        const styledCommand = ctx.command ? `.${toSmallCaps(ctx.command)}` : toSmallCaps('pesan')
+        const status = toSmallCaps('Online')
+        let productImage = ''
         try {
-          const { getFeature } = await import('../plugins/loader.js')
-          const feature = getFeature('sticker')
-          const { default: sharp } = await import('sharp')
-          stickerAvailable = Boolean(feature && sharp && config.sticker)
-        } catch { stickerAvailable = false }
-        const status = stickerAvailable ? '🟢' : '🔴'
-        let productImage = 'https://skyline.web.id/assets/img/logo-nav.png'
-        try {
-          const meJid = client.getCurrentMeJid?.() || client.getCurrentCredentials?.()?.meJid || client.auth?.getCurrentCredentials?.()?.meJid
+          const credentials = client.auth?.getCurrentCredentials?.() || client.getCurrentCredentials?.()
+          const meJid = client.getCurrentMeJid?.() || credentials?.meJid || credentials?.meLid
           const profile = await Promise.race([
             Promise.resolve(meJid && client.profile?.getProfilePicture?.(meJid, 'image')),
             new Promise((resolve) => setTimeout(() => resolve(null), 3500))
@@ -496,8 +505,8 @@ async function runReplyVariant(ctx, text, style) {
         } catch {}
         const product = {
           __typename: 'GenAIProductItemCardPrimitive',
-          title: config.botName || 'skyline-JXRA',
-          brand: ctx.command ? `.${ctx.command}` : 'Balasan bot',
+          title: toSmallCaps(config.botName || 'skyline-JXRA'),
+          brand: styledCommand,
           price: status,
           sale_price: '',
           product_url: String(config.reactChannel?.dedicatedChannelUrl || '').trim() || 'https://skyline.web.id',
@@ -516,7 +525,7 @@ async function runReplyVariant(ctx, text, style) {
             {
               view_model: {
                 __typename: 'GenAISingleLayoutViewModel',
-                primitive: { text: richBody, __typename: 'GenAIMarkdownTextUXPrimitive' }
+                primitive: { text: styledText, __typename: 'GenAIMarkdownTextUXPrimitive' }
               }
             }
           ]
@@ -526,7 +535,7 @@ async function runReplyVariant(ctx, text, style) {
             message: {
               richResponseMessage: {
                 messageType: 1,
-                submessages: [{ messageType: 2, messageText: text }],
+                submessages: [{ messageType: 2, messageText: styledText }],
                 unifiedResponse: { data: Buffer.from(JSON.stringify(productPayload)).toString('base64') },
                 contextInfo: { isForwarded: true, forwardOrigin: 4 }
               }
