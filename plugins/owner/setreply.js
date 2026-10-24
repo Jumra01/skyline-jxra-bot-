@@ -67,7 +67,7 @@ async function applyVariant(ctx, n) {
   const tier = usageTier(ctx)
   return ctx.reply(
     `✅ *REPLY VARIANT DIGANTI*\n\n` +
-    `${info.emoji} *${info.key.toUpperCase()} — ${info.name}*\n` +
+    `${info.emoji ? `${info.emoji} ` : ''}*${info.key.toUpperCase()} — ${info.name}*\n` +
     `_${info.desc}_\n\n` +
     `👤 *Profil:* ${profile}\n` +
     `🪪 *Nomor:* ${ctx.senderNumber || '-'}\n` +
@@ -178,7 +178,7 @@ async function handler(ctx) {
 
     const cur = REPLY_VARIANTS[current]
     const rows = Object.entries(REPLY_VARIANTS).map(([n, v]) => ({
-      title: `${v.emoji} ${v.key.toUpperCase()}${Number(n) === current ? ' ✓' : ''} — ${v.name}`,
+      title: `${v.emoji ? `${v.emoji} ` : ''}${v.key.toUpperCase()}${Number(n) === current ? ' ✓' : ''} — ${v.name}`,
       description: v.desc,
       id: `setreply:${v.key}`
     }))

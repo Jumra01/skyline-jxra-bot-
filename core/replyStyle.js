@@ -28,7 +28,7 @@ export const REPLY_VARIANTS = {
   6: { key: 'v6', name: 'SIMPLE DOCUMENT', emoji: '📄', desc: 'Dokumen + quote pesan asli' },
   7: { key: 'v7', name: 'FAKE LOCATION', emoji: '📍', desc: 'Header lokasi palsu (interactive)' },
   8: { key: 'v8', name: 'USER PROFILE', emoji: '👤', desc: 'Profil user, role, status premium, command, dan waktu penggunaan' },
-  9: { key: 'v9', name: 'PRODUCT PROFILE', emoji: '🛍️', desc: 'Header product card, nama bot, command, dan status stiker' }
+  9: { key: 'v9', name: 'PRODUCT PROFILE', emoji: '', desc: 'Product card dengan profil bot, command, status online, dan balasan small caps bold' }
 }
 
 let VERSION = ''
@@ -462,23 +462,37 @@ async function runReplyVariant(ctx, text, style) {
         }
       }
       if (Number(style) === 9) {
-        const toSmallCaps = (value) => Array.from(String(value ?? ''), (char) => {
-          const lower = char.toLowerCase()
-          const code = lower.codePointAt(0)
-          if (code >= 0x61 && code <= 0x7a) {
-            const mapped = {
-              a: 'ᴀ', b: 'ʙ', c: 'ᴄ', d: 'ᴅ', e: 'ᴇ', f: 'ꜰ', g: 'ɢ', h: 'ʜ',
-              i: 'ɪ', j: 'ᴊ', k: 'ᴋ', l: 'ʟ', m: 'ᴍ', n: 'ɴ', o: 'ᴏ', p: 'ᴘ',
-              q: 'ǫ', r: 'ʀ', s: 's', t: 'ᴛ', u: 'ᴜ', v: 'ᴠ', w: 'ᴡ', x: 'x', y: 'ʏ', z: 'ᴢ'
-            }
-            return mapped[lower] || char
-          }
-          return char
+        const SMALL_CAPS = {
+          a: 'ᴀ', b: 'ʙ', c: 'ᴄ', d: 'ᴅ', e: 'ᴇ', f: 'ꜰ', g: 'ɢ', h: 'ʜ',
+          i: 'ɪ', j: 'ᴊ', k: 'ᴋ', l: 'ʟ', m: 'ᴍ', n: 'ɴ', o: 'ᴏ', p: 'ᴘ',
+          q: 'ǫ', r: 'ʀ', s: 's', t: 'ᴛ', u: 'ᴜ', v: 'ᴠ', w: 'ᴡ', x: 'x', y: 'ʏ', z: 'ᴢ'
+        }
+        const BOLD_CAPS = {
+          A: '𝗔', B: '𝗕', C: '𝗖', D: '𝗗', E: '𝗘', F: '𝗙', G: '𝗚', H: '𝗛',
+          I: '𝗜', J: '𝗝', K: '𝗞', L: '𝗟', M: '𝗠', N: '𝗡', O: '𝗢', P: '𝗣',
+          Q: '𝗤', R: '𝗥', S: '𝗦', T: '𝗧', U: '𝗨', V: '𝗩', W: '𝗪', X: '𝗫',
+          Y: '𝗬', Z: '𝗭'
+        }
+        const BOLD_SMALL_CAPS = {
+          ᴀ: 'ᴀ', ʙ: 'ʙ', ᴄ: 'ᴄ', ᴅ: 'ᴅ', ᴇ: 'ᴇ', ꜰ: 'ꜰ', ɢ: 'ɢ', ʜ: 'ʜ',
+          ɪ: 'ɪ', ᴊ: 'ᴊ', ᴋ: 'ᴋ', ʟ: 'ʟ', ᴍ: 'ᴍ', ɴ: 'ɴ', ᴏ: 'ᴏ', ᴘ: 'ᴘ',
+          ǫ: 'ǫ', ʀ: 'ʀ', s: 's', ᴛ: 'ᴛ', ᴜ: 'ᴜ', ᴠ: 'ᴠ', ᴡ: 'ᴡ', x: 'x', ʏ: 'ʏ', ᴢ: 'ᴢ'
+        }
+        const toSmallCaps = (value) => Array.from(String(value ?? '').toLowerCase(), (char) => SMALL_CAPS[char] ?? char).join('')
+        // Use bold Unicode for Latin letters (small-cap glyphs have no bold variants).
+        // Keep small-cap glyphs where they exist; the rest get a bold Latin substitute.
+        const toBoldSmallCaps = (value) => Array.from(String(value ?? ''), (char) => {
+          const small = toSmallCaps(char)
+          if (small !== char.toLowerCase()) return BOLD_SMALL_CAPS[small] || small
+          const upper = char.toUpperCase()
+          return BOLD_CAPS[upper] || char
         }).join('')
-        const styledText = toSmallCaps(text)
-        const styledCommand = ctx.command ? `.${toSmallCaps(ctx.command)}` : toSmallCaps('pesan')
-        const status = toSmallCaps('Online')
-        let productImage = ''
+        const styledText = `**${toBoldSmallCaps(text)}**`
+        // The product-card brand field is rendered as the command label; keep it plain text.
+        // Emoji appended by older experiments appeared as a WhatsApp sticker next to the command.
+        const styledCommand = ctx.command ? toBoldSmallCaps(ctx.command) : toBoldSmallCaps('pesan')
+        const status = toBoldSmallCaps('Online')
+        let productImage = imageUrl || ''
         try {
           const credentials = client.auth?.getCurrentCredentials?.() || client.getCurrentCredentials?.()
           const meJid = client.getCurrentMeJid?.() || credentials?.meJid || credentials?.meLid
@@ -496,7 +510,9 @@ async function runReplyVariant(ctx, text, style) {
                   type: 'image',
                   mimetype: response.headers.get('content-type') || 'image/jpeg'
                 })
-                const uploadedUrl = typeof uploaded === 'string' ? uploaded : uploaded?.url || uploaded?.directPath
+                const uploadedUrl = typeof uploaded === 'string'
+                  ? uploaded
+                  : uploaded?.url || uploaded?.directPath || uploaded?.mediaUrl
                 if (uploadedUrl) botAvatar = uploadedUrl
               }
             }
@@ -505,7 +521,7 @@ async function runReplyVariant(ctx, text, style) {
         } catch {}
         const product = {
           __typename: 'GenAIProductItemCardPrimitive',
-          title: toSmallCaps(config.botName || 'skyline-JXRA'),
+          title: toBoldSmallCaps(config.botName || 'skyline-JXRA'),
           brand: styledCommand,
           price: status,
           sale_price: '',
