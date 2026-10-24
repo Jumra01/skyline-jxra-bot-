@@ -96,6 +96,9 @@ function installGlobalReplyStyle(client) {
       if (!text || hasMentions(content, opts)) return await rawSend(chat, content, opts)
 
       const style = getReplyStyle()
+      // v8 needs the incoming sender context; the global send hook has none.
+      // ctx.reply() invokes v8 with the real context, while raw sends stay raw.
+      if (style === 8) return await rawSend(chat, content, opts)
       const pseudo = { client, chat, event: undefined }
       if (style !== 1) {
         try {

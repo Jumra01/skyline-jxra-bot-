@@ -72,7 +72,8 @@ async function handler(ctx) {
 
   // Dukung override instan lewat argumen: `.owner 2`
   const argType = parseInt(args[0], 10)
-  const ownerType = (argType >= 1 && argType <= 5) ? argType : (getGlobal('ownerType') || 2)
+  const savedType = Number(getGlobal('ownerType'))
+  const ownerType = (argType >= 1 && argType <= 5) ? argType : (savedType >= 1 && savedType <= 5 ? savedType : 2)
 
   const configOwners = (config.owner?.numbers || [])
     .map((n) => String(n).replace(/[^0-9]/g, ''))

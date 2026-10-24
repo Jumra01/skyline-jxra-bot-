@@ -91,6 +91,28 @@ function readVersionedFile(rel) {
   return fs.readFileSync(new URL(rel, import.meta.url))
 }
 
+async function senderAvatar(ctx) {
+  const fallback = await thumb300()
+  try {
+    const result = await Promise.race([
+      Promise.resolve(ctx.client?.profile?.getProfilePicture?.(ctx.sender)),
+      new Promise((resolve) => setTimeout(() => resolve(null), 4000))
+    ])
+    const url = typeof result === 'string' ? result : result?.url
+    if (url && /^https?:\/\//i.test(url)) {
+      const response = await fetch(url, { signal: AbortSignal.timeout(4000), redirect: 'follow' })
+      if (response.ok) {
+        const buf = Buffer.from(await response.arrayBuffer())
+        if (buf.length) {
+          const sharp = (await import('sharp')).default
+          return await sharp(buf).flatten({ background: '#ffffff' }).resize(300, 300, { fit: 'cover' }).jpeg({ quality: 70 }).toBuffer()
+        }
+      }
+    }
+  } catch {}
+  return fallback
+}
+
 async function thumb300() {
   try {
     const buf = await getThumbBuffer()
@@ -394,7 +416,7 @@ async function runReplyVariant(ctx, text, style) {
       )
     }
 
-    /* v8 USER PROFILE — metadata pengguna yang menjalankan command */
+    /* v8 USER PROFILE — rich entity card ala owner Type 5 */
     case 8: {
       const sender = ctx.sender || ''
       const number = ctx.senderNumber || String(sender).split('@')[0].split(':')[0] || '-'
@@ -412,7 +434,7 @@ async function runReplyVariant(ctx, text, style) {
         weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
         hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
         timeZone: 'Asia/Jakarta'
-      }).format(new Date()) + ' WIB'
+      }).format(new Date(ctx.receivedAt || Date.now())) + ' WIB'
       const profileText = [
         `👤 *PROFIL PENGGUNA*`,
         ``,
@@ -426,11 +448,49 @@ async function runReplyVariant(ctx, text, style) {
         ``,
         text
       ].join('\n')
-      const thumb = await thumb300()
-      const content = thumb
-        ? { type: 'image', media: thumb, mimetype: 'image/jpeg', caption: profileText }
-        : { type: 'text', text: profileText }
-      return client.message.send(chat, content, { quote: event, noStyle: true })
+      let imageUrl = ''
+      try {
+        const image = await senderAvatar(ctx)
+        if (image && client.message?.upload) {
+          const uploaded = await client.message.upload(image, { type: 'image', mimetype: 'image/jpeg' })
+          imageUrl = uploaded?.url || ''
+        }
+      } catch (err) {
+        logger.warn({ err: String(err?.message ?? err) }, 'reply v8 gagal menyiapkan avatar')
+      }
+      const entity = {
+        __typename: 'GenAICompactEntityPrimitive',
+        title: ctx.pushName || 'Pengguna',
+        subtitle: `${role} • ${tier}`,
+        secondary_subtitle: `${ctx.isGroup ? 'Grup' : 'Pribadi'} • ${when} • ${ctx.command ? `.${ctx.command}` : 'pesan'}`,
+        entity_id: Number(String(number).replace(/\D/g, '').slice(-8)) || 12345678,
+        entity_url: sender.includes('@') ? `https://wa.me/${number}` : '',
+        entity_type: 'PERSON',
+        action_type: 'MESSAGE',
+        is_verified: Boolean(ctx.isOwner),
+        ...(imageUrl ? { image: { url: imageUrl } } : {})
+      }
+      const payload = {
+        response_id: crypto.randomUUID(),
+        sections: [{ view_model: { primitive: entity, __typename: 'GenAISingleLayoutViewModel' } }]
+      }
+      try {
+        return await client.message.send(chat, {
+          botForwardedMessage: {
+            message: {
+              richResponseMessage: {
+                messageType: 1,
+                submessages: [{ messageType: 2, messageText: profileText }],
+                unifiedResponse: { data: Buffer.from(JSON.stringify(payload)).toString('base64') },
+                contextInfo: { isForwarded: true, forwardOrigin: 4 }
+              }
+            }
+          }
+        }, { quote: event, additionalAttributes: { type: 'text' } })
+      } catch (err) {
+        logger.warn({ err: String(err?.message ?? err) }, 'reply v8 rich entity gagal — fallback teks')
+        return client.message.send(chat, { type: 'text', text: profileText }, { quote: event, noStyle: true })
+      }
     }
 
     default:
