@@ -47,12 +47,12 @@ function envelope(inner) {
         richResponseMessage: {
           messageType: 1,
           ...inner,
-          contextInfo: {
-            forwardingScore: 999,
-            isForwarded: true,
-            forwardedAiBotMessageInfo: { botJid: '867051314767696@bot' },
-            forwardOrigin: 4
-          }
+          // Envelope polos — persis lib/emeraldCard.js sendNativeHtml().
+          // JANGAN tambah forwardingScore / forwardedAiBotMessageInfo:
+          // dua field itu bikin WA nampilin "perbarui WhatsApp" / "tidak
+          // didukung" khusus di jalur unifiedResponse (sudah kejadian di
+          // log 2026-10-22, dan crm.js punya stripForward() karenanya).
+          contextInfo: { isForwarded: true, forwardOrigin: 4 }
         }
       }
     }
