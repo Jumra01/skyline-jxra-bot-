@@ -18,7 +18,7 @@ import { isOn, getSetting } from '../core/groupSettings.js'
 
 const recent = new Map()
 
-// [UPDATE] Zero-width / invisible formatting chars yang diselipin WA (mention isolate, dll)
+// Zero-width / invisible formatting chars yang diselipin WA (mention isolate, dll)
 const INVISIBLE_RE = /[\u200b-\u200f\u2060-\u2069\ufeff]/g
 
 function toJid(p) {
@@ -158,13 +158,13 @@ async function sendGreeting(client, groupJid, rawParticipants, kind) {
         ? `selamat datang @user di %group. Jangan lupa baca deskripsi grup ya!`
         : `selamat tinggal @user, telah keluar dari %group. Jangan lupa arah pulang!`
 
-    // [FIX] ✅ Strip invisible chars sisipan WA, baru replace placeholder
+    // Strip invisible chars sisipan WA, baru replace placeholder
     const text = String(custom ?? defaultText)
       .replace(INVISIBLE_RE, '')
       .replace(/%group/g, groupName)
       .replace(/@user/g, tags)
 
-    // [FIX] 1) Gambar PP + thumbnail preview (Uint8Array bersih)
+    // 1) Gambar PP + thumbnail preview (Uint8Array bersih)
     const { image, thumb } = await getProfile(client, participants[0])
     if (image && thumb) {
       try {
@@ -184,7 +184,7 @@ async function sendGreeting(client, groupJid, rawParticipants, kind) {
       }
     }
 
-    // [FIX] 2) Fallback teks
+    // 2) Fallback teks
     await client.message.send(groupJid, {
       extendedTextMessage: {
         text,

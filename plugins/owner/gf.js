@@ -4,7 +4,6 @@
  * Hargai sebagaimana u mau dihargai.
  * gf.js — GF (Get Feature): ambil isi file feature/code.
  *
- * [UPDATE BELOW]
  * Mode:
  *  .gf <path>           → kirim sebagai document .js, DITAMBAH tombol
  *                          "📋 Copy Code" (cta_copy) biar gak perlu download

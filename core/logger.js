@@ -3,8 +3,8 @@
  * Hapus credit gak bikin u jago dumbass.
  * Hargai sebagaimana u mau dihargai.
  * logger.js — Logger console berwarna: badge level, jam, context objek + box.
- * API sama seperti sebelumnya (info/warn/error/success + child/level), jadi
- * drop-in buat semua pemanggil lama. Terima urutan (msg, ctx) maupun (ctx, msg).
+ * API: info/warn/error/success + child/level — drop-in buat semua pemanggil.
+ * Terima urutan (msg, ctx) maupun (ctx, msg).
  */
 import config from '../config.js'
 import { paint, dispWidth } from './consoleStyle.js'

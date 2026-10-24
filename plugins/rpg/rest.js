@@ -3,8 +3,6 @@
  * Hapus credit gak bikin u jago dumbass. 
  * Hargai sebagaimana u mau dihargai.
  * rest.js — Istirahat time-based: mulai rest, cek progress, narasi bertahap.
- * [UPDATE BELOW]
- *
  * Durasi mengikuti seberapa habisnya stats (30s – 10m).
  */
 import { createCharacter, getCharacter, startRest } from '../../core/rpg.js'

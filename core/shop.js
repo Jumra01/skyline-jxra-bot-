@@ -165,7 +165,7 @@ export function sellItem(jid, itemId, amount) {
   const totalGold = price * amount
 
   removeItem(jid, itemId, amount)
-  // [UPDATE] Emerald 🟩 = floor(gold/sellDiv), min 1 per transaksi.
+  // Emerald 🟩 = floor(gold/sellDiv), min 1 per transaksi.
   const sellDiv = Math.max(1, Number(config.emerald?.reward?.sellDiv) || 20)
   const emerald = Math.max(1, Math.floor(totalGold / sellDiv))
   const bal = addReward(jid, { gold: totalGold, emerald })

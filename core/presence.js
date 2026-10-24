@@ -23,7 +23,7 @@ export async function markRead(client, event) {
 export async function sendTyping(client, chat) {
   // Full zapo-js: `{ state: 'composing' }` → node <composing/>.
   // `{ type: 'composing' }` (gaya Baileys) menghasilkan <chatstate> tanpa tag
-  // anak → diabaikan WhatsApp (dulu itu sebabnya "typing…" nggak muncul).
+  // anak → diabaikan WhatsApp. Pakai `state`, jangan `type`.
   // Tidak ada jalur cadangan gaya Baileys — proyek ini murni zapo.
   try {
     await client.presence.sendChatstate(chat, { state: 'composing' })

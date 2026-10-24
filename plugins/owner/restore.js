@@ -2,14 +2,10 @@
  * © skyline-JXRA
  * Hapus credit gak bikin u jago dumbass.
  * Hargai sebagaimana u mau dihargai.
- * restore.js — Balikin SETTING & apikey dari backup, tanpa menyentuh kode.
- *
- * `.updatesc` sekarang memulihkan setting OTOMATIS setelah update sukses,
- * jadi command ini jarang dibutuhkan — pakai kalau auto-restore gagal atau
- * kalau mau balikin manual kapan aja. Setting yang dulu di-backup ke
- * `config.js.update.bak` + `updatesc-keep.bak/` tetap aman: karena cuma
- * file setting yang disentuh, script yang barusan ke-update TETAP versi
- * terbaru.
+ * restore.js — Balikin SETTING & apikey dari backup (`config.js.update.bak` +
+ * `updatesc-keep.bak/`), tanpa menyentuh kode. `.updatesc` memulihkan setting
+ * OTOMATIS setelah update sukses — pakai command ini kalau auto-restore gagal
+ * atau mau balikin manual. Script hasil update tetap versi terbaru.
  *
  * Pakai:
  *   .restore              → lihat isi backup + pilihan tombol

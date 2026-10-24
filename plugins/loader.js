@@ -3,7 +3,6 @@
  * Hapus credit gak bikin u jago dumbass. 
  * Hargai sebagaimana u mau dihargai.
  * loader.js — Scan plugins/xx/xxx.js, daftarkan ke registry, support reload.
- * [UPDATE BELOW]
  */
 import { readdir } from 'node:fs/promises'
 import { join, extname, relative } from 'node:path'
@@ -31,7 +30,7 @@ async function walk(dirPath) {
   return files
 }
 
-// [UPDATE] Format plugin baru: export { pluginConfig as config, handler }.
+// Format plugin: export { pluginConfig as config, handler }.
 // Dinormalisasi ke shape internal route() (owner/admin/tags/aliases/cooldown ms).
 function fromSkyline(mod) {
   const c = mod.config
@@ -64,30 +63,30 @@ function fromSkyline(mod) {
   }
 }
 
-// [UPDATE] Format lama: export default { name, aliases, tags, run }.
+// Format lama: export default { name, aliases, tags, run }.
 function fromLegacy(mod) {
   const feature = mod.default
   if (!feature?.name || typeof feature.run !== 'function') return null
   return feature
 }
 
-// [UPDATE] Ubah error jadi satu baris yang jelas alasannya, gak cuma "Gagal memuat feature".
+// Ubah error jadi satu baris yang jelas alasannya, gak cuma "Gagal memuat feature".
 function describeImportError(err, filePath) {
   const short = relative(FEATURES_DIR, filePath)
 
-  // [UPDATE] Import path salah / file tujuan gak ketemu (mis. '../../lib/uploadFile.js' typo/kepeleset)
+  // Import path salah / file tujuan gak ketemu (mis. '../../lib/uploadFile.js' typo/kepeleset)
   if (err.code === 'ERR_MODULE_NOT_FOUND') {
     const missing = err.message.match(/Cannot find (?:package|module) '([^']+)'/)?.[1]
     return `${short} -> modul tidak ditemukan: "${missing || '?'}" (cek path import di file ini)`
   }
 
-  // [UPDATE] Syntax error pas parsing file-nya sendiri
+  // Syntax error pas parsing file-nya sendiri
   if (err instanceof SyntaxError || /Unexpected token|is not defined/i.test(err.message)) {
     const loc = err.stack?.split('\n')[0] ?? ''
     return `${short} -> syntax error: ${err.message} ${loc ? `(${loc})` : ''}`
   }
 
-  // [UPDATE] Error lain yang keluar pas top-level module dieksekusi (mis. gagal init sesuatu)
+  // Error lain yang keluar pas top-level module dieksekusi (mis. gagal init sesuatu)
   return `${short} -> ${err.name || 'Error'}: ${err.message}`
 }
 
@@ -132,7 +131,7 @@ export async function loadFeatures() {
       continue
     }
 
-    // [UPDATE] Plugin nonaktif (isEnabled: false) — dilewati, bukan gagal
+    // Plugin nonaktif (isEnabled: false) — dilewati, bukan gagal
     if (feature.isEnabled === false) {
       logger.info(`⏸ feature ${feature.name} nonaktif (isEnabled: false) — dilewati`)
       continue

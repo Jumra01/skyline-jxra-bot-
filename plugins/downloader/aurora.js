@@ -23,9 +23,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 /* AURORA v4 — audio CUMA lewat kartu rich HTML (tanpa pesan audio native):
- *   • audio  → unduh lewat endpoint skyline, kompres ke Opus (ffmpeg), lalu
- *              ditanam sebagai data: URI di kartu → WebAudio yang muter.
- *   • video  → tetap kartu HTML, tapi link-nya dari skyline & wajib lolos probe.
+ *   • audio  → unduh endpoint skyline → kompres Opus → ditanam data: URI → WebAudio.
+ *   • video  → kartu HTML, link dari skyline & wajib lolos probe.
  */
 
 const UA = 'Mozilla/5.0 (Linux; Android 13; 23021RAA2Y Build/TKQ1.221114.001) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.7922.199 Mobile Safari/537.36';
@@ -33,17 +32,11 @@ const UA = 'Mozilla/5.0 (Linux; Android 13; 23021RAA2Y Build/TKQ1.221114.001) Ap
 const AUDIO_FORMAT = /^(mp3|m4a|aac|ogg|wav|flac)$/i;
 
 /* ── Audio EMBEDDED di kartu (jalur WebAudio — trik play2) ───────────────────
- * Hasil .richlab di HP owner: <audio>/<video>/fetch/WS mati di WebView kartu
- * WA, TAPI WebAudio hidup (#11 oscillator + #12 decodeAudioData data-URI bunyi).
- * Jadi lagu dikompres ke Opus (ffmpeg, mono 48k) lalu ditanam sebagai data: URI
- * di dalam HTML kartu → kartu decode sendiri → AudioContext yang muter.
- * Rantai bitrate 48k → 32k → 24k → 16k (mulai dari kualitas TINGGI; 12k/16k
- * ekstrem dibuang — owner: kompresi terlalu kuat = suara jelek). Budget
- * MAX_EMBED_B64 2MB base64 ≈ file 1,5MB: keukur encoder zapo asli kartu
- * bawaan 2MB audio → frame ±2,9MB (limit keras 16,7MB), jadi masih aman
- * jauh di bawahnya. Lagu ±4 menit masuk penuh @48k. Kompres gagal / tetap
- * kegedean → kartu tetap mode visual (tanpa audio) — pesan audio native
- * sudah tidak dikirim lagi. */
+ * WebView kartu WA: <audio>/<video>/fetch/WS mati, WebAudio hidup → lagu
+ * dikompres Opus (ffmpeg, mono 48k) lalu ditanam sebagai data: URI di HTML
+ * kartu → decode sendiri → AudioContext yang muter. Rantai 48k → 32k → 24k →
+ * 16k. Budget MAX_EMBED_B64 2MB base64 — jauh di bawah limit frame 16,7MB.
+ * Kompres gagal / kegedean → kartu mode visual tanpa audio. */
 const OPUS_CHAIN = ['48k', '32k', '24k', '16k'];
 const MAX_EMBED_B64 = 2_000_000;
 /* Perkiraan base64/detik per bitrate (constrained VBR, mono 48k):
@@ -110,14 +103,9 @@ async function compressOpus(inputBuffer, { bitrate, trimSec = 0, label = 'aurora
 
 /**
  * Video MP4 → buffer audio siap-encode. Jalur PENYELAMAT saat endpoint audio
- * skyline balas 502 ("Audio tidak bisa diunduh saat ini" — api-faa nge-block
- * IP Cloudflare + Browser Run kuota terbatas, kasus live 2026-10-23): endpoint
- * VIDEO (`/ytdl/download`) pakai upstream savenow yang BERBEDA dan masih sehat,
- * dan mp4-nya selalu bawa track audio AAC.
- *
- * Urutan: `-c:a copy` ke M4A (tanpa re-encode, kualitas penuh, cepat) → kalau
- * gagal (codec aneh) → re-encode MP3 128k. Hasilnya dilempar ke alur embed /
- * kompres opus seperti audio biasa.
+ * skyline balas 502: endpoint VIDEO (`/ytdl/download`) pakai upstream yang
+ * BERBEDA (savenow) dan mp4-nya selalu bawa track audio AAC. Urutan:
+ * `-c:a copy` ke M4A → gagal (codec aneh) → re-encode MP3 128k.
  */
 async function extractAudioFromVideo(mp4Buffer, label = 'aurora') {
   const safe = String(label).replace(/[^a-zA-Z0-9]/g, '') || 'aurora';
@@ -151,7 +139,7 @@ async function extractAudioFromVideo(mp4Buffer, label = 'aurora') {
 
 /**
  * Unduh VIDEO lalu ekstrak audionya — fallback kalau endpoint audio skyline
- * balas 502. Coba 360p dulu (paling cepat & ringan), lalu 720p. Satu budget
+ * balas 502. Coba 360p dulu (paling cepat & ringan), lalu 720p; satu budget
  * waktu buat seluruh rantai biar gak numpuk timeout.
  */
 async function downloadAudioViaVideo(videoUrl, { timeoutMs = 180000 } = {}) {
@@ -206,14 +194,12 @@ function originalBudgetBytes() {
 
 /**
  * Siapkan audio siap-embed buat kartu: { buf, b64len, bitrate, trimSec,
- * original, mimetype } atau null kalau gagal — NULL BUKAN ERROR:
- * kartu jalan tanpa pemutar.
- *
- * Mode `preferOriginal` (config `aurora.embedOriginal`): audio ASLI
- * (mp3/m4a dari skyline) ditanam apa adanya, TIDAK PERNAH dikompres.
- * Satu-satunya alasan nolak = `originalMaxB64` diisi angka DAN melewatinya
- * (baru fallback opus), atau ukuran meledak melewati HARD_EMBED_B64.
- * Default `originalMaxB64` 0 = tanpa batas → semua lagu masuk apa adanya.
+ * original, mimetype } atau null kalau gagal — NULL BUKAN ERROR: kartu jalan
+ * tanpa pemutar.
+ * Mode `preferOriginal` (`aurora.embedOriginal`): audio ASLI (mp3/m4a dari
+ * skyline) ditanam apa adanya, TIDAK PERNAH dikompres — cuma nolak kalau
+ * `originalMaxB64` diisi angka DAN dilewati (baru fallback opus) atau
+ * ukurannya melewati HARD_EMBED_B64. Default `originalMaxB64` 0 = tanpa batas.
  */
 async function prepareEmbeddedAudio(buffer, durationSec = 0, { maxB64 = MAX_EMBED_B64, preferOriginal = false, originalMaxB64 = 0, mimetype = '' } = {}) {
   if (!buffer?.length) return null;
@@ -359,12 +345,10 @@ async function resolveSource(info, format) {
 }
 
 /**
- * AUDIO: endpoint `/api/tools/ytdl/audio` adalah jalur tercepat, TAPI docs
- * skyline bilang jalur resminya = `GET /api/tools/ytdl` dulu, lalu fetch
- * `audio.url` yang sudah membawa apikey. Kalau server membalas halaman HTML
- * (pernah kejadian: HTTP 200 `text/html`), rantai di bawah otomatis nyoba
- * beberapa bentuk URL lalu jatuh ke alur docs — jadi satu endpoint bermasalah
- * nggak bikin `.aurora` mati.
+ * AUDIO: `/api/tools/ytdl/audio` jalur tercepat, TAPI jalur resmi docs =
+ * `GET /api/tools/ytdl` dulu lalu fetch `audio.url`. Server bisa membalas
+ * halaman HTML (200 `text/html`) → rantai di bawah otomatis nyoba beberapa
+ * bentuk URL lalu jatuh ke alur docs.
  */
 /** URL endpoint audio skyline buat video tertentu (dipakai kartu & unduhan). */
 function audioEndpoint(videoUrl) {
@@ -414,10 +398,9 @@ async function fetchAudioBinary(link, { timeoutMs = 180000, maxBytes = 60 * 1024
   };
   if (!res.ok) {
     const { snippet, title } = await readSnippet(200);
-    /* `definitive` = server sudah menjawab (bukan gangguan jaringan) → mengulang
-     * ke URL yang sama SEMUA percuma: jalur fallback aurora juga menembak
-     * endpoint yang sama. Kasus live 2026-10-23: 3 jalur × 53 dtk × 2 retry
-     * = 240 dtk hangus buat 502 yang sama berulang-ulang. */
+    /* `definitive` = server sudah menjawab tegas (bukan gangguan jaringan) →
+     * mengulang ke URL yang sama SEMUA percuma, jalur fallback juga menembak
+     * endpoint yang sama. */
     throw Object.assign(
       new Error(`[${label}] HTTP ${res.status} • ${type || '-'}${title ? ` • title="${title}"` : ''} • final=${finalUrl} • body="${snippet}"`),
       { status: res.status, definitive: true }
@@ -476,11 +459,10 @@ async function downloadAudioViaSearch(videoUrl, { timeoutMs = 180000, maxBytes =
   const link = audioEndpoint(videoUrl);
 
   /* Server sudah jawab tegas (502 "Audio tidak bisa diunduh saat ini" dll)?
-   * Jalur 2 & 3 menembak ENDPOINT YANG SAMA → pasti jawab sama. Langsung
-   * berhenti biar gak buang ±106 dtk percuma (lihat kasus 2026-10-23). */
+   * Jalur 2 & 3 menembak ENDPOINT YANG SAMA → pasti jawab sama: langsung
+   * berhenti, jangan buang waktu percuma. */
   let definitive = null;
 
-  // 1) endpoint langsung (mode=stream)
   try { return await attempt(link, 'ytdl/audio'); } catch (err) { if (err?.definitive) definitive = err; }
 
   if (!definitive) {
@@ -522,14 +504,9 @@ function searchResultToInfo(v) {
 
 /**
  * Pilih KANDIDAT dari hasil pencarian — bukan cuma `results[0]`.
- *
- * Kenapa perlu: "lagu biasa (Teramini, Dynasti) bisa, DJ Onty-Onty nggak".
- * Hasil teratas buat query DJ/remix sering berupa **video LIVE** (radio DJ
- * 24 jam) atau upload yang dibatasi pemiliknya; endpoint ytdl memang gagal
- * buat video begitu, padahal reupload lagu yang SAMA ada di hasil ke-2/ke-3
- * dan normal. Kode lama langsung ambil hasil pertama, jadi satu video
- * bermasalah = command gagal total (kadang berhasil cuma kalau urutan hasil
- * pencarian kebetulan beda).
+ * Hasil teratas query DJ/remix sering berupa video LIVE atau upload yang
+ * dibatasi pemiliknya (endpoint ytdl gagal buat video begitu), padahal
+ * reupload lagu yang SAMA ada di hasil ke-2/ke-3 dan normal.
  *
  * Aturan:
  *  - buang `live` (audio live stream gak bisa diunduh sebagai file)
@@ -574,11 +551,10 @@ function durToSeconds(dur) {
 }
 
 /* ══════ Tombol PLAYER di in-app browser WhatsApp (opsi ke-2) ══════
- * Dua pilihan buat dengar: (1) play langsung di kartu (WebAudio), (2) tombol
- * ini buka web player di in-app browser WhatsApp ASLI (browser penuh —
- * audio/seek/lirik sinkron jalan normal). API key tidak pernah masuk link
- * chat: bot menukar URL audio (berapikey) ke token singkat dulu via
- * /api/tools/aurora-token (D1). */
+ * (1) play langsung di kartu (WebAudio), (2) tombol ini buka web player di
+ * in-app browser WhatsApp ASLI (browser penuh — audio/seek/lirik sinkron).
+ * API key tidak pernah masuk link chat: URL audio (berapikey) ditukar ke
+ * token singkat via /api/tools/aurora-token (D1). */
 
 /** Tukar URL audio ke token player. Null kalau gagal (tombol dilewati). */
 async function mintPlayerToken(audioUrl) {
@@ -607,9 +583,8 @@ async function mintPlayerToken(audioUrl) {
 }
 
 /**
- * Kirim tombol "▶ Buka Player" (cta_url + webview_interaction) — pilihan
- * kedua selain play di dalam kartu. Null-safe: gagal = dilewati, kartu
- * tetap utuh.
+ * Kirim tombol "▶ Buka Player" (cta_url + webview_interaction). Null-safe:
+ * gagal = dilewati, kartu tetap utuh.
  */
 async function sendPlayerButton(ctx, info, clean, duration) {
   const { website } = skylineCreds();
@@ -669,12 +644,9 @@ function progressBar(step, total = 4) {
 
 /**
  * Progress "loading bar" dalam SATU pesan yang di-EDIT tiap tahap — bukan
- * 4 pesan terpisah (spam grup). zapo belum punya API edit tingkat tinggi,
- * jadi pakai `protocolMessage` type 14 (pola sama dengan `lib/jhrich.js`:
- * WhatsApp menampilkan isi `editedMessage` di tempat pesan lama).
- *
- * Semua operasi progress bersifat OPSIONAL: kalau edit gagal (mis. pesan
- * keburu dihapus / tidak didukung), command tetap jalan seperti biasa.
+ * 4 pesan terpisah (spam grup); zapo belum punya API edit tingkat tinggi,
+ * jadi pakai `protocolMessage` type 14 (pola sama `lib/jhrich.js`).
+ * Semua operasi progress OPSIONAL: edit gagal → command tetap jalan.
  */
 function createProgress(ctx, title = '') {
   const t0 = Date.now();
@@ -825,11 +797,9 @@ async function sendAuroraAudio(ctx, infos, format, progress = null) {
         if (attempt < tries) await new Promise((r) => setTimeout(r, 1500));
       }
     }
-    /* Endpoint audio skyline balas tegas "tidak bisa diunduh" (api-faa nge-
-     * block IP Cloudflare + Browser Run kuota terbatas — kasus 2026-10-23)?
-     * Endpoint VIDEO pakai upstream yang BERBEDA (savenow) dan masih sehat →
-     * ambil video kandidat ini, ekstrak track audio-nya, kartu tetap jalan.
-     * Cuma dicoba sekali per perintah (kandidat pertama yang kena 502). */
+    /* Endpoint audio skyline balas tegas "tidak bisa diunduh"? Endpoint VIDEO
+     * pakai upstream yang BERBEDA (savenow) dan masih sehat → ambil video
+     * kandidat ini, ekstrak track audio-nya. Cuma dicoba sekali per perintah. */
     if (!audio && definitive && !videoFallbackTried) {
       videoFallbackTried = true;
       progress?.set(2, 'audio 502 — coba lewat video…', cand.title);
@@ -884,8 +854,7 @@ async function sendAuroraAudio(ctx, infos, format, progress = null) {
   const clean = String(info.title || 'Audio').replace(/[\\/:*?"<>|]/g, '').slice(0, 90);
   const duration = String(info.duration || '');
 
-  /* Lagu cuma lewat kartu rich HTML (audio embed WebAudio di dalam kartu) —
-   * pesan audio native & tombol "Buka Player" sudah tidak dikirim lagi.
+  /* Lagu cuma lewat kartu rich HTML (audio embed WebAudio di dalam kartu).
    * Lirik (LRCLIB) diambil PARALEL sama cover biar nambah nol waktu tunggu. */
   let cover = null;
   const wantLyrics = String(info.title || '') !== 'Aurora Stream'; // input URL manual = judul palsu
@@ -995,16 +964,14 @@ async function sendAuroraAudio(ctx, infos, format, progress = null) {
       logger.warn(`[Aurora] audio: kartu player gagal — ${err?.message || err}`);
     }
   } else {
-    /* DEFAULT: kartu AURORA deck. Kalau embed sukses → pemutar WebAudio
-     * beneran di dalam kartu (jalur play2 — WebView mati buat <audio> remote,
-     * tapi AudioContext + data URI hidup). Kalau embed null → kartu visual
-     * biasa tanpa audio (pesan audio native sudah tidak dikirim). */
+    /* DEFAULT: kartu AURORA deck. Embed sukses → pemutar WebAudio beneran di
+     * dalam kartu (WebView mati buat <audio> remote, tapi AudioContext + data
+     * URI hidup). Embed null → kartu visual tanpa audio. */
     try {
-      /* Batu ukur dari KASUS ASLI (error "frame is too large: 24148412"):
-       * html 6,05MB → unifiedResponse.data 8,07MB → frame 24,1MB, jadi
-       * frame ≈ 3× payloadB64 ≈ 4× html. Limit keras WhatsApp = 16.777.215
-       * byte per frame — audio asli yang estimasinya meledak langsung
-       * dikompres, jadi nggak buang percobaan kirim. */
+      /* Perkiraan ukuran frame: frame ≈ 3× payloadB64 ≈ 4× html (terukur dari
+       * error "frame is too large: 24148412"). Limit keras WhatsApp =
+       * 16.777.215 byte per frame — audio yang estimasinya meledak langsung
+       * dikompres, jangan buang percobaan kirim. */
       const mkCard = (emb) => {
         const audioMime = emb ? (emb.mimetype || 'audio/webm;codecs=opus') : '';
         const audioDataUri = emb ? `data:${audioMime};base64,${emb.buf.toString('base64')}` : '';
@@ -1040,7 +1007,7 @@ async function sendAuroraAudio(ctx, infos, format, progress = null) {
             sh = ' • lirik dipangkas';
             if (payloadB64Len(h) > payBudget) {
               // Step terakhir: buang LIRIK aja — cover jangan, biar kartu tetap
-              // komplit. (Dulu keduanya dibuang barengan → kartu telanjang.)
+              // komplit.
               h = buildSpotifyHtml({ ...b, lyrics: null });
               sh = ' • lirik dibuang (cover tetap)';
             }
@@ -1065,10 +1032,9 @@ async function sendAuroraAudio(ctx, infos, format, progress = null) {
       }
       /* Tangga adaptif: kirim kualitas penuh dulu; kalau WA nolak (479
        * "negative publish ack" ATAU "frame is too large") → turunin budget
-       * embed & ulang, terakhir kartu TANPA embed. Data lapangan: payload
-       * ±1,06MB sukses, 2,5MB+ ditolak — ambang pastinya biar log tiap
-       * tahap ini yang nunjukin (bukan tebakan). Non-479/frame → lempar
-       * ke catch luar seperti biasa. */
+       * embed & ulang, terakhir kartu TANPA embed. Ambang pastinya diketahui
+       * dari log tiap tahap (payload per tahap ditulis di situ). Non-479/frame
+       * → lempar ke catch luar seperti biasa. */
       const budgetSteps = [...new Set(
         [embedBudgetBytes(), 1_150_000, 800_000].filter((v) => v <= embedBudgetBytes())
       )].sort((a, b) => b - a);
@@ -1150,11 +1116,9 @@ async function sendAuroraAudio(ctx, infos, format, progress = null) {
 }
 
 /**
- * Kartu gaya Spotify "Now Playing" + panel LIRIK.
- * Tanpa elemen media (WebView kartu WA cuma bisa gambar) — murni visual.
- * Warna aksen diambil dari cover biar gradiennya nyatu.
+ * Ambil warna dominan cover, lalu boost saturasi & kecerahan (HSL) — biar
+ * gradiennya nyatu.
  */
-/** Ambil warna dominan cover, lalu boost saturasi & kecerahan (HSL). */
 async function accentFromBuffer(buffer) {
   const { data } = await sharp(buffer).resize(1, 1, { fit: 'cover' }).raw().toBuffer({ resolveWithObject: true });
   let r = data[0] / 255, g = data[1] / 255, b = data[2] / 255;
@@ -1222,13 +1186,11 @@ function buildLyricPanelHtml(lyrics, synced) {
 
 /**
  * Kartu "Now Playing" gaya Spotify (dark, cover besar, kontrol penuh).
- * Audio ditanam sebagai data: URI di dalam kartu → WebAudio yang muter
- * (WebView kartu WA mati buat <audio> remote, tapi AudioContext hidup).
- * Warna aksen diambil dari cover biar gradiennya nyatu.
- *
+ * Audio ditanam sebagai data: URI → WebAudio yang muter (WebView kartu WA
+ * mati buat <audio> remote, tapi AudioContext hidup); aksen dari cover.
  * `lyrics` = hasil `capLyrics()` dari lib/lyrics.js — `{ s, l:[[detik,teks]], p }`.
- * Panel lirik muncul lewat tombol di baris judul; kalau synced, ada mode
- * karaoke (sinkron sama posisi audio di kartu) + auto-highlight.
+ * Panel lirik di tombol baris judul; kalau synced ada mode karaoke (sinkron
+ * posisi audio di kartu) + auto-highlight.
  */
 function buildSpotifyHtml({ title, channel, duration, thumbnailb64, accent = '#1DB954', note, lyrics = null, audioDataUri = '', audioMeta = null }) {
   const dur = String(duration || '').trim();
@@ -1667,9 +1629,9 @@ setInterval(function () {
 }
 
 /**
- * Kartu COVER buat audio — tanpa <audio>/<video> sama sekali.
- * Cuma visual: cover + judul + durasi (kartu player WebAudio = jalur utama;
- * builder ini dipertahankan buat _internals/tes).
+ * Kartu COVER buat audio — tanpa <audio>/<video> sama sekali, murni visual
+ * (cover + judul + durasi). Kartu player WebAudio = jalur utama; builder ini
+ * dipertahankan buat _internals/tes.
  */
 function buildCoverHtml({ title, channel, duration, thumbnailb64, note }) {
   const hasThumb = Boolean(thumbnailb64);
@@ -1713,12 +1675,9 @@ body{margin:0;padding:14px;background:#04090b;font-family:Arial,Helvetica,sans-s
 
 /**
  * Kandidat URL thumbnail, resolusi TERTINGGI dulu.
- *
- * Kenapa: thumbnail dari hasil pencarian sering versi kecil (`mqdefault` /
- * `hqdefault` ≤480px), jadi walau budget payload longgar gambarnya tetap
- * burem. YouTube nyimpen versi asli 1280x720 di `maxresdefault.jpg` — ambil
- * itu dulu, baru turun ke `mqdefault` (16:9, selalu ada) dan terakhir URL asli
- * dari API. ID video dibaca dari URL thumbnail maupun URL video.
+ * Thumbnail hasil pencarian sering versi kecil (≤480px) → gambarnya burem;
+ * YouTube simpan versi asli 1280x720 di `maxresdefault.jpg` (kemudian
+ * `mqdefault`, lalu URL asli API). ID video dibaca dari URL thumbnail/video.
  */
 function thumbCandidates(url) {
   const raw = String(url || '').trim();
@@ -1764,11 +1723,10 @@ async function thumbDataUri(url, { maxB64 = 24000 } = {}) {
   }
   if (!raw) return '';
   try {
-    /* Cover di-embed sebagai data URI, jadi tiap KB di sini ikut membengkak
-     * 4/3 di payload base64. Kartu dengan audio embed punya jatah markup besar
-     * (ratusan KB terbukti render), jadi cover boleh 504px — pas buat kotak
-     * cover 252px CSS di layar retina (±2x). Kartu kecil (tanpa embed) tetap
-     * dapat budget sempit dan turun bertahap sampai muat. */
+    /* Cover di-embed sebagai data URI, jadi tiap KB ikut membengkak 4/3 di
+     * payload base64. Kartu dengan audio embed punya jatah markup besar →
+     * cover boleh 504px (pas buat kotak 252px CSS di layar retina); kartu
+     * kecil (tanpa embed) turun bertahap sampai muat. */
     const plan = [
       [640, 74], [560, 72], [504, 70], [504, 64], [480, 62], [448, 62],
       [448, 58], [416, 58], [400, 56], [360, 54], [320, 52], [288, 50],
@@ -2834,10 +2792,9 @@ function startVideoStream(cfg) {
 	});
 }
 
-// [UPDATE] Putar langsung dari URL API (progressive / Range 206) biar audio
-// bisa bunyi dalam hitungan detik. Dulu seluruh file (9-45 MB) harus diunduh
-// lewat WebSocket + ditampung di array memori baru bisa play — di HP lambat
-// itu berjam-jam terasa seperti "lagu gak bisa diputar". WS sekarang cuma
+// Putar langsung dari URL API (progressive / Range 206) biar audio bisa bunyi
+// dalam hitungan detik. Unduh penuh lewat WebSocket + tampung di memori dulu
+// = "lagu gak bisa diputar" di HP lambat. WS sekarang cuma
 // fallback kalau URL langsung gagal (403/CORS/blokir).
 var streamStarted = false;
 var directMode = false;

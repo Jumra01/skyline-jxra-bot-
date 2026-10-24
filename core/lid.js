@@ -3,7 +3,6 @@
  * Hapus credit gak bikin u jago dumbass. 
  * Hargai sebagaimana u mau dihargai.
  * lid.js — Util resolusi LID → PN + kirim reply dengan mention rapi.
- * [FIX AND UPDATE BELOW]
  *
  * Grup WA ada dua mode addressing (PN / LID). Resolver ini:
  * 1) baca dua bentuk identitas participant langsung (grup LID-addressed)
@@ -23,8 +22,8 @@ const asPn = (v) => {
   return /^\d{6,}$/.test(v) ? `${v}@s.whatsapp.net` : null
 }
 
-// [FIX DELAY] Cache metadata grup 60 detik — queryGroupMetadata = panggilan network,
-// sebelumnya diulang tiap resolve tag/balasan (.addprem/.delprem) → delay kelihatan.
+// Cache metadata grup 60 detik — queryGroupMetadata = panggilan network;
+// tanpa cache, tiap resolve tag/balasan (.addprem/.delprem) menambah delay.
 const META_TTL = 60_000
 const metaCache = new Map() // groupJid → { at, meta }
 
@@ -36,7 +35,7 @@ async function getMetaCached(client, groupJid) {
   return meta
 }
 
-/** [FIX DELAY] Metadata grup dengan cache 60s — dipakai lintas modul biar gak bolak-balik network. */
+/** Metadata grup dengan cache 60s — dipakai lintas modul biar gak bolak-balik network. */
 export { getMetaCached as getGroupMetaCached }
 
 /** Kalau jid LID, petakan ke PN. Kalau gagal/udah PN, biarkan. */

@@ -6,7 +6,6 @@
  * nempel di balasan bot (ctx.reply — lihat core/replyStyle.js) di SEMUA chat.
  * Persist di src/data/cta.json (fallback config.cta.card).
  * Thumbnail global: assets/thumb/cta-thumb.jpg — diganti via `.setreply thumb`.
- * (Fitur .setcta & tombol CTA otomatis sudah dihapus.)
  */
 import fs from 'node:fs'
 import path from 'node:path'

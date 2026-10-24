@@ -3,7 +3,6 @@
  * Hapus credit gak bikin u jago dumbass. 
  * Hargai sebagaimana u mau dihargai.
  * tagall.js — mention KELIHATAN semua member + custom caption.
- * [UPDATE AND FIX BELOW]
  *
  * Cek admin via helper resmi (isAdmin/isSuperAdmin flag zapo).
  */

@@ -3,7 +3,6 @@
  * Hapus credit gak bikin u jago dumbass. 
  * Hargai sebagaimana u mau dihargai.
  * permission.js — Helper permission grup.
- * [FIX AND UPDATE BELOW]
  *
  * Role grup dibaca dari flag resmi zapo: isAdmin / isSuperAdmin (boolean),
  * dengan fallback string role/rank buat kompatibilitas. Identitas dicocokkan

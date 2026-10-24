@@ -78,7 +78,7 @@ export const FLAVOR = {
     ],
   },
 
-  // [UPDATE] Merchant dialogues
+  // Merchant dialogues
   merchant: {
     greet: [
       '🛒 "Ah, selamat datang, petualang! Aku Pak Karman — saudagar keliling. Ada barang yang mau kau jual, atau kau mencari bekal perjalanan?"',

@@ -594,8 +594,8 @@ async function applyRunMarkers(ctx, reply, { execOn = false, open = false, conf 
     logger.info({ cmd: a, ok: res.ok, tier: res.tier, err: res.error, charged: res.charged }, '[Ella2] aksi bot')
     results.push(res.ok ? `✅ \`${res.used}\` dijalanin.` : `⚠️ ${res.error}.`)
 
-    /* Kartu pemakaian emerald (CTA) — dulu cuma muncul kalau command diketik
-     * manual; lewat Ella kepotongnya senyap. Sekarang sama-sama dapat kartu. */
+    /* Kartu pemakaian emerald (CTA) — lewat Ella pun harus muncul, jangan
+     * cuma command manual. */
     if (res.ok && res.charged > 0) {
       try {
         const mode = config.emerald?.notify
@@ -628,7 +628,7 @@ async function applyRunMarkers(ctx, reply, { execOn = false, open = false, conf 
   }
 
   let text = clean
-  // Model sempat ngaku "udah dikerjain" padahal semuanya ditolak → ganti jujur.
+  // Model pernah ngaku "udah dikerjain" padahal semuanya ditolak → ganti jujur.
   if (!runnable.length && denied.length) {
     text = 'Aksi admin kayak gitu cuma bisa diminta owner atau admin grup ya.'
   }
@@ -694,8 +694,7 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false } = {}) 
     // & jaring pengaman tetap aktif walau dia bukan owner/admin.
     focusList: focusCatalog(pickFocus(text, catalogNamesFor(tier, conf.execUser))),
     roleTier: tier,
-    // 2.000 char: daftar fitur dijamin utuh (blok alat dipotong paling akhir),
-    // tetap lebih ringan dari 3.000 + riwayat 8 pesan jaman dulu.
+    // 2.000 char: daftar fitur dijamin utuh (blok alat dipotong paling akhir).
     maxChars: hasImage ? 1800 : 2000,
   }) + imageNote
 
@@ -753,9 +752,8 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false } = {}) 
   }
 
   if (admission(reply)) {
-    /* Dulu di sini bot nembak request KEDUA (system + RETRY_NOTE) — itu
-     * dobel beban tiap pesan dan ikut nyumbang 503 "ramai". Sekarang cukup
-     * pakai kalimat pengaman, tanpa request tambahan. */
+    /* Jawaban ngaku AI diganti kalimat pengaman — tanpa request kedua
+     * (dobel beban tiap pesan = nyumbang 503 "ramai"). */
     logger.info('[Ella2] jawaban ngaku AI — diganti SAFE_LINE (tanpa request ulang)')
     reply = SAFE_LINE
   }

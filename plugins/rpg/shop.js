@@ -3,8 +3,6 @@
  * Hapus credit gak bikin u jago dumbass. 
  * Hargai sebagaimana u mau dihargai.
  * shop.js — Toko merchant (Pak Karman).
- * [FIX BELOW]
- *
  * .shop → etalase rapi | .shop buy <id/nama> [amount]
  * Nama barang boleh lebih dari satu kata ("roti gandum 2").
  */
@@ -13,7 +11,7 @@ import { getBalance } from '../../core/database.js'
 import { getShopItems, resolveShopItem, buyItem, MERCHANT_NAME } from '../../core/shop.js'
 import { FLAVOR, pick } from '../../src/rpg/flavor.js'
 
-/** [FIX] Gabung kata jadi nama; angka paling belakang = amount. */
+/** Gabung kata jadi nama; angka paling belakang = amount. */
 function parseNameAmount(list) {
   const arr = [...list]
   let amount = 1
@@ -81,7 +79,7 @@ async function handler(ctx) {
       return
     }
 
-    // [FIX] Etalase
+    // Etalase
     const items = getShopItems()
     const lines = items.map(
       (i) => `│ 🛒 *${i.name}* _(${i.id})_ — *${i.price}G*\n│    _${i.desc}_`

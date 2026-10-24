@@ -87,8 +87,8 @@ async function beautifyText(client, chat, text, mentionedJid) {
 
   let metaParticipants = []
   try {
-    // [FIX DELAY] pakai metadata grup ber-cache — queryGroupMetadata langsung =
-    // network call tiap pesan ber-tag → nunda command masuk.
+    // Pakai metadata grup ber-cache — queryGroupMetadata langsung = network
+    // call tiap pesan ber-tag → nunda command masuk.
     const meta = await getGroupMetaCached(client, chat)
     metaParticipants = meta.participants ?? []
   } catch { /* pakai users DB aja */ }
@@ -146,7 +146,7 @@ export async function route(client, event) {
 
   // WhatsApp Channel (@newsletter) & status/broadcast: WhatsApp NOLAK semua
   // kiriman ke sana (`401 negative publish ack`, `newsletter sends do not
-  // support: quote`). Dulu bot tetep coba balas → banjir error tiap pesan.
+  // support: quote`). Bot yang maksa balas bikin banjir error tiap pesan.
   // Abaikan total: gak diproses, gak dibalas.
   const chatJid = String(event.key.remoteJid || '')
   if (chatJid.endsWith('@newsletter') || chatJid.endsWith('@broadcast')) {
@@ -265,7 +265,7 @@ export async function route(client, event) {
     return
   }
 
-  // [UPDATE] Check template skyline: group / private / premium / botAdmin
+  // Check template skyline: group / private / premium / botAdmin
   if (feature.group && !ctx.isGroup) {
     await ctx.reply(config.messages?.groupOnly || '🚫 Fitur ini khusus GRUP!')
     return
@@ -307,7 +307,7 @@ export async function route(client, event) {
     }
   }
 
-  // [UPDATE] EMERALD 🟩 — biaya command. Owner/staff/premium bebas.
+  // EMERALD 🟩 — biaya command. Owner/staff/premium bebas.
   // Biaya = `energi:` di config plugin, atau config.emerald.defaultCost.
   // Dipotong SEBELUM run (anti-abuse), dicatat ke ledger emerald_log.
   let emeraldCost = 0
@@ -363,7 +363,7 @@ export async function route(client, event) {
   try {
     await feature.run(ctx)
 
-    // [UPDATE] Notif pemakaian emerald — kartu HTML native setelah fitur SUKSES.
+    // Notif pemakaian emerald — kartu HTML native setelah fitur SUKSES.
     // Bisa dimatikan per-user (.notife off), global (.notife all off),
     // atau via config.emerald.notify (false / 'private').
     if (emeraldCost > 0) {

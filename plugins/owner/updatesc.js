@@ -104,9 +104,8 @@ const trunc = (s, n) => (String(s).length > n ? `${String(s).slice(0, n - 1)}…
 
 /**
  * Balikin setting user OTOMATIS setelah update sukses (atau setelah pull
- * gagal — config/thumbnail udah terlanjur di-reset ke HEAD).
- * Cuma nyentuh `config.js` (KEEP_FIELDS) + thumbnail yang di-backup —
- * kode & config default baru tetap versi terbaru.
+ * gagal — config/thumbnail udah terlanjur di-reset ke HEAD). Cuma nyentuh
+ * `config.js` (KEEP_FIELDS) + thumbnail dari backup; kode tetap versi baru.
  * Gagal → backup TIDAK dihapus, jadi masih bisa `.restore` manual.
  */
 async function autoRestore() {
@@ -182,9 +181,8 @@ function pendingLine(p) {
 }
 
 /**
- * TAHAP 2 `.updatesc`: kartu TERPISAH buat laporan pemulihan setting.
- * Dijalankan setelah kartu update selesai. Cuma dikirim kalau memang ada
- * yang dipulihkan / gagal / sisa backup — biar gak nambah chat kosong.
+ * TAHAP 2 `.updatesc`: kartu TERPISAH buat laporan pemulihan setting —
+ * cuma dikirim kalau memang ada yang dipulihkan / gagal / sisa backup.
  */
 async function sendRestoreCard(ctx) {
   const restored = await autoRestore()
@@ -598,12 +596,11 @@ async function apiSync() {
     const st = await fs.stat(src).catch(() => null)
     if (!entries[0] || !st?.isDirectory()) throw new Error('Struktur tarball gak dikenali')
 
-    // fs.cp recursive — murni Node, tanpa binary cp system.
-    // config.js IKUT ketimpa versi GitHub (apikey-nya kosong) → simpen
-    // dulu nilai milik user ke backup (dipulihin lewat `.restore`).
-    // Tarball udah ke-extract di `src` = persis versi upstream → pakai itu
-    // sebagai pembanding "pristine" (tanpa git gak ada HEAD). Jadi thumbnail
-    // yang masih default gak ikut ke-backup, yang diubah user baru.
+    // fs.cp recursive — murni Node, tanpa binary cp. config.js IKUT ketimpa
+    // versi GitHub (apikey kosong) → simpen dulu nilai user ke backup
+    // (dipulihin lewat `.restore`). Tarball di `src` (versi upstream)
+    // dipakai sebagai pembanding "pristine" tanpa git — thumbnail default
+    // gak ikut ke-backup.
     await saveKeep({
       pristine: async (rel) => {
         try {

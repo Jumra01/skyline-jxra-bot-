@@ -7,8 +7,7 @@
  * Alur: react → balas info box → tunggu 2 detik →
  * spawn proses baru (detached) → matiin proses lama.
  *
- * Yang beda dari versi aslinya (semua gak kelihatan dari chat, tapi
- * nolong bot gak mati permanen):
+ * Pengaman biar bot gak mati permanen (gak kelihatan dari chat):
  *   • `node sky.js` (entry repo ini), bukan `index.js`.
  *   • spawn DICEK dulu lewat event 'spawn'/'error' — `spawn` gagal itu
  *     ASYNC, try/catch biasa gak nangkep. Kalau gagal → batal restart,
@@ -170,7 +169,6 @@ function shutdown(reason) {
   // handler macet, dia juga MENJAGA event loop tetap hidup — tanpa ini loop
   // bisa keburu kosong & Node exit(0) sebelum sinyal SIGINT sempat diproses,
   // sehingga shutdown rapi (disconnect WA + stopHotReload) gak pernah jalan.
-  // Ditemukan lewat simulasi `.restart`.
   setTimeout(() => process.exit(0), 8000)
 }
 

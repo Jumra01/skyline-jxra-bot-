@@ -103,8 +103,7 @@ async function buildLidMap(client) {
   return map
 }
 
-// [FIX DELAY] Cache map LID→PN 10 menit — sebelumnya di-scan ulang tiap .listprem
-// (network per batch) → list keliatan lambat.
+// Cache map LID→PN 10 menit — scan ulang tiap .listprem (network per batch) bikin list lambat.
 const LID_MAP_TTL = 10 * 60 * 1000
 let lidMapCache = { at: 0, map: null }
 
@@ -198,7 +197,7 @@ async function handler(ctx) {
       return
     }
 
-    // [UPDATE] .delprem by URUTAN — arg angka polos <10 digit = nomor urut di .listprem
+    // .delprem by URUTAN — arg angka polos <10 digit = nomor urut di .listprem
     const q = ctx.event?.message?.extendedTextMessage?.contextInfo
     const hasQuote = Boolean(q?.participant && q?.quotedMessage)
     const hasMention = Boolean(ctx.mentioned?.length)
@@ -266,8 +265,7 @@ async function handler(ctx) {
         until = addPremium(jid, days * DAY_MS)
       }
 
-      // [FIX DELAY] reply dulu, react fire-and-forget — sebelumnya react (network RTT)
-      // di-await sebelum reply → user nunggu lebih lama sebelum liat balasan.
+      // Reply dulu, react fire-and-forget — react (network RTT) jangan di-await sebelum reply.
       await ctx.reply(
         `✅ Berhasil ${existed ? 'memperpanjang' : 'menambahkan'} premium *${t.number}* selama *${days} hari*\nExpired: *${formatDate(until)}*`
       )

@@ -130,7 +130,7 @@ export function battle(jid, monsterId) {
   if (won) {
     const after = updateCharacter(jid, { hp: Math.max(1, pHp) })
     addItem(jid, monster.loot, 1)
-    // [UPDATE] Emerald 🟩 per tier monster (config.emerald.reward.battle)
+    // Emerald 🟩 per tier monster (config.emerald.reward.battle)
     const emReward = Math.max(0, Number(config.emerald?.reward?.battle?.[monster.tier]) || 0)
     const wallet = addReward(jid, { gold: monster.gold, emerald: emReward })
     const { char: c2 } = gainXp(jid, monster.xp)

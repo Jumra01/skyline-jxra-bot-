@@ -7,8 +7,8 @@
  * dan gak perlu restart bot/session WA sama sekali.
  *
  * Catatan penting: ini cuma nge-cover file di plugins/ (command), sama persis
- * kayak yang udh ada di command .reload manual (plugins/owner/reload.js) —
- * cuma sekarang triggernye otomatis dari filesystem, bukan dari chat.
+ * sama kayak command .reload manual (plugins/owner/reload.js), tapi
+ * triggernya otomatis dari filesystem, bukan dari chat.
  * Perubahan di sky.js / core / handlers / lib / auth tetap butuh restart,
  * karena file-file itu di-import sekali pas boot dan di-cache Node (ESM),
  * bukan lewat registry cache-busting kayak feature.
@@ -52,7 +52,7 @@ function queueReload(eventName, filePath) {
   debounceTimer = setTimeout(runReload, config.hotReload?.debounceMs ?? 400)
 }
 
-// [FIX] `result` sekarang { count, total, failed } dari loadFeatures(), bukan angka lagi.
+// `result` = { count, total, failed } dari loadFeatures().
 async function notifyOwners(changes, result) {
   if (!config.hotReload?.notifyOwner || !clientRef) return
 

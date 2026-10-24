@@ -165,10 +165,9 @@ async function fetchOgPreview(url) {
 }
 
 /**
- * [FIX DELAY] Cache OG preview — sebelumnya fetch website (+gambar OG) DI ULANG
- * di setiap ctx.reply (varian v4) → reply nundaa sampe 6-12 detik kalau site lambat.
- * Sekarang: sekali fetch per URL, dipakai ulang 10 menit (hasil null pun di-cache
- * biar site mati gak di-terus dicoba).
+ * Cache OG preview — fetch website (+gambar OG) tiap ctx.reply (varian v4) bisa
+ * menunda reply 6-12 detik kalau site lambat. Sekali fetch per URL dipakai ulang
+ * 10 menit; hasil null pun di-cache biar site mati gak terus dicoba.
  */
 const OG_CACHE_TTL = 10 * 60 * 1000
 const ogCache = new Map() // url → { at, og|null }

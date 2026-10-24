@@ -1,11 +1,8 @@
 /**
  * © skyline-JXRA
- * richlab.js — LAB DIAGNOSTIK kartu rich HTML WhatsApp.
- *
- * Tujuan: di WebView kartu WhatsApp, cuma WebSocket yang (katanya) jalan;
- * fetch/img/script/media remote diblok. Plugin ini ngirim satu kartu berisi
- * beberapa TES, masing-masing ada tombol + hasil OK/GAGAL. Jadi kita tahu
- * persis metode mana yang hidup di HP user, tanpa nebak-nebak.
+ * richlab.js — Lab diagnosa kartu rich HTML WhatsApp: satu kartu berisi tes
+ * OK/GAGAL tiap metode (fetch/img/WS/WebAudio/piksel), biar ketahuan mana
+ * yang hidup di WebView HP user tanpa nebak-nebak.
  */
 
 import crypto from 'node:crypto';
@@ -626,8 +623,7 @@ async function handler(ctx) {
    * front worker skyline nolak/redirect upgrade non-https → "gagal connect".
    * Kalau env panel isi `http://`, http→ws doang bikin ws:// yang rusak. */
   const wsUrl = `${website.replace(/^http/i, 'ws').replace(/^ws:\/\//, 'wss://')}/api/tools/ws-audio?url=${encodeURIComponent(audioUrl)}`;
-  /* Host Pages origin langsung — buat ngetes apex skyline.web.id yang record
-   * A-nya pernah nunjuk tunnel lama (tes #15). */
+  /* Host Pages origin langsung — tes #15 (lewati apex skyline.web.id). */
   const pagesWsUrl = `wss://skyline-27v.pages.dev/api/tools/ws-audio?url=${encodeURIComponent(audioUrl)}`;
   /* Jalur piksel (plan B) — bytes audio disembunyiin di PNG (tes #16). */
   const imgstreamUrl = `${website}/api/tools/imgstream?url=${encodeURIComponent(audioUrl)}`;

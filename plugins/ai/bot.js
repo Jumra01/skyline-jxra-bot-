@@ -68,10 +68,8 @@ const IMG_FIELDS = ['imageMessage', 'stickerMessage', 'documentMessage']
 // padahal ada gambar, berarti servernya nolak (bukan berarti gambarnya salah).
 const CANNED_ERR_RE = /(sorry,?\s*something went wrong|something went wrong|encountered an error|error doing what you asked|could you try again|an error occurred|please try again|try again later|terjadi kesalahan|gagal memproses|maaf,?\s*terjadi)/i
 
-// Sesi anonim Gemini (cookie) umurnya pendek — kalau dipakai setelah nganggur,
-// Google balikin balasan yang gak bisa di-parse → dulu tiap begitu buang 1
-// request + nulis WARN. Sekarang: sesi yang kelewat tua dilewati duluan, dan
-// kalau sesi tetap gagal beberapa kali beruntun, sesi dimatiin sementara.
+// Sesi anonim Gemini (cookie) umurnya pendek — yang kelewat tua dilewati duluan;
+// gagal beberapa kali beruntun → sesi dimatiin sementara.
 const SESSION_FAIL_LIMIT = 3            // gagal beruntun sebelum sesi dimatiin
 const SESSION_SKIP_MS = 10 * 60_000     // lama sesi dimatiin saat itu
 let sessionFailStreak = 0
@@ -539,9 +537,8 @@ async function runChat(ctx, text, opts = {}) {
   h.msgs.push({ role: 'user', content: pesan })
   h.msgs.push({ role: 'assistant', content: answer.slice(0, MAX_CHARS) })
   if (h.msgs.length > conf.maxHistory) h.msgs = h.msgs.slice(-conf.maxHistory)
-  // Sesi hasil giliran BERGAMBAR gak bisa dipakai lagi: turn berikutnya balikin
-  // balasan yang gak kebaca (sudah dites: teks→gambar jalan, gambar→apa pun
-  // gagal). Jadi sesi dibuang, konteks tetap nyambung lewat riwayat teks.
+  // Sesi hasil giliran BERGAMBAR dibuang (giliran berikutnya balikin balasan
+  // yang gak kebaca); konteks tetap nyambung lewat riwayat teks.
   if (images.length) {
     h.session = null
     h.sessionAt = 0

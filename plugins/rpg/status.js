@@ -3,8 +3,6 @@
  * Hapus credit gak bikin u jago dumbass. 
  * Hargai sebagaimana u mau dihargai.
  * status.js — Status karakter + inventory Nusantara Wilds.
- * [UPDATE BELOW]
- *
  * Dompet (gold/gems) = satu dompet reward (users.sqlite).
  */
 import { createCharacter, getInventory, getActiveQuests } from '../../core/rpg.js'

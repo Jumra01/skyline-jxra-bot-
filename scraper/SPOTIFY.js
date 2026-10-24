@@ -3,12 +3,10 @@
  * Hapus credit gak bikin u jago dumbass. 
  * Hargai sebagaimana u mau dihargai.
  * SPOTIFY.js — Scraper Spotify Searcher + Downloader by SKYLINE-JXRA
- * [UPDATE 2026-10-18] Search pakai Spotify Web API (Client Credentials) —
- *   TANPA browser. puppeteer dihapus dari project (hemat ±652 MB disk,
- *   wajib buat panel Pterodactyl 1 GB).
- *   Kredensial dibaca dari env SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET
- *   (fallback: config.api.spotify.clientId / clientSecret).
- *   Download (JHSpotDL / JHSDown) tetap pakai axios — gak butuh browser.
+ * Search pakai Spotify Web API (Client Credentials) — tanpa browser.
+ * Kredensial: env SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET
+ * (fallback: config.api.spotify.clientId / clientSecret).
+ * Download (JHSpotDL / JHSDown) tetap pakai axios — gak butuh browser.
  */
 
 import config from '../config.js';

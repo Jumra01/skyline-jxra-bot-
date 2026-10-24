@@ -769,9 +769,8 @@ export async function aiChatSkyline({ message, history = [], system = '', timeou
   }
   if (system) body.system = String(system).slice(0, 3000);
 
-  /* 503/429 "ramai" itu sementara — dulu Ella v1 nyerah di percobaan pertama
-   * (dan tiga kali ramai malah maticbreaker 5 menit). Sekarang diulang sebentar
-   * dengan jeda naik, dan "ramai" tidak dihitung ke breaker (sama kayak Gemma). */
+  /* 503/429 "ramai" itu sementara → diulang sebentar dengan jeda naik;
+   * "ramai" tidak dihitung ke breaker (sama kayak Gemma). */
   const maxTries = Math.max(1, Math.min(5, (Number(retries) || 0) + 1));
   let lastErr = null;
 
@@ -869,11 +868,9 @@ const RETRY_STATUS = new Set([502, 504]);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** Satu percobaan request ke endpoint Gemma. */
-/* Gemma: model berat, upstream cuma sanggup beberapa request sekaligus.
- * Request dari chat berbeda diantre (satu per satu) supaya bot sendiri nggak
- * jadi biang "AI is busy" — dulu 3 chat barengan = 3 request paralel dan
- * sebagian kena 503. Antrean dilepas tiap percobaan (bukan seluruh retry),
- * jadi chat lain tetap dapat giliran walau satu chat sedang mengulang. */
+/* Gemma: model berat, upstream cuma sanggup beberapa request sekaligus —
+ * chat berbeda diantre (antrean dilepas tiap percobaan, bukan seluruh retry)
+ * supaya bot sendiri nggak jadi biang "AI is busy". */
 let gemmaChain = Promise.resolve();
 /* Statistik antrean. Dipakai plugin buat nolak cepat waktu antrean panjang,
  * biar user ga nunggu 120 dtk cuma buat dapat pesan "ramai". */

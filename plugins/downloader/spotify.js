@@ -3,9 +3,7 @@
  * Hapus credit gak bikin u jago dumbass. 
  * Hargai sebagaimana u mau dihargai.
  * spotify.js — Search dan Download lagu dari Spotify
- * [UPDATE 2026-10-18] Search by judul pakai Spotify Web API (Client
- *   Credentials) — puppeteer sudah dibuang dari project.
- *   `.spotify <link>` tetap pakai provider axios seperti sebelumnya.
+ * Search by judul pakai Spotify Web API (Client Credentials); `.spotify <link>` lewat provider axios.
  */
 
 import { onRichReply } from '../../handlers/messageHandler.js';

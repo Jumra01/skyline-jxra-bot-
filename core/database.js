@@ -3,7 +3,6 @@
  * Hapus credit gak bikin u jago dumbass. 
  * Hargai sebagaimana u mau dihargai.
  * database.js — Database abstraction untuk skyline-JXRA
- * [UPDATE AND FIX BELOW]
  *
  * Wallet reward (gold/xp/gems) = SATU dompet buat seluruh ekonomi RPG.
  * Emerald 🟩 = mata uang command (biaya per command + regen + riwayat log).
@@ -35,7 +34,7 @@ db.exec(`
   )
 `)
 
-// [UPDATE] Premium pindah ke table sendiri (terpisah dari users).
+// Premium punya table sendiri (terpisah dari users).
 db.exec(`
   CREATE TABLE IF NOT EXISTS premiumdb (
     jid TEXT PRIMARY KEY,
@@ -48,13 +47,13 @@ try { db.exec(`ALTER TABLE users ADD COLUMN gold INTEGER DEFAULT 0`) } catch {}
 try { db.exec(`ALTER TABLE users ADD COLUMN xp INTEGER DEFAULT 0`) } catch {}
 try { db.exec(`ALTER TABLE users ADD COLUMN gems INTEGER DEFAULT 0`) } catch {}
 
-// [UPDATE] Emerald 🟩 — kolom saldo + regen lazy + klaim daily + toggle notif.
+// Emerald 🟩 — kolom saldo + regen lazy + klaim daily + toggle notif.
 try { db.exec(`ALTER TABLE users ADD COLUMN emerald INTEGER DEFAULT 0`) } catch {}
 try { db.exec(`ALTER TABLE users ADD COLUMN emerald_regen_at INTEGER DEFAULT 0`) } catch {}
 try { db.exec(`ALTER TABLE users ADD COLUMN daily_claim_at INTEGER DEFAULT 0`) } catch {}
 try { db.exec(`ALTER TABLE users ADD COLUMN emerald_notify INTEGER DEFAULT 1`) } catch {}
 
-// [UPDATE] Riwayat pemakaian emerald per command (buat notif + .riwayat).
+// Riwayat pemakaian emerald per command (buat notif + .riwayat).
 db.exec(`
   CREATE TABLE IF NOT EXISTS emerald_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -114,7 +113,7 @@ export function totalUsers() {
   return db.prepare('SELECT COUNT(*) AS c FROM users').get().c
 }
 
-/* ---------- [UPDATE] Wallet RPG (satu dompet) ---------- */
+/* ---------- Wallet RPG (satu dompet) ---------- */
 
 export function getBalance(jid) {
   touchUser(jid, null)
@@ -131,7 +130,7 @@ export function addReward(jid, { gold = 0, xp = 0, gems = 0, emerald = 0 } = {})
   return getBalance(jid)
 }
 
-/* ---------- [UPDATE] EMERALD 🟩 — saldo command ---------- */
+/* ---------- EMERALD 🟩 — saldo command ---------- */
 
 /** Batas maksimal saldo emerald dari config (default 64). */
 function emeraldMax() {
@@ -268,7 +267,7 @@ export function setEmeraldNotify(jid, on) {
   return on
 }
 
-/** [FIX] Bayar pakai gold. null kalau gak cukup. */
+/** Bayar pakai gold. null kalau gak cukup. */
 export function spendGold(jid, amount) {
   touchUser(jid, null)
   const row = db.prepare('SELECT gold FROM users WHERE jid = ?').get(jid)
@@ -285,7 +284,7 @@ export function topByGold(limit = 10) {
   return db.prepare('SELECT * FROM users ORDER BY gold DESC LIMIT ?').all(limit)
 }
 
-/* ---------- [UPDATE] PREMIUM USER — table `premiumdb` (terpisah dari users) ---------- */
+/* ---------- PREMIUM USER — table `premiumdb` (terpisah dari users) ---------- */
 
 /** Tambah/kalibrasi premium. `durationMs` ditambahkan ke sisa waktu lama (kalau masih aktif). */
 export function addPremium(jid, durationMs) {
