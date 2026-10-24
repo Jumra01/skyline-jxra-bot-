@@ -92,25 +92,24 @@ function readVersionedFile(rel) {
 }
 
 async function senderAvatar(ctx) {
-  const fallback = await thumb300()
-  try {
-    const result = await Promise.race([
-      Promise.resolve(ctx.client?.profile?.getProfilePicture?.(ctx.sender)),
-      new Promise((resolve) => setTimeout(() => resolve(null), 4000))
-    ])
-    const url = typeof result === 'string' ? result : result?.url
-    if (url && /^https?:\/\//i.test(url)) {
+  const jids = [...new Set([ctx.sender, ctx.senderLid].filter(Boolean))]
+  for (const jid of jids) {
+    try {
+      const result = await Promise.race([
+        Promise.resolve(ctx.client?.profile?.getProfilePicture?.(jid, 'image')),
+        new Promise((resolve) => setTimeout(() => resolve(null), 4000))
+      ])
+      const url = typeof result === 'string' ? result : result?.url
+      if (!url || !/^https?:\/\//i.test(url)) continue
       const response = await fetch(url, { signal: AbortSignal.timeout(4000), redirect: 'follow' })
-      if (response.ok) {
-        const buf = Buffer.from(await response.arrayBuffer())
-        if (buf.length) {
-          const sharp = (await import('sharp')).default
-          return await sharp(buf).flatten({ background: '#ffffff' }).resize(300, 300, { fit: 'cover' }).jpeg({ quality: 70 }).toBuffer()
-        }
-      }
-    }
-  } catch {}
-  return fallback
+      if (!response.ok) continue
+      const buf = Buffer.from(await response.arrayBuffer())
+      if (!buf.length) continue
+      const sharp = (await import('sharp')).default
+      return await sharp(buf).flatten({ background: '#ffffff' }).resize(300, 300, { fit: 'cover' }).jpeg({ quality: 70 }).toBuffer()
+    } catch {}
+  }
+  return null
 }
 
 async function thumb300() {
@@ -448,15 +447,21 @@ async function runReplyVariant(ctx, text, style) {
         ``,
         text
       ].join('\n')
-      let imageUrl = ''
+      let imageMessage
       try {
         const image = await senderAvatar(ctx)
         if (image && client.message?.upload) {
-          const uploaded = await client.message.upload(image, { type: 'image', mimetype: 'image/jpeg' })
-          imageUrl = uploaded?.url || ''
+          imageMessage = await client.message.upload(image, { type: 'image', mimetype: 'image/jpeg' })
         }
       } catch (err) {
         logger.warn({ err: String(err?.message ?? err) }, 'reply v8 gagal menyiapkan avatar')
+      }
+      const imageUrl = imageMessage?.url || imageMessage?.directPath
+      if (!imageUrl) {
+        const fallbackImage = await thumb300()
+        if (fallbackImage && client.message?.upload) {
+          try { imageMessage = await client.message.upload(fallbackImage, { type: 'image', mimetype: 'image/jpeg' }) } catch {}
+        }
       }
       const entity = {
         __typename: 'GenAICompactEntityPrimitive',
@@ -468,14 +473,14 @@ async function runReplyVariant(ctx, text, style) {
         entity_type: 'PERSON',
         action_type: 'MESSAGE',
         is_verified: Boolean(ctx.isOwner),
-        ...(imageUrl ? { image: { url: imageUrl } } : {})
+        ...(imageUrl ? { image: { url: imageUrl, ...(imageMessage?.directPath ? { direct_path: imageMessage.directPath } : {}) } } : {})
       }
       const payload = {
         response_id: crypto.randomUUID(),
         sections: [{ view_model: { primitive: entity, __typename: 'GenAISingleLayoutViewModel' } }]
       }
       try {
-        return await client.message.send(chat, {
+        const richResult = await client.message.send(chat, {
           botForwardedMessage: {
             message: {
               richResponseMessage: {
@@ -487,10 +492,12 @@ async function runReplyVariant(ctx, text, style) {
             }
           }
         }, { quote: event, additionalAttributes: { type: 'text' } })
+        if (richResult?.id || richResult?.key?.id || richResult?.messageId) return richResult
+        logger.warn('reply v8 rich entity tidak mendapat ack message id — fallback teks')
       } catch (err) {
         logger.warn({ err: String(err?.message ?? err) }, 'reply v8 rich entity gagal — fallback teks')
-        return client.message.send(chat, { type: 'text', text: profileText }, { quote: event, noStyle: true })
       }
+      return client.message.send(chat, { type: 'text', text: profileText }, { quote: event, noStyle: true })
     }
 
     default:
