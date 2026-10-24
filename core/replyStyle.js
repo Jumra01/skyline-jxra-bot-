@@ -477,7 +477,10 @@ async function runReplyVariant(ctx, text, style) {
       }
       const payload = {
         response_id: crypto.randomUUID(),
-        sections: [{ view_model: { primitive: entity, __typename: 'GenAISingleLayoutViewModel' } }]
+        sections: [
+          { view_model: { primitive: { text: profileText, __typename: 'GenAIMarkdownTextUXPrimitive' }, __typename: 'GenAISingleLayoutViewModel' } },
+          { view_model: { primitive: entity, __typename: 'GenAISingleLayoutViewModel' } }
+        ]
       }
       try {
         const richResult = await client.message.send(chat, {
