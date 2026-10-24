@@ -422,12 +422,24 @@ async function runReplyVariant(ctx, text, style) {
       })()
       const role = !ctx.isGroup ? 'Pengguna pribadi' : ctx.isOwner ? 'Owner' : ctx.role === 'admin' || ctx.isAdmin ? 'Admin grup' : 'Member grup'
       const tier = ctx.isOwner ? 'Owner' : premium ? 'Premium' : 'User biasa'
+      let senderLabel = config.botName || 'skyline-JXRA'
+      if (ctx.isGroup) {
+        try {
+          const meta = await Promise.race([
+            Promise.resolve(client.group?.queryGroupMetadata?.(chat)),
+            new Promise((resolve) => setTimeout(() => resolve(null), 3500))
+          ])
+          senderLabel = meta?.subject || meta?.name || 'Grup WhatsApp'
+        } catch { senderLabel = 'Grup WhatsApp' }
+      }
       const when = new Intl.DateTimeFormat('id-ID', {
         weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
         hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
         timeZone: 'Asia/Jakarta'
       }).format(new Date(ctx.receivedAt || Date.now())) + ' WIB'
       const richBody = text
+      const escHtml = (value) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+      const cardHtml = '<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + escHtml(senderLabel) + '</title><style>*{box-sizing:border-box}html,body{margin:0;min-height:100vh;background:#08111f;color:#edf4ff;font-family:Arial,sans-serif}.card{margin:12px;padding:18px;border:1px solid #29405e;border-radius:18px;background:linear-gradient(145deg,#142943,#0c1727 70%);box-shadow:0 8px 24px #0005}.head{padding:8px 4px 15px;border-bottom:1px solid #38506b}.eyebrow{font-size:12px;letter-spacing:2px;color:#70d7c2;font-weight:bold}.title{font-size:24px;line-height:1.25;font-weight:800;margin-top:7px;overflow-wrap:anywhere}.meta{font-size:12px;color:#a8bdd5;margin-top:6px}.body{white-space:pre-wrap;overflow-wrap:anywhere;font-size:16px;line-height:1.6;padding:16px 4px 4px}</style></head><body><main class="card"><header class="head"><div class="eyebrow">' + (ctx.isGroup ? 'PESAN GRUP' : 'PESAN BOT') + '</div><div class="title">' + escHtml(senderLabel) + '</div><div class="meta">' + escHtml(role + ' • ' + tier + ' • ' + when) + '</div></header><section class="body">' + escHtml(richBody) + '</section></main></body></html>'
       let imageUrl = await senderAvatar(ctx)
       if (!imageUrl) {
         const fallbackImage = await thumb300()
@@ -452,10 +464,17 @@ async function runReplyVariant(ctx, text, style) {
       }
       const payload = {
         response_id: crypto.randomUUID(),
-        sections: [
-          { view_model: { primitive: entity, __typename: 'GenAISingleLayoutViewModel' } },
-          { view_model: { primitive: { text: richBody, __typename: 'GenAIMarkdownTextUXPrimitive' }, __typename: 'GenAISingleLayoutViewModel' } }
-        ]
+        sections: [{
+          __typename: 'GenAIUnifiedResponseSection',
+          view_model: {
+            __typename: 'GenAISingleLayoutViewModel',
+            primitive: {
+              __typename: 'FOAHtmlPrimitiveDemoDONOTUSE',
+              trusted_sources: [],
+              payload: cardHtml
+            }
+          }
+        }]
       }
       try {
         const richResult = await client.message.send(chat, {

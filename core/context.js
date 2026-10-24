@@ -91,7 +91,39 @@ function installGlobalReplyStyle(client) {
        * mau di-edit juga harus teks polos — varian bisa berupa interactive
        * yang tidak bisa di-edit WhatsApp. */
       if (opts?.editKey || opts?.noStyle) return await rawSend(chat, content, opts)
-      if (isStyling()) return await rawSend(chat, content, opts)
+
+      // Rich responses may show WhatsApp's security/download interstitial on
+      // first render. Re-send the exact same payload as an edit to that message;
+      // never fabricate verification metadata or alter the rich body.
+      const rich = content?.botForwardedMessage?.message?.richResponseMessage
+      if (rich) {
+        const sent = await rawSend(chat, content, opts)
+        const id = sent?.id || sent?.key?.id || sent?.messageId
+        if (id) {
+          try {
+            const meJid = client.getCurrentMeJid?.() || client.getCurrentCredentials?.()?.meJid
+            await rawSend(chat, {
+              botForwardedMessage: {
+                message: {
+                  protocolMessage: {
+                    key: {
+                      remoteJid: chat,
+                      fromMe: true,
+                      id,
+                      ...(String(chat).endsWith('@g.us') && meJid ? { participant: meJid } : {})
+                    },
+                    type: 14,
+                    editedMessage: content
+                  }
+                }
+              }
+            }, { additionalAttributes: { type: 'text' } })
+          } catch (err) {
+            logger.warn({ err: String(err?.message ?? err) }, 'Rich identical-payload edit gagal')
+          }
+        }
+        return sent
+      }
       const text = outboundText(content)
       if (!text || hasMentions(content, opts)) return await rawSend(chat, content, opts)
 
