@@ -391,24 +391,53 @@ const VARIANTS = [
       const media = await ctx.client.message.upload(avatar, { type: 'image', mimetype: 'image/jpeg' })
       const channelUrl = config.reactChannel?.dedicatedChannelUrl || 'https://skyline.web.id'
       const pushName = ctx.pushName || 'Pengguna WhatsApp'
-      const status = `✅ ${config.botName} aktif • zapo-js • online 24/7\n📡 Status: stabil • 🟩 Emerald aktif\n↗️ Diteruskan • skor 999`
-      const headerImage = {
-        kind: 'imageMessage',
-        url: media.url,
-        directPath: media.directPath,
-        mediaKey: media.mediaKey,
-        fileSha256: media.fileSha256,
-        fileEncSha256: media.fileEncSha256,
-        fileLength: media.fileLength,
-        mediaKeyTimestamp: media.mediaKeyTimestamp,
-        mimetype: 'image/jpeg', width: 720, height: 720
-      }
-      await ctx.client.message.send(ctx.chat, richButtons({
-        text: `🔵 *${pushName}*\n\n${status}\n\n${getSampleText('combo-user')}`,
-        footer: `Dibuat untuk ${pushName} • ${config.botName}`,
-        buttons: [{ url: channelUrl, text: '📣 Lihat Saluran' }, { id: 'combo-user:ok', text: '✅ Oke' }],
-        headerImage
-      }), interactiveSendOptions(ctx.chat))
+      const status = `✅ ${config.botName} aktif • zapo-js • online 24/7\n📡 Status: stabil • 🟩 Emerald aktif`
+      const newsletterJid = getNewsletterJid()
+
+      // Pola ini meniru skyline-md/src/lib/skyline-serialize.js v4:
+      // sendPreview = linkPreview + thumbnail + forwarded newsletter.
+      // Di zapo, bentuk setaranya adalah text.linkPreview + contextInfo.raw.
+      await ctx.client.message.send(
+        ctx.chat,
+        {
+          type: 'text',
+          text: `🔵 *${pushName}* ✓\n\n${status}\n↗️ Diteruskan berkali-kali • skor 9999\n\n${getSampleText('combo-user')}`,
+          linkPreview: {
+            matchedText: channelUrl,
+            title: `${config.botName} • Status Bot`,
+            description: `Untuk ${pushName} • Bot online 24/7 • zapo-js`,
+            thumbnail: { bytes: avatar },
+            sourceUrl: channelUrl
+          }
+        },
+        {
+          quote: ctx.event,
+          contextInfo: {
+            raw: {
+              mentionedJid: [ctx.sender, ctx.senderLid].filter(Boolean),
+              isForwarded: true,
+              forwardingScore: 9999,
+              forwardedNewsletterMessageInfo: {
+                newsletterJid,
+                newsletterName: `${config.botName} Official Channel`,
+                serverMessageId: 127
+              }
+            }
+          }
+        }
+      )
+
+      // Tombol dipisah karena native flow dan linkPreview berada di dua
+      // envelope WA berbeda; ini mencegah preview utama hilang di device.
+      await ctx.client.message.send(
+        ctx.chat,
+        richButtons({
+          text: `📣 ${config.botName} Official Channel\nBuka saluran untuk update terbaru.`,
+          footer: `Untuk ${pushName}`,
+          buttons: [{ url: channelUrl, text: '📣 Lihat Saluran' }]
+        }),
+        interactiveSendOptions(ctx.chat)
+      )
     }
   },
   {
