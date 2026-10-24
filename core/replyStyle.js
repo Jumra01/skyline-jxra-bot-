@@ -467,29 +467,11 @@ async function runReplyVariant(ctx, text, style) {
           i: 'ɪ', j: 'ᴊ', k: 'ᴋ', l: 'ʟ', m: 'ᴍ', n: 'ɴ', o: 'ᴏ', p: 'ᴘ',
           q: 'ǫ', r: 'ʀ', s: 's', t: 'ᴛ', u: 'ᴜ', v: 'ᴠ', w: 'ᴡ', x: 'x', y: 'ʏ', z: 'ᴢ'
         }
-        const BOLD_CAPS = {
-          A: '𝗔', B: '𝗕', C: '𝗖', D: '𝗗', E: '𝗘', F: '𝗙', G: '𝗚', H: '𝗛',
-          I: '𝗜', J: '𝗝', K: '𝗞', L: '𝗟', M: '𝗠', N: '𝗡', O: '𝗢', P: '𝗣',
-          Q: '𝗤', R: '𝗥', S: '𝗦', T: '𝗧', U: '𝗨', V: '𝗩', W: '𝗪', X: '𝗫',
-          Y: '𝗬', Z: '𝗭'
-        }
-        const BOLD_SMALL_CAPS = {
-          ᴀ: 'ᴀ', ʙ: 'ʙ', ᴄ: 'ᴄ', ᴅ: 'ᴅ', ᴇ: 'ᴇ', ꜰ: 'ꜰ', ɢ: 'ɢ', ʜ: 'ʜ',
-          ɪ: 'ɪ', ᴊ: 'ᴊ', ᴋ: 'ᴋ', ʟ: 'ʟ', ᴍ: 'ᴍ', ɴ: 'ɴ', ᴏ: 'ᴏ', ᴘ: 'ᴘ',
-          ǫ: 'ǫ', ʀ: 'ʀ', s: 's', ᴛ: 'ᴛ', ᴜ: 'ᴜ', ᴠ: 'ᴠ', ᴡ: 'ᴡ', x: 'x', ʏ: 'ʏ', ᴢ: 'ᴢ'
-        }
-        const toSmallCaps = (value) => Array.from(String(value ?? '').toLowerCase(), (char) => SMALL_CAPS[char] ?? char).join('')
-        // Use bold Unicode for Latin letters (small-cap glyphs have no bold variants).
-        // Keep small-cap glyphs where they exist; the rest get a bold Latin substitute.
-        const toBoldSmallCaps = (value) => Array.from(String(value ?? ''), (char) => {
-          const small = toSmallCaps(char)
-          if (small !== char.toLowerCase()) return BOLD_SMALL_CAPS[small] || small
-          const upper = char.toUpperCase()
-          return BOLD_CAPS[upper] || char
-        }).join('')
-        const styledText = `**${toBoldSmallCaps(text)}**`
-        // The product-card brand field is rendered as the command label; keep it plain text.
-        // Emoji appended by older experiments appeared as a WhatsApp sticker next to the command.
+        const toSmallCaps = (value) => Array.from(String(value ?? '').toLowerCase(), (char) => SMALL_CAPS[char] || char).join('')
+        // Small-caps Unicode has no dedicated bold alphabet; apply one consistent
+        // markdown bold wrapper instead of mixing unrelated Unicode alphabets.
+        const toBoldSmallCaps = (value) => `**${toSmallCaps(value)}**`
+        const styledText = toBoldSmallCaps(text)
         const styledCommand = ctx.command ? toBoldSmallCaps(ctx.command) : toBoldSmallCaps('pesan')
         const status = toBoldSmallCaps('Online')
         let productImage = imageUrl || ''
@@ -500,24 +482,10 @@ async function runReplyVariant(ctx, text, style) {
             Promise.resolve(meJid && client.profile?.getProfilePicture?.(meJid, 'image')),
             new Promise((resolve) => setTimeout(() => resolve(null), 3500))
           ])
-          let botAvatar = typeof profile === 'string' ? profile : profile?.url
-          if (botAvatar && /^https?:\/\//i.test(botAvatar)) {
-            const response = await fetch(botAvatar, { signal: AbortSignal.timeout(4000), redirect: 'follow' })
-            if (response.ok) {
-              const bytes = Buffer.from(await response.arrayBuffer())
-              if (bytes.length) {
-                const uploaded = await client.message.upload(bytes, {
-                  type: 'image',
-                  mimetype: response.headers.get('content-type') || 'image/jpeg'
-                })
-                const uploadedUrl = typeof uploaded === 'string'
-                  ? uploaded
-                  : uploaded?.url || uploaded?.directPath || uploaded?.mediaUrl
-                if (uploadedUrl) botAvatar = uploadedUrl
-              }
-            }
-            productImage = botAvatar
-          }
+          const botAvatar = typeof profile === 'string' ? profile : profile?.url
+          // Product-card image URL is a remote preview URL, not an uploaded-media path.
+          // Passing directPath/mediaUrl here makes WhatsApp render its generic logo.
+          if (botAvatar && /^https?:\/\//i.test(botAvatar)) productImage = botAvatar
         } catch {}
         const product = {
           __typename: 'GenAIProductItemCardPrimitive',
