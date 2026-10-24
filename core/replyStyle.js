@@ -473,21 +473,7 @@ async function runReplyVariant(ctx, text, style) {
         const styledCommand = ctx.command ? toBoldFont(ctx.command) : toBoldFont('pesan')
         const status = toBoldFont('Online')
         const configuredV9Thumbnail = String(config.reply?.v9ThumbnailUrl || '').trim()
-        let productImage = /^https:\/\//i.test(configuredV9Thumbnail) ? configuredV9Thumbnail : ''
-        try {
-          const credentials = client.auth?.getCurrentCredentials?.() || client.getCurrentCredentials?.()
-          const meJid = client.getCurrentMeJid?.() || credentials?.meJid || credentials?.meLid
-          const profile = await Promise.race([
-            Promise.resolve(meJid && client.profile?.getProfilePicture?.(meJid, 'image')),
-            new Promise((resolve) => setTimeout(() => resolve(null), 3500))
-          ])
-          const botAvatar = typeof profile === 'string' ? profile : profile?.url
-          // Prefer the v9-specific thumbnail from config; use the bot profile only
-          // when the configured URL is empty or invalid.
-          if (!/^https:\/\//i.test(configuredV9Thumbnail) && botAvatar && /^https?:\/\//i.test(botAvatar)) {
-            productImage = botAvatar
-          }
-        } catch {}
+        const productImage = /^https:\/\//i.test(configuredV9Thumbnail) ? configuredV9Thumbnail : ''
         const product = {
           __typename: 'GenAIProductItemCardPrimitive',
           title: toBoldFont(config.botName || 'skyline-JXRA'),
