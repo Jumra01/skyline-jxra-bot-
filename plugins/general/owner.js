@@ -55,10 +55,15 @@ const DEFAULT_PP = 'https://cdn.gimita.id/download/pp%20kosong%20wa%20default%20
 
 async function getProfilePic(client, jid) {
   try {
-    return await client.profile?.getProfilePicture?.(jid) || DEFAULT_PP
-  } catch {
-    return DEFAULT_PP
-  }
+    const result = await Promise.race([
+      Promise.resolve(client.profile?.getProfilePicture?.(jid)),
+      new Promise((resolve) => setTimeout(() => resolve(null), 4000))
+    ])
+    // zapo returns an object `{ url }`, while rich primitives require a string URL.
+    const url = typeof result === 'string' ? result : result?.url
+    if (url && /^https?:\/\//i.test(url)) return url
+  } catch {}
+  return DEFAULT_PP
 }
 
 async function handler(ctx) {
@@ -239,10 +244,9 @@ async function handler(ctx) {
       response_id: crypto.randomUUID(),
       sections: [
         {
-          __typename: 'GenAIUnifiedResponseSection',
           view_model: {
-            __typename: 'GenAIHorizontalCarouselViewModel',
-            primitives: posts
+            primitives: posts,
+            __typename: 'GenAIHScrollLayoutViewModel'
           }
         }
       ]
@@ -286,13 +290,14 @@ async function handler(ctx) {
       }
     }))
 
-    const sections = entities.map((ent) => ({
-      __typename: 'GenAIUnifiedResponseSection',
-      view_model: {
-        __typename: 'GenAISingleLayoutViewModel',
-        primitive: ent
+    const sections = [
+      {
+        view_model: {
+          primitives: entities,
+          __typename: 'GenAIHScrollLayoutViewModel'
+        }
       }
-    }))
+    ]
 
     const payload = {
       response_id: crypto.randomUUID(),
