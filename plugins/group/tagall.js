@@ -2,16 +2,18 @@
  * © skyline-JXRA
  * Hapus credit gak bikin u jago dumbass. 
  * Hargai sebagaimana u mau dihargai.
- * tagall.js — tag semua member grup dengan mention ASLI (`@<nomor>`).
+ * tagall.js — tag semua member grup, tapi teksnya cuma punya SATU `@user`.
  *
- * Kenapa harus token `@<digits>`: WhatsApp cuma merender link mention (dan
- * menggantinya dengan NAMA kontak sesuai yang disimpan di HP masing-masing
- * penerima) kalau digitnya ada di teks DAN jid-nya ada di `mentions`/
- * `mentionedJid`. Tanpa token, tag tetap "senyap" tapi gak ada nama tampil.
+ * Cara kerjanya:
+ * - `contextInfo.mentionedJid` diisi SEMUA participant → tiap member tetap
+ *   dapat notifikasi "kamu disebut" (cara ini sama dengan `hidetag` di Hoshino:
+ *   mention tidak butuh token di teks untuk sekadar menotifikasi).
+ * - Teks hanya menuliskan SATU token `@<nomor>` (default: pengirim perintah),
+ *   jadi tidak ada deretan `@user1 @user2 @user3` yang bikin pesan penuh tag.
  *
- * Jadi: token ditulis menyambung dalam satu paragraf (ikut wrap otomatis),
- * BUKAN daftar nomor satu per baris. Nama yang muncul = nama kontak di device
- * masing-masing member (bot gak bisa maksa nama tertentu).
+ * Catatan: WhatsApp gak punya konsep "@semua". Token `@<digits>` wajib ada di
+ * teks kalau mau tampil sebagai link/nama; jid yang cuma ada di `mentions`
+ * tetap menotifikasi tapi tidak tampil sebagai tag.
  *
  * Cek admin via helper resmi (isAdmin/isSuperAdmin flag zapo).
  */
@@ -21,7 +23,7 @@ const pluginConfig = {
   name: "tagall",
   alias: ['tall', 'mentionall'],
   category: "group",
-  description: "Tag semua member grup — mention asli, tampil sebagai nama kontak (admin grup/staff)",
+  description: "Tag semua member grup — teks cuma menampilkan satu tag (admin grup/staff)",
   usage: ".tagall <teks>",
   example: ".tagall rapat jam 8",
   isOwner: false,
@@ -40,21 +42,30 @@ const digitsOf = (jid) => String(jid || '').split('@')[0].split(':')[0].replace(
 
 /**
  * Buang device suffix (`628xx:12@s.whatsapp.net` → `628xx@s.whatsapp.net`).
- * WA mencocokkan token `@628xx` dengan user part jid di `mentionedJid`, jadi
- * jid yang masih membawa `:12` bikin mention GAGAL di-render jadi nama
- * (tokennya cuma jadi teks biasa) walau pesannya tetap terkirim.
+ * WA mencocokkan token `@628xx` dengan user part jid di `mentionedJid`; jid
+ * yang masih membawa `:12` bikin mention gagal di-render (token jadi teks).
  */
 const normalizeJid = (jid) => String(jid || '').replace(/:\d+(?=@)/, '')
 
-/**
- * Jid yang dipakai sebagai token mention. PN diutamakan supaya WhatsApp
- * meresolve nama kontak dengan benar, sisa identitas (LID/PN) tetap
- * dimasukkan ke `mentionedJid` biar notifikasi sampai di grup LID maupun PN.
- */
+/** Jid yang dipakai sebagai token mention (PN diutamakan biar nama ke-resolve). */
 function tokenJidOf(p) {
   const jid = normalizeJid(p?.jid)
   if (p?.phoneNumber) return normalizeJid(p.phoneNumber)
   return jid
+}
+
+/** Cari participant yang cocok dengan identitas pengirim (PN / LID). */
+function findSelf(parts, ctx) {
+  const mine = new Set(
+    [ctx.sender, ctx.senderLid].map(normalizeJid).filter(Boolean)
+  )
+  if (!mine.size) return null
+  return (
+    parts.find((p) => {
+      const ids = [p.jid, p.lid, p.phoneNumber].map(normalizeJid).filter(Boolean)
+      return ids.some((id) => mine.has(id))
+    }) ?? null
+  )
 }
 
 async function handler(ctx) {
@@ -75,31 +86,27 @@ async function handler(ctx) {
       return
     }
 
-    const tokens = []
+    // mentionedJid = semua member (notif tag), teks cuma satu token.
     const mentionJids = new Set()
-    const seen = new Set()
-
     for (const p of parts) {
-      const tokenJid = tokenJidOf(p)
-      const digits = digitsOf(tokenJid)
-      if (!digits) continue
-      // Satu orang cukup sekali (hindari token dobel kalau ada multi-jid)
-      if (seen.has(digits)) continue
-      seen.add(digits)
-      tokens.push(`@${digits}`)
-      if (tokenJid) mentionJids.add(tokenJid)
       for (const id of [p.jid, p.lid, p.phoneNumber]) {
         const norm = normalizeJid(id)
         if (norm) mentionJids.add(norm)
       }
     }
 
+    // Satu-satunya tag yang kelihatan: pengirim perintah (fallback: member #1).
+    const self = findSelf(parts, ctx)
+    const tokenSource = self ? tokenJidOf(self) : tokenJidOf(parts[0])
+    const tokenDigits = digitsOf(tokenSource)
+
     const caption = (ctx.text || '📢 Semua kumpul sini!').trim()
-    const text = [`*TAGALL* — ${meta.subject ?? 'Grup'}`, '', caption, '', tokens.join(' ')].join('\n')
+    const lines = [`*TAGALL* — ${meta.subject ?? 'Grup'}`, '', caption]
+    if (tokenDigits) lines.push('', `@${tokenDigits}`)
 
     await ctx.client.message.send(ctx.chat, {
       extendedTextMessage: {
-        text,
+        text: lines.join('\n'),
         contextInfo: { mentionedJid: [...mentionJids] }
       }
     })
