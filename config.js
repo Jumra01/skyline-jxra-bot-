@@ -217,11 +217,13 @@ export default {
     v9Price: '',      // kosong = "Online"
     v9ProductUrl: '', // kosong = mode gambar biasa (isi https = product card)
     v9IconUrl: '',    // kosong = tanpa ikon (isi https = product card)
-    website: 'skyline.web.id',
+
+    // ── v4 (preview link/OG) ──
+    website: 'skyline.web.id',              // domain & sumber gambar preview
     v4: {
-      title: 'skyline-JXRA',
-      desc: '',
-      thumb: 'assets/thumb/v4-thumb.jpg',
+      title: 'skyline-JXRA',                // judul preview
+      desc: '',                             // kosong = deskripsi otomatis
+      thumb: 'assets/thumb/v4-thumb.jpg',   // 'off' = pakai gambar OG situs
     },
   },
 
