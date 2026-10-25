@@ -474,22 +474,23 @@ async function runReplyVariant(ctx, text, style) {
         const status = toBoldFont('Online')
         const configuredV9Thumbnail = String(config.reply?.v9ThumbnailUrl || '').trim()
         const productImage = /^https:\/\//i.test(configuredV9Thumbnail) ? configuredV9Thumbnail : ''
-        // The small circular icon on the product card is the favicon of this URL
-        // (WhatsApp's own channel link would render the WhatsApp logo).
+        // The small circular icon on the product card is the favicon of the
+        // product link. Leave `v9ProductUrl` empty (default) so no favicon is
+        // requested and the card renders without that extra icon.
         const configuredV9ProductUrl = String(config.reply?.v9ProductUrl || '').trim()
-        const productUrl = /^https:\/\//i.test(configuredV9ProductUrl)
-          ? configuredV9ProductUrl
-          : 'https://skyline.web.id'
+        const productUrl = /^https:\/\//i.test(configuredV9ProductUrl) ? configuredV9ProductUrl : ''
+        // Optional small icon. Empty by default so no extra icon is rendered.
+        const configuredV9Icon = String(config.reply?.v9IconUrl || '').trim()
+        const productIcon = /^https:\/\//i.test(configuredV9Icon) ? configuredV9Icon : ''
         const product = {
           __typename: 'GenAIProductItemCardPrimitive',
           title: toBoldFont(config.botName || 'skyline-JXRA'),
           brand: styledCommand,
           price: status,
           sale_price: '',
-          product_url: productUrl,
-          image: { url: productImage },
-          // Reuse configured thumbnail for the product card's small secondary icon too.
-          additional_images: productImage ? [{ url: productImage }] : []
+          ...(productUrl ? { product_url: productUrl } : {}),
+          ...(productIcon ? { additional_images: [{ url: productIcon }] } : {}),
+          image: { url: productImage }
         }
         const productPayload = {
           response_id: crypto.randomUUID(),
