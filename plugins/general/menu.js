@@ -377,6 +377,33 @@ function videoThumbFrame(p) {
   return Buffer.from(r.stdout)
 }
 
+/**
+ * Buat jpegThumbnail buffer (max `max` px, default 320) dari file foto.
+ * Dipakai untuk `jpegThumbnail` di pesan location / header card agar WA
+ * render preview foto di atas pin/kartu. Return null kalau gagal.
+ */
+async function jpegThumbBuffer(relPath, max = 320) {
+  if (!relPath) return null
+  const p = absPath(relPath)
+  try {
+    if (!fs.existsSync(p)) return null
+    const sharp = (await import('sharp')).default
+    const buf = await sharp(p)
+      .rotate()
+      .flatten({ background: '#ffffff' })
+      .resize({ width: max, height: max, fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 65 })
+      .toBuffer()
+    return buf
+  } catch (err) {
+    logger.warn(
+      { file: relPath, err: errMsg(err) },
+      '[MENU] jpegThumbBuffer gagal — card tanpa thumbnail'
+    )
+    return null
+  }
+}
+
 /** Transcode ke mp4 h264 (720p cap, tanpa upscale) biar pasti bisa diputar */
 function transcodeMp4(p) {
   const out = path.join(os.tmpdir(), `zapo-thumb-${process.pid}-${Date.now()}.mp4`)
@@ -806,55 +833,57 @@ async function sendHomeVariant(ctx, v) {
         }), interactiveSendOptions(ctx.chat))
         return
       case 11:
-        // Fake location header: nama bot + durasi aktif + nama user
-        const v11Bot = config.botName || 'skyline-JXRA'
-        const v11Uptime = fmtUptime(process.uptime() * 1000)
-        const v11User = ctx.pushName || 'Owner'
-        // Header: pin lokasi palsu dengan label bot, durasi, user.
-        // Kirim tanpa replyStyle (noStyle) supaya client WA nggak coba pasang
-        // contextInfo ke pesan lokasi yang tidak mendukungnya.
-        // `disable*AutoInject` WAJIB: zapo membangun pesan `location` sebagai
-        // field primitif (type/derajat/name/address), bukan submessage objek.
-        // Di grup zapo menyuntikkan ephemeral setting ke contextInfo, lalu
-        // applyContextInfo melempar "cannot apply contextInfo: no compatible
-        // submessage found" — v11 mati total di grup (diam di privat karena
-        // ctx-nya null). Pesan lokasi tidak butuh disappearing mode, jadi
-        // auto-inject dimatikan.
-        await ctx.client.message.send(ctx.chat, {
-          type: 'location',
-          degreesLatitude: -6.2088,
-          degreesLongitude: 106.8456,
-          name: `${v11Bot} · Aktif ±${v11Uptime}`,
-          address: `User: ${v11User}`
-        }, {
-          ...interactiveSendOptions(ctx.chat),
-          noStyle: true,
-          disableGroupEphemeralAutoInject: true,
-          disableDirectEphemeralAutoInject: true
-        })
-        // Body: daftar kategori menu (teks + tombol)
-        // Pakai `grouped` dari luar (jangan deklarasi ulang `const grouped` di
-        // sini): semua case berbagi satu block scope, jadi deklarasi di case
-        // 11 bikin `grouped` di case 7 kena TDZ (Cannot access before
-        // initialization) — v7 carousel gagal total tanpa error yang jelas.
-        const v11Rows = orderedEntries(grouped).map(([tag, list]) => ({
-          id: `menu:cat:${tag}`,
-          title: label(tag),
-          description: `${CATEGORY_INFO[tag] || ''} • ${list.length} fitur`
-        }))
-        const v11Extra = [{ id: 'menu:all', text: '📜 Semua Fitur' }]
-        if (config.reactChannel?.enabled && config.reactChannel?.dedicatedChannelUrl) {
-          v11Extra.push({ url: config.reactChannel.dedicatedChannelUrl, text: '📱 Channel' })
+        // Fake location header: nama bot + durasi aktif + nama user,
+        // thumbnail foto menu, diikuti body daftar kategori.
+        // WA render `locationMessage` dengan `jpegThumbnail` di atas pin —
+        // itu "thumb fake location"-nya yang sebelumnya gagal muncul karena
+        // bentuk lama `{type:'location'}` (proto primitif, encode jadi pesan
+        // kosong). Bentuk benar = submessage `locationMessage` objek.
+        // Di grup zapo menyuntikkan ephemeral ke contextInfo, tapi karena
+        // locationMessage kini objek, pickContextInfoTarget menemukannya →
+        // applyContextInfo aman. noStyle tetap dikirim supaya hook global
+        // (core/context.js) tidak membeli ini balik jadi kartu lain.
+        {
+          const v11Bot = config.botName || 'skyline-JXRA'
+          const v11Uptime = fmtUptime(process.uptime() * 1000)
+          const v11User = ctx.pushName || 'Owner'
+          const v11Thumb = await jpegThumbBuffer(findThumb(THUMB_MENU), 320)
+          await ctx.client.message.send(ctx.chat, {
+            locationMessage: {
+              degreesLatitude: -6.2088,
+              degreesLongitude: 106.8456,
+              name: `${v11Bot} · Aktif ±${v11Uptime}`,
+              address: `User: ${v11User}`,
+              isLive: false,
+              ...(v11Thumb ? { jpegThumbnail: v11Thumb } : {})
+            }
+          }, {
+            ...interactiveSendOptions(ctx.chat),
+            noStyle: true,
+            disableGroupEphemeralAutoInject: true,
+            disableDirectEphemeralAutoInject: true
+          })
+          // Body: daftar kategori menu (teks + tombol). headerImage dipasang
+          // supaya kartu tidak "polosan button doang".
+          const v11Rows = orderedEntries(grouped).map(([tag, list]) => ({
+            id: `menu:cat:${tag}`,
+            title: label(tag),
+            description: `${CATEGORY_INFO[tag] || ''} • ${list.length} fitur`
+          }))
+          const v11Extra = [{ id: 'menu:all', text: '📜 Semua Fitur' }]
+          if (config.reactChannel?.enabled && config.reactChannel?.dedicatedChannelUrl) {
+            v11Extra.push({ url: config.reactChannel.dedicatedChannelUrl, text: '📱 Channel' })
+          }
+          await ctx.client.message.send(ctx.chat, richList({
+            text: overviewText(ctx, grouped),
+            footer: footer(),
+            title: `📂 ${v11Bot} • Kategori`,
+            buttonText: 'Pilih Kategori',
+            sections: [{ title: `${v11Rows.length} kategori`, rows: v11Rows }],
+            extraButtons: v11Extra,
+            headerImage: headerImage
+          }), interactiveSendOptions(ctx.chat))
         }
-        await ctx.client.message.send(ctx.chat, richList({
-          text: overviewText(ctx, grouped),
-          footer: footer(),
-          title: `📂 ${v11Bot} • Kategori`,
-          buttonText: 'Pilih Kategori',
-          sections: [{ title: `${v11Rows.length} kategori`, rows: v11Rows }],
-          extraButtons: v11Extra,
-          headerImage: null
-        }), interactiveSendOptions(ctx.chat))
         return
       default:
         return sendHome(ctx)
