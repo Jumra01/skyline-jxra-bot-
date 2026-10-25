@@ -36,28 +36,12 @@ const pluginConfig = {
   isEnabled: true,
 };
 
-/** `628xx:12@s.whatsapp.net` → `628xx` */
-const digitsOf = (jid) => String(jid || '').split('@')[0].split(':')[0].replace(/\D/g, '')
-
 /**
  * Buang device suffix (`628xx:12@s.whatsapp.net` → `628xx@s.whatsapp.net`).
  * WA mencocokkan token `@628xx` dengan user part jid di `mentionedJid`; jid
  * yang masih membawa `:12` bikin mention gagal di-render (token jadi teks).
  */
 const normalizeJid = (jid) => String(jid || '').replace(/:\d+(?=@)/, '')
-
-/**
- * Jid yang dipakai sebagai token mention: **jid participant apa adanya**
- * (`p.jid`). Jid dari metadata sudah mengikuti addressing mode grup — grup PN
- * berisi `@s.whatsapp.net`, grup LID berisi `@lid` — dan WhatsApp mencocokkan
- * token `@<digits>` dengan user part jid yang sama. Memaksa PN di grup LID
- * bikin token orang lain TIDAK ke-resolve jadi nama (hanya identitas bot/
- * pengirim sendiri yang tampil), jadi jangan diutamakan.
- * Fallback: phoneNumber → lid → jid.
- */
-function tokenJidOf(p) {
-  return normalizeJid(p?.jid) || normalizeJid(p?.phoneNumber) || normalizeJid(p?.lid)
-}
 
 async function handler(ctx) {
     if (!ctx.isGroup) {
@@ -77,42 +61,36 @@ async function handler(ctx) {
       return
     }
 
-    const tokens = []
     const mentionJids = new Set()
-    const seen = new Set()
-
     for (const p of parts) {
-      const tokenJid = tokenJidOf(p)
-      const digits = digitsOf(tokenJid)
-      if (!digits) continue
-      // Satu orang cukup sekali token-nya
-      if (seen.has(digits)) continue
-      seen.add(digits)
-      tokens.push(`@${digits}`)
-      if (tokenJid) mentionJids.add(tokenJid)
-      // Identitas lain ikut di-mention biar notif sampai di grup LID maupun PN
-      for (const id of [p.jid, p.lid, p.phoneNumber]) {
-        const norm = normalizeJid(id)
-        if (norm) mentionJids.add(norm)
-      }
+      // WAHA resolves "all" to each participant's group-native id and excludes
+      // the bot. Use one id per participant; dual PN+LID ids can double-tag.
+      const jid = normalizeJid(p.jid || p.phoneNumber || p.lid)
+      if (jid) mentionJids.add(jid)
     }
 
-    if (!tokens.length) {
-      await ctx.reply('⚠️ Gak ada participant yang bisa di-tag.')
+    const me = ctx.client.auth?.getCurrentCredentials?.()
+    for (const self of [me?.meJid, me?.meLid]) {
+      const jid = normalizeJid(self)
+      if (jid) mentionJids.delete(jid)
+    }
+    if (!mentionJids.size) {
+      await ctx.reply('⚠️ Gak ada participant lain yang bisa di-tag.')
       return
     }
 
     const caption = (ctx.text || '📢 Semua kumpul sini!').trim()
-    const text = [`*TAGALL* — ${meta.subject ?? 'Grup'}`, '', caption, '', '@all'].join('\n')
+    const text = [`*TAGALL* — ${meta.subject ?? 'Grup'}`, '', caption].join('\n')
 
-    // Implementasi komunitas `mentionAll: true` menyetel Proto ContextInfo
-    // `nonJidMentions = 1` bersama teks literal `@all`. API zapo menerima
-    // WaSendContextInfo.raw, yang buildContextInfoProto flatten ke proto.
-    await ctx.client.message.send(ctx.chat, {
-      type: 'text',
-      text,
-      contextInfo: { raw: { nonJidMentions: 1 } }
-    })
+    // Pola komunitas yang terbukti (WAHA `mentions: ["all"]`): resolve all
+    // participant → kirim daftar JID di field mentions, tanpa token individual
+    // di body. Padanan zapo yang benar adalah opsi send `mentions`, bukan raw
+    // nonJidMentions atau content-level contextInfo.
+    await ctx.client.message.send(
+      ctx.chat,
+      { type: 'text', text },
+      { mentions: [...mentionJids] }
+    )
   }
 
 export { pluginConfig as config, handler };
