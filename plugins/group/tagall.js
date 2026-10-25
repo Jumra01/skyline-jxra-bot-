@@ -89,7 +89,7 @@ async function handler(ctx) {
     await ctx.client.message.send(
       ctx.chat,
       { type: 'text', text },
-      { mentions: [...mentionJids] }
+      { mentions: [...mentionJids], noStyle: true }
     )
   }
 
