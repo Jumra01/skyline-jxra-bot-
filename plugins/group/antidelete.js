@@ -184,9 +184,11 @@ async function fetchMedia(entry) {
 }
 
 function headerFor(entry, deleter) {
-  const who = entry.name ? `${entry.name} (@${entry.sender})` : `@${entry.sender}`
+  // Tampilkan nama (pushName) dulu biar gak keliatan nomor mentah;
+  // nomor cuma dipakai kalau WhatsApp gak ngasih nama pengirim.
+  const who = String(entry.name || '').trim() || `@${entry.sender}`
   const jam = new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' })
-  const oleh = deleter && deleter !== entry.name ? `\n🧹 Dihapus oleh : ${deleter}` : ''
+  const oleh = deleter && deleter !== who ? `\n🧹 Dihapus oleh : ${deleter}` : ''
   return (
     `🗑️ *PESAN DIHAPUS*\n\n` +
     `👤 Pengirim : ${who}\n` +
@@ -209,7 +211,7 @@ async function resendMedia(client, chat, entry, deleter) {
     await client.message.send(chat, { type: 'video', media: buffer, mimetype: mimetype || 'video/mp4', caption })
   } else if (kind === 'sticker') {
     // Stiker tidak punya caption — kirim keterangan dulu, lalu stikernya.
-    await client.message.send(chat, `${header}\n📎 Stiker dari @${entry.sender}`)
+    await client.message.send(chat, `${header}\n📎 Stiker dari ${String(entry.name || '').trim() || `@${entry.sender}`}`)
     await client.message.send(chat, { type: 'sticker', media: buffer, mimetype: 'image/webp' })
   } else if (kind === 'audio') {
     await client.message.send(chat, {
