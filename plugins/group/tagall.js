@@ -2,18 +2,17 @@
  * © skyline-JXRA
  * Hapus credit gak bikin u jago dumbass. 
  * Hargai sebagaimana u mau dihargai.
- * tagall.js — tag semua member grup, tapi teksnya cuma punya SATU `@user`.
+ * tagall.js — tag SEMUA member grup, nama tiap orang tampil (mention asli).
  *
- * Cara kerjanya:
- * - `contextInfo.mentionedJid` diisi SEMUA participant → tiap member tetap
- *   dapat notifikasi "kamu disebut" (cara ini sama dengan `hidetag` di Hoshino:
- *   mention tidak butuh token di teks untuk sekadar menotifikasi).
- * - Teks hanya menuliskan SATU token `@<nomor>` (default: pengirim perintah),
- *   jadi tidak ada deretan `@user1 @user2 @user3` yang bikin pesan penuh tag.
+ * Fakta WhatsApp (sudah diuji di grup): token `@<digits>` hanya menotifikasi
+ * & menampilkan SATU orang. Gak ada konsep "@semua"/"@everyone" — jid yang
+ * cuma ada di `contextInfo.mentionedJid` tanpa token TIDAK jadi tag kelihatan
+ * (gejalanya: cuma orang yang punya token yang ke-tag). Karena itu tiap
+ * participant WAJIB punya token sendiri di teks.
  *
- * Catatan: WhatsApp gak punya konsep "@semua". Token `@<digits>` wajib ada di
- * teks kalau mau tampil sebagai link/nama; jid yang cuma ada di `mentions`
- * tetap menotifikasi tapi tidak tampil sebagai tag.
+ * Tetap rapi: token ditulis menyambung dalam satu paragraf (wrap otomatis,
+ * TIDAK satu-per-baris, tidak bernomor). Di HP masing-masing penerima, setiap
+ * `@<nomor>` dirender jadi NAMA kontak yang mereka simpan sendiri.
  *
  * Cek admin via helper resmi (isAdmin/isSuperAdmin flag zapo).
  */
@@ -23,7 +22,7 @@ const pluginConfig = {
   name: "tagall",
   alias: ['tall', 'mentionall'],
   category: "group",
-  description: "Tag semua member grup — teks cuma menampilkan satu tag (admin grup/staff)",
+  description: "Tag semua member grup — nama tiap member tampil (admin grup/staff)",
   usage: ".tagall <teks>",
   example: ".tagall rapat jam 8",
   isOwner: false,
@@ -54,20 +53,6 @@ function tokenJidOf(p) {
   return jid
 }
 
-/** Cari participant yang cocok dengan identitas pengirim (PN / LID). */
-function findSelf(parts, ctx) {
-  const mine = new Set(
-    [ctx.sender, ctx.senderLid].map(normalizeJid).filter(Boolean)
-  )
-  if (!mine.size) return null
-  return (
-    parts.find((p) => {
-      const ids = [p.jid, p.lid, p.phoneNumber].map(normalizeJid).filter(Boolean)
-      return ids.some((id) => mine.has(id))
-    }) ?? null
-  )
-}
-
 async function handler(ctx) {
     if (!ctx.isGroup) {
       await ctx.reply('🚫 Command ini khusus grup.')
@@ -86,27 +71,37 @@ async function handler(ctx) {
       return
     }
 
-    // mentionedJid = semua member (notif tag), teks cuma satu token.
+    const tokens = []
     const mentionJids = new Set()
+    const seen = new Set()
+
     for (const p of parts) {
+      const tokenJid = tokenJidOf(p)
+      const digits = digitsOf(tokenJid)
+      if (!digits) continue
+      // Satu orang cukup sekali token-nya
+      if (seen.has(digits)) continue
+      seen.add(digits)
+      tokens.push(`@${digits}`)
+      if (tokenJid) mentionJids.add(tokenJid)
+      // Identitas lain ikut di-mention biar notif sampai di grup LID maupun PN
       for (const id of [p.jid, p.lid, p.phoneNumber]) {
         const norm = normalizeJid(id)
         if (norm) mentionJids.add(norm)
       }
     }
 
-    // Satu-satunya tag yang kelihatan: pengirim perintah (fallback: member #1).
-    const self = findSelf(parts, ctx)
-    const tokenSource = self ? tokenJidOf(self) : tokenJidOf(parts[0])
-    const tokenDigits = digitsOf(tokenSource)
+    if (!tokens.length) {
+      await ctx.reply('⚠️ Gak ada participant yang bisa di-tag.')
+      return
+    }
 
     const caption = (ctx.text || '📢 Semua kumpul sini!').trim()
-    const lines = [`*TAGALL* — ${meta.subject ?? 'Grup'}`, '', caption]
-    if (tokenDigits) lines.push('', `@${tokenDigits}`)
+    const text = [`*TAGALL* — ${meta.subject ?? 'Grup'}`, '', caption, '', tokens.join(' ')].join('\n')
 
     await ctx.client.message.send(ctx.chat, {
       extendedTextMessage: {
-        text: lines.join('\n'),
+        text,
         contextInfo: { mentionedJid: [...mentionJids] }
       }
     })
