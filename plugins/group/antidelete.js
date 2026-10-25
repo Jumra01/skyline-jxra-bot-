@@ -191,17 +191,15 @@ async function fetchMedia(entry) {
 }
 
 function headerFor(entry, deleter) {
-  // `@<nomor>` WAJIB ada di teks supaya mention benar-benar jadi tag
-  // (diketuk + notifikasi). Nama tetap ditampilkan di depan biar enak dibaca;
-  // WhatsApp biasanya mengganti token mention dengan nama kontak.
+  // Cukup token mention saja (`@<nomor>`) + opsi `mentions` — WhatsApp sendiri
+  // yang menampilkan nama kontak/partisipan, jadi jangan dobel nama di teks.
   const tag = `@${entry.sender}`
   const name = String(entry.name || '').trim()
-  const who = name ? `${name} (${tag})` : tag
   const jam = new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' })
   const oleh = deleter && deleter !== name ? `\n🧹 Dihapus oleh : ${deleter}` : ''
   return (
     `🗑️ *PESAN DIHAPUS*\n\n` +
-    `👤 Pengirim : ${who}\n` +
+    `👤 Pengirim : ${tag}\n` +
     `🕒 Dihapus  : ${jam} WIB${oleh}\n`
   )
 }
