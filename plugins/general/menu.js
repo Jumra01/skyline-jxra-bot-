@@ -11,9 +11,9 @@ import os from 'node:os'
 import { spawnSync } from 'node:child_process'
 import config from '../../config.js'
 import { listFeatures } from '../loader.js'
-import { totalUsers, getBalance } from '../../core/database.js'
+import { totalUsers, getBalance, getUser } from '../../core/database.js'
 import { getCharacter } from '../../core/rpg.js'
-import { richList, richButtons, interactiveSendOptions } from '../../lib/richMessage.js'
+import { richList, richButtons, richLocationList, interactiveSendOptions } from '../../lib/richMessage.js'
 import { logger } from '../../core/logger.js'
 import { onRichReply } from '../../handlers/messageHandler.js'
 import { getGlobal } from '../../core/groupSettings.js'
@@ -882,6 +882,90 @@ async function sendHomeVariant(ctx, v) {
             sections: [{ title: `${v11Rows.length} kategori`, rows: v11Rows }],
             extraButtons: v11Extra,
             headerImage: headerImage
+          }), interactiveSendOptions(ctx.chat))
+        }
+        return
+      case 21:
+        // Hoshino v21 layout (diterjemahkan ke zapo): pin lokasi di header
+        // kartu interaktif + single_select kategori + cta_url saluran +
+        // quick_reply allmenu + bottom_sheet + limited_time_offer (copy_code).
+        // v21 meletakkan locationMessage langsung di header kartu — itu
+        // 'thumb fake location' yang jadi bagian header, bukan pesan terpisah.
+        {
+          const v21Bot = config.botName || 'skyline-JXRA'
+          const locCfg = config.ui?.menuLocation || {}
+          const lat = Number(locCfg.lat ?? locCfg.latitude)
+          const long = Number(locCfg.long ?? locCfg.lng ?? locCfg.longitude)
+          const location = {
+            degreesLatitude: Number.isFinite(lat) ? lat : -7.2575,
+            degreesLongitude: Number.isFinite(long) ? long : 112.7521,
+            name: locCfg.name || v21Bot,
+            address: locCfg.address || 'Surabaya, Jawa Timur, Indonesia 🇮🇩',
+            isLive: false
+          }
+          const v21Uptime = fmtUptime(process.uptime() * 1000)
+          const now = new Date()
+          const dateStr = now.toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+          const timeStr = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
+
+          const roleEmojiV21 = ctx.isOwner ? '👑' : (ctx.isPremium ? '💎' : '👤')
+          const roleV21 = ctx.isOwner ? 'Owner' : (ctx.isPremium ? 'Premium' : 'User')
+          let limitV21 = '∞'
+          if (!ctx.isOwner && !ctx.isPremium) {
+            try {
+              const u = getUser(ctx.sender)
+              limitV21 = u?.limit ?? 25
+            } catch { limitV21 = 25 }
+          }
+
+          const v21Rows = orderedEntries(grouped).map(([tag, list]) => ({
+            id: `menu:cat:${tag}`,
+            title: label(tag),
+            description: `${CATEGORY_INFO[tag] || ''} • ${list.length} fitur`
+          }))
+          const totalFiturV21 = v21Rows.reduce(
+            (a, r) => a + Number(r.description.match(/(\d+) fitur/)?.[1] || 0), 0
+          )
+
+          const v21Extra = []
+          if (config.reactChannel?.enabled && config.reactChannel?.dedicatedChannelUrl) {
+            v21Extra.push({ url: config.reactChannel.dedicatedChannelUrl, text: '📱 Channel' })
+          }
+          v21Extra.push({ id: 'menu:all', text: '📜 Semua Fitur' })
+
+          const codeV21 = (config.ui?.menuCode || 'SKYLINE').toUpperCase()
+          const chanUrl = config.reactChannel?.dedicatedChannelUrl || config.cta?.url || 'https://whatsapp.com/channel/0029Vb8Tph9BVJl06WWw5q3B'
+          const messageParamsV21 = {
+            bottom_sheet: {
+              list_title: 'Pilih Kategori',
+              button_title: ' ',
+              in_thread_buttons_limit: 3,
+              divider_indices: [1, 2]
+            },
+            limited_time_offer: {
+              text: v21Bot.toUpperCase(),
+              url: chanUrl,
+              copy_code: codeV21,
+              expiration_time: Date.now() + 3_600_000
+            }
+          }
+
+          await ctx.client.message.send(ctx.chat, richLocationList({
+            text: `${getTimeGreeting()}, *${ctx.pushName || 'User'}* 🪸\nHai, aku ${v21Bot}. Menu cepat & interaktif siap dipakai.\n${timeStr} · ${dateStr}`,
+            footer:
+              `┌─ ⎋ SYSTEM ───\n` +
+              `│Status: ${roleEmojiV21} ${roleV21}\n` +
+              `│Uptime: ${v21Uptime}\n` +
+              `│Limit: ${limitV21}\n` +
+              `│Mode: ${ctx.isGroup ? 'Group' : 'Private'}\n` +
+              `│Fitur: ${totalFiturV21} di ${v21Rows.length} kategori\n` +
+              `└─────────────\n\nGunakan ${config.mainPrefix}menu <kategori> · ${config.mainPrefix}help <fitur>\n\n© ${v21Bot}`,
+            location,
+            sections: [{ title: `📂 ${v21Rows.length} Kategori`, rows: v21Rows }],
+            extraButtons: v21Extra,
+            messageParams: messageParamsV21,
+            title: 'Pilih Kategori',
+            buttonText: 'Pilih Kategori'
           }), interactiveSendOptions(ctx.chat))
         }
         return

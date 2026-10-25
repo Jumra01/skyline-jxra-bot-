@@ -1,6 +1,6 @@
 /**
  * © skyline-JXRA
- * setmenu.js — Atur variant tampilan menu (.setmenu): v1–v10.
+ * setmenu.js — Atur variant tampilan menu (.setmenu): v1–v11, v21.
  * Disimpan global (bukan per-grup) via core/groupSettings.
  */
 import config from '../../config.js'
@@ -19,18 +19,21 @@ const VARIANTS = {
   v8:  { id: 8,  name: 'Minimalist',          desc: 'Teks ringkas (12 baris pertama)' },
   v9:  { id: 9,  name: 'NativeFlow',          desc: 'richButtons: tombol + header media' },
   v10: { id: 10, name: 'Product Catalog',     desc: 'richButtons: Semua Fitur & Menu Utama' },
-  v11: { id: 11, name: 'Location',            desc: 'Header fake location: nama bot + durasi aktif + nama user' }
+  v11: { id: 11, name: 'Location',            desc: 'Header fake location: nama bot + durasi aktif + nama user' },
+  v21: { id: 21, name: 'Location Button',     desc: 'Header lokasi di kartu + kategori + saluran + limited_time_offer (Hoshino v21)' }
 }
 
-const MAX_VARIANT = Object.keys(VARIANTS).length
+/** Semua ID variant (bukan asumsi 1..N berurutan — ada v21). */
+const VARIANT_IDS = Object.values(VARIANTS).map((v) => v.id)
+const MAX_VARIANT = Math.max(...VARIANT_IDS)
 
 const pluginConfig = {
   name: 'setmenu',
   alias: ['menuvariant', 'menustyle'],
   category: 'owner',
-  description: 'Mengatur variant tampilan menu (v1–v10)',
-  usage: '.setmenu <v1-v10>',
-  example: '.setmenu v5',
+  description: 'Mengatur variant tampilan menu (v1–v11, v21)',
+  usage: '.setmenu <variant>',
+  example: '.setmenu v21',
   isOwner: true,
   isPremium: false,
   isGroup: false,
@@ -49,7 +52,7 @@ async function handler(ctx) {
       await ctx.reply(
         `✦ *Set Menu* ✦\n\n` +
         `❌ \`${variant}\` bukan variant yang dikenal.\n` +
-        `Gunakan: \`v1\` s/d \`v${MAX_VARIANT}\``
+        `Gunakan: v1–v11 atau v21`
       )
       return
     }
@@ -84,7 +87,7 @@ async function handler(ctx) {
         footer: `${config.botName} • setmenu`,
         title: '🎨 Pilih Variant Menu',
         buttonText: '🎨 Pilih Variant',
-        sections: [{ title: `Daftar Variant (v1–v${MAX_VARIANT})`, rows }],
+        sections: [{ title: `Daftar Variant (v1–v11, v21)`, rows }],
         headerImage: null
       }),
       interactiveSendOptions(ctx.chat)
@@ -102,8 +105,8 @@ async function handler(ctx) {
 }
 
 function ensureHandlers() {
-  for (let i = 1; i <= MAX_VARIANT; i++) {
-    onRichReply(`setmenu:v${i}`, (c) => { setGlobal('menuVariant', String(i)); c.reply(`✅ Menu → V${i}`) })
+  for (const id of VARIANT_IDS) {
+    onRichReply(`setmenu:v${id}`, (c) => { setGlobal('menuVariant', String(id)); c.reply(`✅ Menu → V${id}`) })
   }
 }
 ensureHandlers()

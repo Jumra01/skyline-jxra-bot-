@@ -227,6 +227,17 @@ export default {
     },
   },
 
+  /* ── UI / MENU ── */
+  ui: {
+    menuVariant: 21,            // default menu (1-11 + 21). 21 = Hoshino v21
+    menuCode: 'SKYLINE',       // kode copy untuk limited_time_offer (v21)
+    // Header lokasi pemula (default Indonesia/Surabaya)
+    menuLocation: {
+      lat: -7.2575, long: 112.7521,
+      name: 'skyline-JXRA', address: 'Surabaya, Jawa Timur, Indonesia 🇮🇩'
+    }
+  },
+
   /* ── PESAN DEFAULT ── */
   messages: {
     wait: '⏳ Tunggu sebentar ya, Kak...',
