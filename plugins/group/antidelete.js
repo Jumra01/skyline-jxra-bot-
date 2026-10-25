@@ -23,6 +23,10 @@ const MAX_CACHE = 100
 const TTL = 30 * 60 * 1000
 const DOWNLOAD_TIMEOUT = 20_000
 
+// Kirim mentah tanpa reply-style global (`.setreply`) — kalau dibungkus varian
+// v9, seluruh teks ikut di-bold-kan Unicode, jadi notifikasi ini jadi aneh.
+const SEND_OPTS = { noStyle: true }
+
 // Batas ukuran media yang mau dikirim ulang (byte).
 const MAX_BYTES = {
   image: 16 * 1024 * 1024,
@@ -206,13 +210,13 @@ async function resendMedia(client, chat, entry, deleter) {
   const caption = entry.text ? `${header}\n📝 Caption:\n${entry.text}` : `${header}\n📎 (${kindLabel(kind)} tanpa teks)`
 
   if (kind === 'image') {
-    await client.message.send(chat, { type: 'image', media: buffer, mimetype: mimetype || 'image/jpeg', caption })
+    await client.message.send(chat, { type: 'image', media: buffer, mimetype: mimetype || 'image/jpeg', caption }, SEND_OPTS)
   } else if (kind === 'video') {
-    await client.message.send(chat, { type: 'video', media: buffer, mimetype: mimetype || 'video/mp4', caption })
+    await client.message.send(chat, { type: 'video', media: buffer, mimetype: mimetype || 'video/mp4', caption }, SEND_OPTS)
   } else if (kind === 'sticker') {
     // Stiker tidak punya caption — kirim keterangan dulu, lalu stikernya.
-    await client.message.send(chat, `${header}\n📎 Stiker dari ${String(entry.name || '').trim() || `@${entry.sender}`}`)
-    await client.message.send(chat, { type: 'sticker', media: buffer, mimetype: 'image/webp' })
+    await client.message.send(chat, `${header}\n📎 Stiker dari ${String(entry.name || '').trim() || `@${entry.sender}`}`, SEND_OPTS)
+    await client.message.send(chat, { type: 'sticker', media: buffer, mimetype: 'image/webp' }, SEND_OPTS)
   } else if (kind === 'audio') {
     await client.message.send(chat, {
       type: 'audio',
@@ -220,7 +224,7 @@ async function resendMedia(client, chat, entry, deleter) {
       mimetype: mimetype || 'audio/ogg; codecs=opus',
       ptt: Boolean(node.ptt),
       caption,
-    })
+    }, SEND_OPTS)
   } else if (kind === 'document') {
     await client.message.send(chat, {
       type: 'document',
@@ -228,7 +232,7 @@ async function resendMedia(client, chat, entry, deleter) {
       mimetype: mimetype || 'application/octet-stream',
       fileName: String(node.fileName || `pesan-dihapus-${Date.now()}`),
       caption,
-    })
+    }, SEND_OPTS)
   } else {
     return false
   }
@@ -277,7 +281,7 @@ addProtocolHook('antidelete', async (client, event) => {
     : `(${kindLabel(entry.kind)} tanpa teks)`
 
   try {
-    await client.message.send(chat, `${headerFor(entry, deleter)}\n📝 Isi pesan:\n${isi}`)
+    await client.message.send(chat, `${headerFor(entry, deleter)}\n📝 Isi pesan:\n${isi}`, SEND_OPTS)
   } catch (err) {
     logger.warn({ err: String(err?.message || err) }, '[Antidelete] gagal kirim ulang')
   }
