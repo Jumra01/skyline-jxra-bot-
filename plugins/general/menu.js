@@ -13,7 +13,7 @@ import config from '../../config.js'
 import { listFeatures } from '../loader.js'
 import { totalUsers, getBalance } from '../../core/database.js'
 import { getCharacter } from '../../core/rpg.js'
-import { richList, interactiveSendOptions } from '../../lib/richMessage.js'
+import { richList, richButtons, interactiveSendOptions } from '../../lib/richMessage.js'
 import { logger } from '../../core/logger.js'
 import { onRichReply } from '../../handlers/messageHandler.js'
 import { getGlobal } from '../../core/groupSettings.js'
@@ -291,6 +291,16 @@ function absPath(rel) {
   return path.isAbsolute(rel) ? rel : path.join(process.cwd(), rel)
 }
 
+/* ═══════════ Helper log error ═══════════
+ * `logger` cuma mencetak `err.message` (stack dibuang) — padahal lokasi
+ * kegagalan menu (ffprobe / transcode / upload / sharp / kirim kartu) tidak
+ * terlihat tanpa stack. Dua helper ini dipakai di semua titik tangkap:
+ *   errMsg(err)   → pesan error (throw bisa berupa string, bukan Error)
+ *   errStack(err) → 3 baris stack pertama
+ */
+const errMsg = (err) => String(err?.message ?? err)
+const errStack = (err) => String(err?.stack ?? '').split('\n').slice(1, 4).join(' | ')
+
 /** Cari file thumb mana yang ada (video/gif/foto, terbaru menang) */
 function findThumb(base) {
   const candidates = [...VIDEO_EXTS, GIF_EXT, ...IMAGE_EXTS].map((e) => base + e)
@@ -301,10 +311,20 @@ function findThumb(base) {
       if (!best || st.mtimeMs > best.mtimeMs) best = { rel, mtimeMs: st.mtimeMs }
     } catch {}
   }
-  return best?.rel ?? null
+  if (!best) {
+    // Tanpa log, header menu hilang diam-diam (kartu jatuh ke fallback).
+    logger.warn(
+      { base, candidates: candidates.length },
+      `[MENU] thumb tidak ditemukan (${base}.*) — header kartu tidak dipasang`
+    )
+    return null
+  }
+  logger.debug({ rel: best.rel }, `[MENU] thumb dipakai: ${best.rel}`)
+  return best.rel
 }
 
-/** ffprobe: dimensi/durasi/codec video (auto-detect) */
+/** ffprobe: dimensi/durasi/codec video (auto-detect). Tidak pernah melempar —
+ * gagal probe hanya berarti "pakai default", tapi penyebabnya tetap dicatat. */
 function probeVideo(p) {
   const r = spawnSync(
     'ffprobe',
@@ -312,15 +332,30 @@ function probeVideo(p) {
      'stream=codec_name,width,height:format=duration', '-of', 'json', p],
     { encoding: 'utf8', timeout: 15000 }
   )
-  const j = JSON.parse(r.stdout || '{}')
+  let j = {}
+  try {
+    j = JSON.parse(r.stdout || '{}')
+  } catch (err) {
+    logger.warn(
+      { err: errMsg(err), file: p, stdout: String(r.stdout || '').slice(0, 200), stderr: String(r.stderr || '').slice(0, 300) },
+      '[MENU] ffprobe: output bukan JSON — pakai dimensi default'
+    )
+  }
   const s = j.streams?.[0] || {}
   const dur = s.duration ?? j.format?.duration
-  return {
+  const out = {
     codec: s.codec_name || '',
     width: Number(s.width) || 1080,
     height: Number(s.height) || 1080,
     seconds: Math.max(1, Math.round(Number(dur) || 5))
   }
+  if (r.error || r.status !== 0) {
+    logger.warn(
+      { file: p, status: r.status, spawnError: String(r.error || ''), stderr: String(r.stderr || '').slice(0, 300) },
+      '[MENU] ffprobe gagal — pakai dimensi default'
+    )
+  }
+  return out
 }
 
 /** Ambil 1 frame video → jpegThumbnail (preview sebelum play) */
@@ -332,7 +367,14 @@ function videoThumbFrame(p) {
      '-q:v', '6', '-f', 'image2', '-vcodec', 'mjpeg', 'pipe:1'],
     { maxBuffer: 8 << 20, timeout: 20000 }
   )
-  return r.status === 0 && r.stdout?.length ? Buffer.from(r.stdout) : undefined
+  if (r.status !== 0 || !r.stdout?.length) {
+    logger.debug(
+      { file: p, status: r.status, spawnError: String(r.error || ''), stderr: String(r.stderr || '').slice(0, 300) },
+      '[MENU] frame thumbnail video gagal — header tanpa jpegThumbnail'
+    )
+    return undefined
+  }
+  return Buffer.from(r.stdout)
 }
 
 /** Transcode ke mp4 h264 (720p cap, tanpa upscale) biar pasti bisa diputar */
@@ -347,7 +389,11 @@ function transcodeMp4(p) {
     { timeout: 120000 }
   )
   if (r.status !== 0 || !fs.existsSync(out) || fs.statSync(out).size === 0) {
-    throw new Error(r.stderr?.toString().slice(0, 200) || 'transcode ffmpeg gagal')
+    // Sertakan penyebab asli: ffmpeg tidak ada, codec ditolak, dsb.
+    throw new Error(
+      `transcode ffmpeg gagal (status=${r.status}${r.error ? `, spawn=${r.error}` : ''}): ` +
+      `${String(r.stderr || '(tanpa stderr)').slice(0, 200)}`
+    )
   }
   return out
 }
@@ -374,15 +420,26 @@ function baseMediaFields(media) {
  * dengan gifPlayback. Return null kalau gak ada file / gagal → fallback kartu.
  */
 async function uploadHeaderMedia(client, relPath) {
+  if (!relPath) {
+    logger.debug('[MENU] upload header: relPath kosong — tanpa header')
+    return null
+  }
+  const p = absPath(relPath)
+  // `stage` dipakai di catch: tanpa ini konsol cuma bilang "gagal upload"
+  // tanpa tahu sedang probe / transcode / sharp / upload CDN.
+  let stage = 'cek-file'
   try {
-    if (!relPath) return null
-    const p = absPath(relPath)
-    if (!fs.existsSync(p)) return null
+    if (!fs.existsSync(p)) {
+      logger.warn({ file: relPath }, '[MENU] upload header GAGAL (cek-file): file tidak ada')
+      return null
+    }
     const ext = path.extname(p).toLowerCase()
 
     if (ext === GIF_EXT || VIDEO_EXTS.includes(ext)) {
       const isGif = ext === GIF_EXT
+      stage = 'probe'
       let meta = probeVideo(p)
+      stage = 'baca-file'
       let uploadBuf = fs.readFileSync(p)
       let mimetype = isGif ? 'image/gif' : ext === '.webm' ? 'video/webm' : 'video/mp4'
 
@@ -392,9 +449,16 @@ async function uploadHeaderMedia(client, relPath) {
           meta.width % 2 === 0 && meta.height % 2 === 0 &&
           uploadBuf.length <= MAX_VIDEO_MB * 1024 * 1024
         if (!rawOk) {
+          stage = 'transcode'
+          logger.debug(
+            { file: relPath, codec: meta.codec, w: meta.width, h: meta.height, size: uploadBuf.length },
+            '[MENU] video tidak aman diupload mentah — transcode ke mp4 h264'
+          )
           const tmp = transcodeMp4(p)
           try {
+            stage = 'baca-file'
             uploadBuf = fs.readFileSync(tmp)
+            stage = 'probe'
             meta = probeVideo(tmp)
             mimetype = 'video/mp4'
           } finally {
@@ -407,9 +471,15 @@ async function uploadHeaderMedia(client, relPath) {
         }
       }
 
+      stage = 'upload'
       const type = isGif ? 'gif' : 'video'
       const media = await client.message.upload(uploadBuf, { type, mimetype })
+      stage = 'frame'
       const frame = videoThumbFrame(p)
+      logger.debug(
+        { file: relPath, kind: 'videoMessage', mimetype, size: uploadBuf.length, frame: Boolean(frame) },
+        '[MENU] upload header OK (video)'
+      )
       return {
         kind: 'videoMessage',
         ...baseMediaFields(media),
@@ -423,6 +493,7 @@ async function uploadHeaderMedia(client, relPath) {
     }
 
     // Foto — rasio auto-detect (EXIF rotate), tanpa crop 1:1
+    stage = 'sharp'
     const sharp = (await import('sharp')).default
     const buf = await sharp(p)
       .rotate()
@@ -430,7 +501,12 @@ async function uploadHeaderMedia(client, relPath) {
       .jpeg({ quality: 85 })
       .toBuffer()
     const out = await sharp(buf).metadata()
+    stage = 'upload'
     const media = await client.message.upload(buf, { type: 'image', mimetype: 'image/jpeg' })
+    logger.debug(
+      { file: relPath, kind: 'imageMessage', size: buf.length, w: out.width, h: out.height },
+      '[MENU] upload header OK (image)'
+    )
     return {
       kind: 'imageMessage',
       ...baseMediaFields(media),
@@ -439,7 +515,10 @@ async function uploadHeaderMedia(client, relPath) {
       height: out.height ?? 1024
     }
   } catch (err) {
-    logger.warn({ err: err.message, file: relPath }, '⚠️ Gagal upload header thumb menu')
+    logger.warn(
+      { err: errMsg(err), stack: errStack(err), stage, file: relPath },
+      `[MENU] upload header thumb GAGAL (tahap: ${stage}) — header kartu tidak dipasang`
+    )
     return null
   }
 }
@@ -448,61 +527,102 @@ function footer() {
   return `Pilih tombol dibawah • Made with ♡ by ${config.botName}`
 }
 
-async function sendHome(ctx) {
-  const grouped = regroup()
-  const rows = orderedEntries(grouped).map(([tag, list]) => ({
-    id: `menu:cat:${tag}`,
-    title: label(tag),
-    description: `${CATEGORY_INFO[tag] || ''} • ${list.length} fitur`
-  }))
-
-  const extraButtons = [{ id: 'menu:all', text: '📜 Semua Fitur' }]
-  if (config.reactChannel?.enabled && config.reactChannel?.dedicatedChannelUrl) {
-    extraButtons.push({ url: config.reactChannel.dedicatedChannelUrl, text: '📱 Channel' })
-  }
-
-  // Header media — foto ATAU video auto-detect.
-  // JANGAN fallback ke kartu externalAdReply: bikin pesan hilang di WA biasa.
-  const headerImage = await uploadHeaderMedia(ctx.client, findThumb(THUMB_MENU))
-
-  await ctx.client.message.send(
-    ctx.chat,
-    richList({
-      text: overviewText(ctx, grouped),
-      footer: footer(),
-      title: `📂 ${config.botName} • Kategori`,
-      buttonText: 'Pilih Kategori',
-      sections: [{ title: `${rows.length} kategori`, rows }],
-      extraButtons,
-      headerImage
-    }),
-    interactiveSendOptions(ctx.chat)
+/** Log kegagalan kirim menu: sebutkan varian, chat, dan penyebab + stack. */
+function logMenuFail(where, ctx, err, extra = {}) {
+  logger.error(
+    {
+      err: errMsg(err),
+      stack: errStack(err),
+      chat: ctx?.chat,
+      tipe: ctx?.isGroup ? 'GRUP' : 'PRIV',
+      ...extra,
+    },
+    `[MENU] ${where} GAGAL — ${errMsg(err)}`
   )
 }
 
+async function sendHome(ctx) {
+  try {
+    const grouped = regroup()
+    const rows = orderedEntries(grouped).map(([tag, list]) => ({
+      id: `menu:cat:${tag}`,
+      title: label(tag),
+      description: `${CATEGORY_INFO[tag] || ''} • ${list.length} fitur`
+    }))
+
+    const extraButtons = [{ id: 'menu:all', text: '📜 Semua Fitur' }]
+    if (config.reactChannel?.enabled && config.reactChannel?.dedicatedChannelUrl) {
+      extraButtons.push({ url: config.reactChannel.dedicatedChannelUrl, text: '📱 Channel' })
+    }
+
+    // Header media — foto ATAU video auto-detect.
+    // JANGAN fallback ke kartu externalAdReply: bikin pesan hilang di WA biasa.
+    const headerImage = await uploadHeaderMedia(ctx.client, findThumb(THUMB_MENU))
+
+    logger.debug(
+      { kategori: rows.length, fitur: Object.values(grouped).reduce((n, l) => n + l.length, 0), header: Boolean(headerImage) },
+      '[MENU] sendHome (v2) — kirim richList'
+    )
+
+    await ctx.client.message.send(
+      ctx.chat,
+      richList({
+        text: overviewText(ctx, grouped),
+        footer: footer(),
+        title: `📂 ${config.botName} • Kategori`,
+        buttonText: 'Pilih Kategori',
+        sections: [{ title: `${rows.length} kategori`, rows }],
+        extraButtons,
+        headerImage
+      }),
+      interactiveSendOptions(ctx.chat)
+    )
+    logger.debug({ chat: ctx.chat }, '[MENU] sendHome (v2) terkirim')
+  } catch (err) {
+    logMenuFail('sendHome v2', ctx, err)
+    throw err
+  }
+}
+
 async function sendCategory(ctx, tag) {
-  // Header media kategori — pakai thumb menu utama (foto/video auto-detect)
-  const headerImage = await uploadHeaderMedia(ctx.client, findThumb(THUMB_MENU))
-  await ctx.replyButtons({
-    text: categoryText(ctx, tag, regroup()),
-    footer: footer(),
-    buttons: [
-      { id: 'menu:home', text: '🔙 Menu Utama' },
-      { id: 'menu:all', text: '📜 Semua Fitur' }
-    ],
-    headerImage
-  })
+  try {
+    // Header media kategori — pakai thumb menu utama (foto/video auto-detect)
+    const headerImage = await uploadHeaderMedia(ctx.client, findThumb(THUMB_MENU))
+    const list = regroup()[tag] ?? []
+    logger.debug({ kategori: tag, fitur: list.length, header: Boolean(headerImage) }, '[MENU] sendCategory — kirim replyButtons')
+    await ctx.replyButtons({
+      text: categoryText(ctx, tag, regroup()),
+      footer: footer(),
+      buttons: [
+        { id: 'menu:home', text: '🔙 Menu Utama' },
+        { id: 'menu:all', text: '📜 Semua Fitur' }
+      ],
+      headerImage
+    })
+    logger.debug({ chat: ctx.chat, kategori: tag }, '[MENU] sendCategory terkirim')
+  } catch (err) {
+    logMenuFail(`sendCategory "${tag}"`, ctx, err)
+    throw err
+  }
 }
 
 async function sendAll(ctx) {
-  const headerImage = await uploadHeaderMedia(ctx.client, findThumb(THUMB_ALL))
-
-  await ctx.replyButtons({
-    text: allText(ctx, regroup()),
-    footer: footer(),
-    buttons: [{ id: 'menu:home', text: '🔙 Menu Utama' }],
-    headerImage
-  })
+  try {
+    const headerImage = await uploadHeaderMedia(ctx.client, findThumb(THUMB_ALL))
+    const grouped = regroup()
+    const total = Object.values(grouped).reduce((n, l) => n + l.length, 0)
+    logger.debug({ kategori: Object.keys(grouped).length, fitur: total, header: Boolean(headerImage) }, '[MENU] sendAll — kirim replyButtons')
+    await ctx.replyButtons({
+      text: allText(ctx, regroup()),
+      footer: footer(),
+      buttons: [{ id: 'menu:home', text: '🔙 Menu Utama' }],
+      headerImage
+    })
+    logger.debug({ chat: ctx.chat }, '[MENU] sendAll terkirim')
+  } catch (err) {
+    logMenuFail('sendAll', ctx, err)
+    throw err
+  }
 }
 
 /* ═══════════ Handler tombol ═══════════ */
@@ -544,169 +664,193 @@ function getMenuVariant() {
 
 // Varian yang butuh render khusus (selain v2 standar)
 async function sendHomeVariant(ctx, v) {
-  const grouped = regroup()
-  const text = overviewText(ctx, grouped)
-  const rows = orderedEntries(grouped).map(([tag, list]) => ({
-    id: `menu:cat:${tag}`,
-    title: label(tag),
-    description: `${CATEGORY_INFO[tag] || ''} • ${list.length} fitur`
-  }))
-  const extraButtons = [{ id: 'menu:all', text: '📜 Semua Fitur' }]
-  if (config.reactChannel?.enabled && config.reactChannel?.dedicatedChannelUrl) {
-    extraButtons.push({ url: config.reactChannel.dedicatedChannelUrl, text: '📱 Channel' })
-  }
-  const headerImage = await uploadHeaderMedia(ctx.client, findThumb(THUMB_MENU))
+  try {
+    const grouped = regroup()
+    const text = overviewText(ctx, grouped)
+    const rows = orderedEntries(grouped).map(([tag, list]) => ({
+      id: `menu:cat:${tag}`,
+      title: label(tag),
+      description: `${CATEGORY_INFO[tag] || ''} • ${list.length} fitur`
+    }))
+    const extraButtons = [{ id: 'menu:all', text: '📜 Semua Fitur' }]
+    if (config.reactChannel?.enabled && config.reactChannel?.dedicatedChannelUrl) {
+      extraButtons.push({ url: config.reactChannel.dedicatedChannelUrl, text: '📱 Channel' })
+    }
+    const headerImage = await uploadHeaderMedia(ctx.client, findThumb(THUMB_MENU))
+    logger.debug(
+      { varian: v, kategori: rows.length, header: Boolean(headerImage) },
+      `[MENU] sendHomeVariant — render v${v}`
+    )
 
-  switch (v) {
-    case 1:
-      // Simple: teks biasa tanpa kartu interaktif
-      await ctx.reply(text)
-      return
-    case 3:
-    case 6:
-      // Document: kirim thumbnail menu sebagai dokumen + caption menu
-      {
-        let docBuf = null
-        try { docBuf = fs.readFileSync(absPath(THUMB_MENU + '.jpg')) } catch {}
-        await ctx.client.message.send(ctx.chat, {
-          type: 'document', media: docBuf || Buffer.from(''),
-          mimetype: 'image/jpeg', fileName: `${config.botName}-menu.jpg`,
-          caption: text
-        }, interactiveSendOptions(ctx.chat))
-      }
-      return
-    case 4:
-      // Video Interactive: richButtons dengan header video + tombol saluran/kategori
-      await ctx.client.message.send(ctx.chat, richButtons({
-        text,
-        footer: footer(),
-        buttons: [
-          { id: 'menu:all', text: '📜 Semua Fitur' },
-          ...(config.reactChannel?.dedicatedChannelUrl
-            ? [{ url: config.reactChannel.dedicatedChannelUrl, text: '📱 Channel' }]
-            : []),
-          { id: 'menu:home', text: '🏠 Menu Utama' }
-        ],
-        headerImage
-      }), interactiveSendOptions(ctx.chat))
-      return
-    case 5:
-      // Button: richButtons (tombol quick_reply, tanpa single_select list)
-      await ctx.client.message.send(ctx.chat, richButtons({
-        text,
-        footer: footer(),
-        buttons: [
-          { id: 'menu:all', text: '📜 Semua Fitur' },
-          { id: 'menu:home', text: '🏠 Menu Utama' },
-          ...(config.reactChannel?.dedicatedChannelUrl
-            ? [{ url: config.reactChannel.dedicatedChannelUrl, text: '📱 Channel' }]
-            : [])
-        ],
-        headerImage
-      }), interactiveSendOptions(ctx.chat))
-      return
-    case 7:
-      // Carousel: zapo mendukung carouselMessage (HSCROLL_CARDS)
-      {
-        const cards = orderedEntries(grouped).slice(0, 10).map(([tag, list]) => ({
-          body: { text: `${emojiOf(tag)} ${tag.toUpperCase()}\n${list.slice(0, 5).map((f) => `• ${config.mainPrefix}${f.name}`).join('\n')}${list.length > 5 ? `\n... +${list.length - 5}` : ''}` },
-          footer: { text: `${list.length} fitur` },
-          nativeFlowMessage: {
-            messageVersion: 1,
-            buttons: [{ name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: '📂 Buka', id: `menu:cat:${tag}` }) }]
+    switch (v) {
+      case 1:
+        // Simple: teks biasa tanpa kartu interaktif
+        await ctx.reply(text)
+        return
+      case 3:
+      case 6:
+        // Document: kirim thumbnail menu sebagai dokumen + caption menu.
+        // Pakai findThumb (auto-detect foto/video terbaru) — dulu hardcoded
+        // `.jpg`, jadi kalau hanya ada .png/.mp4, docBuf kosong → dokumen
+        // kosong yang ditolak WA tanpa penjelasan di konsol.
+        {
+          const docRel = findThumb(THUMB_MENU) || THUMB_MENU + '.jpg'
+          let docBuf = null
+          let docErr = null
+          try { docBuf = fs.readFileSync(absPath(docRel)) } catch (err) { docErr = err }
+          if (!docBuf) {
+            logger.warn(
+              { file: docRel, err: docErr ? errMsg(docErr) : 'file tidak ada' },
+              `[MENU] v${v} dokumen kosong — caption saja yang dikirim`
+            )
           }
-        }))
-        await ctx.client.message.send(ctx.chat, {
-          viewOnceMessage: {
-            message: {
-              messageContextInfo: { deviceListMetadataVersion: 2, deviceListMetadata: {} },
-              interactiveMessage: {
-                body: { text },
-                footer: { text: footer() },
-                carouselMessage: {
-                  cards,
-                  messageVersion: 1,
-                  carouselCardType: 1
+          await ctx.client.message.send(ctx.chat, {
+            type: 'document', media: docBuf || Buffer.from(''),
+            mimetype: 'image/jpeg', fileName: `${config.botName}-menu.jpg`,
+            caption: text
+          }, interactiveSendOptions(ctx.chat))
+        }
+        return
+      case 4:
+        // Video Interactive: richButtons dengan header video + tombol saluran/kategori
+        await ctx.client.message.send(ctx.chat, richButtons({
+          text,
+          footer: footer(),
+          buttons: [
+            { id: 'menu:all', text: '📜 Semua Fitur' },
+            ...(config.reactChannel?.dedicatedChannelUrl
+              ? [{ url: config.reactChannel.dedicatedChannelUrl, text: '📱 Channel' }]
+              : []),
+            { id: 'menu:home', text: '🏠 Menu Utama' }
+          ],
+          headerImage
+        }), interactiveSendOptions(ctx.chat))
+        return
+      case 5:
+        // Button: richButtons (tombol quick_reply, tanpa single_select list)
+        await ctx.client.message.send(ctx.chat, richButtons({
+          text,
+          footer: footer(),
+          buttons: [
+            { id: 'menu:all', text: '📜 Semua Fitur' },
+            { id: 'menu:home', text: '🏠 Menu Utama' },
+            ...(config.reactChannel?.dedicatedChannelUrl
+              ? [{ url: config.reactChannel.dedicatedChannelUrl, text: '📱 Channel' }]
+              : [])
+          ],
+          headerImage
+        }), interactiveSendOptions(ctx.chat))
+        return
+      case 7:
+        // Carousel: zapo mendukung carouselMessage (HSCROLL_CARDS)
+        {
+          const cards = orderedEntries(grouped).slice(0, 10).map(([tag, list]) => ({
+            body: { text: `${emojiOf(tag)} ${tag.toUpperCase()}\n${list.slice(0, 5).map((f) => `• ${config.mainPrefix}${f.name}`).join('\n')}${list.length > 5 ? `\n... +${list.length - 5}` : ''}` },
+            footer: { text: `${list.length} fitur` },
+            nativeFlowMessage: {
+              messageVersion: 1,
+              buttons: [{ name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: '📂 Buka', id: `menu:cat:${tag}` }) }]
+            }
+          }))
+          await ctx.client.message.send(ctx.chat, {
+            viewOnceMessage: {
+              message: {
+                messageContextInfo: { deviceListMetadataVersion: 2, deviceListMetadata: {} },
+                interactiveMessage: {
+                  body: { text },
+                  footer: { text: footer() },
+                  carouselMessage: {
+                    cards,
+                    messageVersion: 1,
+                    carouselCardType: 1
+                  }
                 }
               }
             }
-          }
-        }, interactiveSendOptions(ctx.chat))
-      }
-      return
-    case 8:
-      // Minimalist: teks ringkas (12 baris pertama)
-      await ctx.reply(text.split('\n').slice(0, 12).join('\n'))
-      return
-    case 9:
-      // NativeFlow: richButtons dengan select kategori + tombol owner/saluran
-      await ctx.client.message.send(ctx.chat, richButtons({
-        text,
-        footer: footer(),
-        buttons: [
-          {
-            // single_select kategori disisipkan via nativeFlow manual
-            id: 'menu:home',
-            text: '📂 Kategori'
-          },
-          { id: 'menu:all', text: '📜 Semua Fitur' },
-          ...(config.reactChannel?.dedicatedChannelUrl
-            ? [{ url: config.reactChannel.dedicatedChannelUrl, text: '📱 Channel' }]
-            : [])
-        ],
-        headerImage
-      }), interactiveSendOptions(ctx.chat))
-      return
-    case 10:
-      // Product Catalog: fallback richButtons (productMessage tidak tersedia di zapo)
-      await ctx.client.message.send(ctx.chat, richButtons({
-        text,
-        footer: footer(),
-        buttons: [
-          { id: 'menu:all', text: '📜 Semua Fitur' },
-          { id: 'menu:home', text: '🏠 Menu Utama' }
-        ],
-        headerImage
-      }), interactiveSendOptions(ctx.chat))
-      return
-    case 11:
-      // Fake location header: nama bot + durasi aktif + nama user
-      const v11Bot = config.botName || 'skyline-JXRA'
-      const v11Uptime = fmtUptime(process.uptime() * 1000)
-      const v11User = ctx.pushName || 'Owner'
-      // Header: pin lokasi palsu dengan label bot, durasi, user.
-      // Kirim tanpa replyStyle (noStyle) supaya client WA nggak coba pasang
-      // contextInfo ke pesan lokasi yang tidak mendukungnya.
-      await ctx.client.message.send(ctx.chat, {
-        type: 'location',
-        degreesLatitude: -6.2088,
-        degreesLongitude: 106.8456,
-        name: `${v11Bot} · Aktif ±${v11Uptime}`,
-        address: `User: ${v11User}`
-      }, { ...interactiveSendOptions(ctx.chat), noStyle: true })
-      // Body: daftar kategori menu (teks + tombol)
-      const grouped = regroup()
-      const v11Rows = orderedEntries(grouped).map(([tag, list]) => ({
-        id: `menu:cat:${tag}`,
-        title: label(tag),
-        description: `${CATEGORY_INFO[tag] || ''} • ${list.length} fitur`
-      }))
-      const v11Extra = [{ id: 'menu:all', text: '📜 Semua Fitur' }]
-      if (config.reactChannel?.enabled && config.reactChannel?.dedicatedChannelUrl) {
-        v11Extra.push({ url: config.reactChannel.dedicatedChannelUrl, text: '📱 Channel' })
-      }
-      await ctx.client.message.send(ctx.chat, richList({
-        text: overviewText(ctx, grouped),
-        footer: footer(),
-        title: `📂 ${v11Bot} • Kategori`,
-        buttonText: 'Pilih Kategori',
-        sections: [{ title: `${v11Rows.length} kategori`, rows: v11Rows }],
-        extraButtons: v11Extra,
-        headerImage: null
-      }), interactiveSendOptions(ctx.chat))
-      return
-    default:
-      return sendHome(ctx)
+          }, interactiveSendOptions(ctx.chat))
+        }
+        return
+      case 8:
+        // Minimalist: teks ringkas (12 baris pertama)
+        await ctx.reply(text.split('\n').slice(0, 12).join('\n'))
+        return
+      case 9:
+        // NativeFlow: richButtons dengan select kategori + tombol owner/saluran
+        await ctx.client.message.send(ctx.chat, richButtons({
+          text,
+          footer: footer(),
+          buttons: [
+            {
+              // single_select kategori disisipkan via nativeFlow manual
+              id: 'menu:home',
+              text: '📂 Kategori'
+            },
+            { id: 'menu:all', text: '📜 Semua Fitur' },
+            ...(config.reactChannel?.dedicatedChannelUrl
+              ? [{ url: config.reactChannel.dedicatedChannelUrl, text: '📱 Channel' }]
+              : [])
+          ],
+          headerImage
+        }), interactiveSendOptions(ctx.chat))
+        return
+      case 10:
+        // Product Catalog: fallback richButtons (productMessage tidak tersedia di zapo)
+        await ctx.client.message.send(ctx.chat, richButtons({
+          text,
+          footer: footer(),
+          buttons: [
+            { id: 'menu:all', text: '📜 Semua Fitur' },
+            { id: 'menu:home', text: '🏠 Menu Utama' }
+          ],
+          headerImage
+        }), interactiveSendOptions(ctx.chat))
+        return
+      case 11:
+        // Fake location header: nama bot + durasi aktif + nama user
+        const v11Bot = config.botName || 'skyline-JXRA'
+        const v11Uptime = fmtUptime(process.uptime() * 1000)
+        const v11User = ctx.pushName || 'Owner'
+        // Header: pin lokasi palsu dengan label bot, durasi, user.
+        // Kirim tanpa replyStyle (noStyle) supaya client WA nggak coba pasang
+        // contextInfo ke pesan lokasi yang tidak mendukungnya.
+        await ctx.client.message.send(ctx.chat, {
+          type: 'location',
+          degreesLatitude: -6.2088,
+          degreesLongitude: 106.8456,
+          name: `${v11Bot} · Aktif ±${v11Uptime}`,
+          address: `User: ${v11User}`
+        }, { ...interactiveSendOptions(ctx.chat), noStyle: true })
+        // Body: daftar kategori menu (teks + tombol)
+        // Pakai `grouped` dari luar (jangan deklarasi ulang `const grouped` di
+        // sini): semua case berbagi satu block scope, jadi deklarasi di case
+        // 11 bikin `grouped` di case 7 kena TDZ (Cannot access before
+        // initialization) — v7 carousel gagal total tanpa error yang jelas.
+        const v11Rows = orderedEntries(grouped).map(([tag, list]) => ({
+          id: `menu:cat:${tag}`,
+          title: label(tag),
+          description: `${CATEGORY_INFO[tag] || ''} • ${list.length} fitur`
+        }))
+        const v11Extra = [{ id: 'menu:all', text: '📜 Semua Fitur' }]
+        if (config.reactChannel?.enabled && config.reactChannel?.dedicatedChannelUrl) {
+          v11Extra.push({ url: config.reactChannel.dedicatedChannelUrl, text: '📱 Channel' })
+        }
+        await ctx.client.message.send(ctx.chat, richList({
+          text: overviewText(ctx, grouped),
+          footer: footer(),
+          title: `📂 ${v11Bot} • Kategori`,
+          buttonText: 'Pilih Kategori',
+          sections: [{ title: `${v11Rows.length} kategori`, rows: v11Rows }],
+          extraButtons: v11Extra,
+          headerImage: null
+        }), interactiveSendOptions(ctx.chat))
+        return
+      default:
+        return sendHome(ctx)
+    }
+    logger.debug({ varian: v }, `[MENU] sendHomeVariant v${v} terkirim`)
+  } catch (err) {
+    logMenuFail(`sendHomeVariant v${v}`, ctx, err, { varian: v })
+    throw err
   }
 }
 
@@ -720,6 +864,12 @@ async function handler(ctx) {
     if (sub) {
       const grouped = regroup()
       if (!grouped[sub]) {
+        // Kategori tidak dikenal sekarang dicatat: kalau user salah ketik
+        // atau kategori baru belum masuk CATEGORY_ORDER, konsol langsung tahu.
+        logger.warn(
+          { sub, kategori: orderedEntries(grouped).map(([t]) => t) },
+          `[MENU] kategori "${sub}" tidak dikenal — daftar tersedia dikirim ke user`
+        )
         await ctx.reply(
           `❌ Kategori "${sub}" gak ada.\nKategori: ${orderedEntries(grouped).map(([t]) => t).join(', ')}`
         )
@@ -729,6 +879,7 @@ async function handler(ctx) {
     }
 
     const v = getMenuVariant()
+    logger.info(`[MENU] varian aktif v${v} (menuVariant=${getGlobal('menuVariant') ?? '-'}, config=${config.ui?.menuVariant ?? '-'})`)
     if (v === 2) return sendHome(ctx)
     return sendHomeVariant(ctx, v)
   }
