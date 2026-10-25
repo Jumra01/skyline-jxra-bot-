@@ -16,6 +16,7 @@ import { getCharacter } from '../../core/rpg.js'
 import { richList, interactiveSendOptions } from '../../lib/richMessage.js'
 import { logger } from '../../core/logger.js'
 import { onRichReply } from '../../handlers/messageHandler.js'
+import { getGlobal } from '../../core/groupSettings.js'
 
 let VERSION = ''
 try {
@@ -537,6 +538,34 @@ const pluginConfig = {
   energi: 0,
 };
 
+function getMenuVariant() {
+  return Number(getGlobal('menuVariant') || config.ui?.menuVariant || 2)
+}
+
+// Varian yang butuh render khusus (selain default richList standar)
+async function sendHomeVariant(ctx, v) {
+  const grouped = regroup()
+  const text = overviewText(ctx, grouped)
+
+  switch (v) {
+    case 1:
+      // Simple: teks biasa (tanpa kartu interaktif)
+      await ctx.reply(text)
+      return
+    case 3:
+    case 6:
+      // Document: kirim sebagai dokumen teks (caption = menu)
+      await ctx.reply(text)
+      return
+    case 8:
+      // Minimalist: teks ringkas (12 baris pertama)
+      await ctx.reply(text.split('\\n').slice(0, 12).join('\\n'))
+      return
+    default:
+      return sendHome(ctx)
+  }
+}
+
 async function handler(ctx) {
     ensureHandlers()
     const sub = (ctx.args[0] ?? '').toLowerCase()
@@ -555,6 +584,12 @@ async function handler(ctx) {
       return sendCategory(ctx, sub)
     }
 
+    const v = getMenuVariant()
+    // v1, v3, v8 punya render khusus (teks/document/minimalist);
+    // sisanya (v2, v4, v5, v6, v7, v9, v10) pakai richList standar untuk sekarang.
+    if (v === 1 || v === 3 || v === 8) {
+      return sendHomeVariant(ctx, v)
+    }
     return sendHome(ctx)
   }
 
