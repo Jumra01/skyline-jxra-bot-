@@ -731,4 +731,4 @@ async function handler(ctx) {
     return sendHomeVariant(ctx, v)
   }
 
-export { pluginConfig as config, handler };
+export { pluginConfig as config, handler, sendHomeVariant, sendHome, sendCategory, sendAll };

@@ -118,6 +118,7 @@ export function totalUsers() {
 export function getBalance(jid) {
   touchUser(jid, null)
   const row = db.prepare('SELECT gold, xp, gems FROM users WHERE jid = ?').get(jid)
+  if (!row) return { gold: 0, xp: 0, gems: 0, emerald: getEmerald(jid) }
   return { gold: row.gold, xp: row.xp, gems: row.gems, emerald: getEmerald(jid) }
 }
 
