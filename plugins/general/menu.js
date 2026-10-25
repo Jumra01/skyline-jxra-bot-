@@ -569,29 +569,26 @@ async function sendHomeVariant(ctx, v) {
         let docBuf = null
         try { docBuf = fs.readFileSync(absPath(THUMB_MENU + '.jpg')) } catch {}
         await ctx.client.message.send(ctx.chat, {
-          document: docBuf || Buffer.from(''),
-          mimetype: 'image/jpeg',
-          fileName: `${config.botName}-menu.jpg`,
+          type: 'document', media: docBuf || Buffer.from(''),
+          mimetype: 'image/jpeg', fileName: `${config.botName}-menu.jpg`,
           caption: text
         }, interactiveSendOptions(ctx.chat))
       }
       return
     case 4:
       // Video Interactive: richButtons dengan header video + tombol saluran/kategori
-      await ctx.client.message.send(ctx.chat, {
-        ...richButtons({
-          text,
-          footer: footer(),
-          buttons: [
-            { id: 'menu:all', text: '📜 Semua Fitur' },
-            ...(config.reactChannel?.dedicatedChannelUrl
-              ? [{ url: config.reactChannel.dedicatedChannelUrl, text: '📱 Channel' }]
-              : []),
-            { id: 'menu:home', text: '🏠 Menu Utama' }
-          ],
-          headerImage
-        })
-      }, interactiveSendOptions(ctx.chat))
+      await ctx.client.message.send(ctx.chat, richButtons({
+        text,
+        footer: footer(),
+        buttons: [
+          { id: 'menu:all', text: '📜 Semua Fitur' },
+          ...(config.reactChannel?.dedicatedChannelUrl
+            ? [{ url: config.reactChannel.dedicatedChannelUrl, text: '📱 Channel' }]
+            : []),
+          { id: 'menu:home', text: '🏠 Menu Utama' }
+        ],
+        headerImage
+      }), interactiveSendOptions(ctx.chat))
       return
     case 5:
       // Button: richButtons (tombol quick_reply, tanpa single_select list)
@@ -622,7 +619,7 @@ async function sendHomeVariant(ctx, v) {
       return
     case 8:
       // Minimalist: teks ringkas (12 baris pertama)
-      await ctx.reply(text.split('\\n').slice(0, 12).join('\\n'))
+      await ctx.reply(text.split('\n').slice(0, 12).join('\n'))
       return
     case 9:
       // NativeFlow: richButtons dengan select kategori + tombol owner/saluran

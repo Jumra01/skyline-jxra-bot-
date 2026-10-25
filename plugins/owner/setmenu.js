@@ -9,16 +9,16 @@ import { richList, interactiveSendOptions } from '../../lib/richMessage.js'
 import { onRichReply } from '../../handlers/messageHandler.js'
 
 const VARIANTS = {
-  v1:  { id: 1,  name: 'Simple',              desc: 'Gambar biasa + caption menu (teks biasa kalau gambar kosong)' },
-  v2:  { id: 2,  name: 'Standard',            desc: 'Gambar + caption + contextInfo (default)' },
-  v3:  { id: 3,  name: 'Document',            desc: 'Document gambar + jpegThumbnail + caption menu' },
-  v4:  { id: 4,  name: 'Video Interactive',   desc: 'Header video (gif) + tombol saluran & kategori' },
-  v5:  { id: 5,  name: 'Button',              desc: 'Gambar + info bot + single_select kategori + quick_reply' },
-  v6:  { id: 6,  name: 'Document Premium',    desc: 'Document + jpegThumbnail banner + caption menu' },
-  v7:  { id: 7,  name: 'Carousel',            desc: 'Kartu geser per kategori' },
-  v8:  { id: 8,  name: 'Minimalist',          desc: 'Gambar + caption menu simpel' },
-  v9:  { id: 9,  name: 'NativeFlow',          desc: 'Interactive gambar + bottom_sheet + select kategori' },
-  v10: { id: 10, name: 'Product Catalog',     desc: 'Header product + footer info + quick_reply' }
+  v1:  { id: 1,  name: 'Simple',              desc: 'Teks biasa (tanpa kartu interaktif)' },
+  v2:  { id: 2,  name: 'Standard',            desc: 'richList: gambar header + single_select kategori (default)' },
+  v3:  { id: 3,  name: 'Document',            desc: 'Thumbnail dikirim sebagai dokumen + caption menu' },
+  v4:  { id: 4,  name: 'Video Interactive',   desc: 'Header video + tombol (Semua Fitur, Channel, Menu Utama)' },
+  v5:  { id: 5,  name: 'Button',              desc: 'richButtons: tombol quick_reply (tanpa list kategori)' },
+  v6:  { id: 6,  name: 'Document Premium',    desc: 'Thumbnail sebagai dokumen + caption menu' },
+  v7:  { id: 7,  name: 'Carousel',            desc: 'richList + tombol kategori & Semua' },
+  v8:  { id: 8,  name: 'Minimalist',          desc: 'Teks ringkas (12 baris pertama)' },
+  v9:  { id: 9,  name: 'NativeFlow',          desc: 'richButtons: tombol + header media' },
+  v10: { id: 10, name: 'Product Catalog',     desc: 'richButtons: Semua Fitur & Menu Utama' }
 }
 
 const MAX_VARIANT = Object.keys(VARIANTS).length
