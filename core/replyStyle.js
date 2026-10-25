@@ -470,41 +470,69 @@ async function runReplyVariant(ctx, text, style) {
           return char
         }).join('')
         const styledText = toBoldFont(text)
-        const styledCommand = ctx.command ? toBoldFont(ctx.command) : toBoldFont('pesan')
-        const status = toBoldFont('Online')
+        const v9Cfg = config.reply || {}
+        const v9Str = (value) => String(value ?? '').trim()
+        const styledTitle = toBoldFont(v9Str(v9Cfg.v9Title) || config.botName || 'skyline-JXRA')
+        const styledBrand = toBoldFont(v9Str(v9Cfg.v9Brand) || (ctx.command || 'pesan'))
+        const styledPrice = toBoldFont(v9Str(v9Cfg.v9Price) || 'Online')
         const configuredV9Thumbnail = String(config.reply?.v9ThumbnailUrl || '').trim()
         const productImage = /^https:\/\//i.test(configuredV9Thumbnail) ? configuredV9Thumbnail : ''
-        // The small circular icon on the product card is the favicon of the
-        // product link. Leave `v9ProductUrl` empty (default) so no favicon is
-        // requested and the card renders without that extra icon.
+        // The product-card primitive always renders a small default icon
+        // (WhatsApp's own logo) even when `product_url`/`additional_images` are
+        // omitted. So the product card is only used when the owner explicitly
+        // configures a link/icon; otherwise v9 uses a plain image header, which
+        // has no small circular icon at all.
         const configuredV9ProductUrl = String(config.reply?.v9ProductUrl || '').trim()
         const productUrl = /^https:\/\//i.test(configuredV9ProductUrl) ? configuredV9ProductUrl : ''
-        // Optional small icon. Empty by default so no extra icon is rendered.
         const configuredV9Icon = String(config.reply?.v9IconUrl || '').trim()
         const productIcon = /^https:\/\//i.test(configuredV9Icon) ? configuredV9Icon : ''
-        const product = {
-          __typename: 'GenAIProductItemCardPrimitive',
-          title: toBoldFont(config.botName || 'skyline-JXRA'),
-          brand: styledCommand,
-          price: status,
-          sale_price: '',
-          ...(productUrl ? { product_url: productUrl } : {}),
-          ...(productIcon ? { additional_images: [{ url: productIcon }] } : {}),
-          image: { url: productImage }
+        const useProductCard = Boolean(productUrl || productIcon)
+        const textSection = {
+          view_model: {
+            __typename: 'GenAISingleLayoutViewModel',
+            primitive: { text: styledText, __typename: 'GenAIMarkdownTextUXPrimitive' }
+          }
         }
+        const headerSection = useProductCard
+          ? {
+              view_model: {
+                __typename: 'GenAISingleLayoutViewModel',
+                primitive: {
+                  __typename: 'GenAIProductItemCardPrimitive',
+                  title: styledTitle,
+                  brand: styledBrand,
+                  price: styledPrice,
+                  sale_price: '',
+                  ...(productUrl ? { product_url: productUrl } : {}),
+                  ...(productIcon ? { additional_images: [{ url: productIcon }] } : {}),
+                  image: { url: productImage }
+                }
+              }
+            }
+          : productImage
+            ? {
+                view_model: {
+                  __typename: 'GenAISingleLayoutViewModel',
+                  primitive: {
+                    media: { url: productImage, mime_type: 'image/png' },
+                    imagine_type: 'IMAGE',
+                    status: { status: 'READY' },
+                    __typename: 'GenAIImaginePrimitive'
+                  }
+                }
+              }
+            : null
         const productPayload = {
           response_id: crypto.randomUUID(),
           sections: [
-            {
+            ...(headerSection ? [headerSection] : []),
+            useProductCard ? textSection : {
               view_model: {
                 __typename: 'GenAISingleLayoutViewModel',
-                primitive: product
-              }
-            },
-            {
-              view_model: {
-                __typename: 'GenAISingleLayoutViewModel',
-                primitive: { text: styledText, __typename: 'GenAIMarkdownTextUXPrimitive' }
+                primitive: {
+                  text: `${styledTitle}\n${styledBrand} • ${styledPrice}\n\n${styledText}`,
+                  __typename: 'GenAIMarkdownTextUXPrimitive'
+                }
               }
             }
           ]
@@ -514,7 +542,7 @@ async function runReplyVariant(ctx, text, style) {
             message: {
               richResponseMessage: {
                 messageType: 1,
-                submessages: [{ messageType: 2, messageText: '[ CANNOT_LOAD_PRODUCT - NIXEL ]' }],
+                submessages: [{ messageType: 2, messageText: useProductCard ? '[ CANNOT_LOAD_PRODUCT - NIXEL ]' : styledText }],
                 unifiedResponse: { data: Buffer.from(JSON.stringify(productPayload)).toString('base64') },
                 contextInfo: { isForwarded: true, forwardOrigin: 4 }
               }
