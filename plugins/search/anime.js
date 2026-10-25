@@ -3,6 +3,7 @@
  * Cari informasi anime dari AniList berdasarkan judul.
  */
 import { searchAnimeMedia } from '../../lib/animeSearch.js'
+import { replyCatalogResult } from '../../lib/catalogButtons.js'
 
 const pluginConfig = {
   name: 'carianime',
@@ -26,47 +27,27 @@ const pluginConfig = {
 async function handler(ctx) {
   const query = (ctx.text || '').trim()
   if (!query) {
-    await ctx.replyButtons({
-      text: '🎬 Masukkan judul anime. Contoh: .carianime Jujutsu Kaisen',
-      footer: 'Katalog AniList',
-      buttons: [{ id: 'catalog:open', text: '📚 Buka Katalog Anime & Manga' }],
-    })
+    await ctx.reply('🎬 Masukkan judul anime. Contoh: .carianime Jujutsu Kaisen')
     return
   }
-  await searchAndReply(ctx, query, 'ANIME')
+  await searchAndReply(ctx, query)
 }
 
-export async function searchAndReply(ctx, query, kind = 'ANIME') {
+async function searchAndReply(ctx, query) {
   await ctx.react('🔍')
   try {
-    const result = await searchAnimeMedia(query, kind)
+    const result = await searchAnimeMedia(query, 'ANIME')
     if (!result) {
       await ctx.react('❌')
-      await ctx.reply(`${kind === 'ANIME' ? 'Anime' : 'Manga'} dengan judul “${query}” tidak ditemukan di AniList.`)
+      await ctx.reply(`Anime dengan judul “${query}” tidak ditemukan di AniList.`)
       return
     }
-    if (result.cover) {
-      const response = await fetch(result.cover, { signal: AbortSignal.timeout(8000) })
-      if (response.ok && /^image\//i.test(response.headers.get('content-type') || '')) {
-        const buffer = Buffer.from(await response.arrayBuffer())
-        if (buffer.length <= 8 * 1024 * 1024) {
-          const media = await ctx.client.message.upload(buffer, { type: 'image', mimetype: response.headers.get('content-type') || 'image/jpeg' })
-          await ctx.client.message.send(ctx.chat, {
-            imageMessage: {
-              ...media,
-              mimetype: response.headers.get('content-type') || 'image/jpeg',
-              caption: result.text,
-            },
-          })
-        } else await ctx.reply(result.text)
-      } else await ctx.reply(result.text)
-    } else await ctx.reply(result.text)
+    await replyCatalogResult(ctx, query, 'ANIME', result)
     await ctx.react('✅')
   } catch (error) {
     await ctx.react('❌')
     await ctx.reply(`Pencarian anime gagal: ${error.message || 'layanan tidak tersedia'}`)
   }
 }
-
 
 export { pluginConfig as config, handler }

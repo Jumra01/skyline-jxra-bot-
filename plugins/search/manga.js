@@ -3,6 +3,7 @@
  * Cari informasi manga dari AniList berdasarkan judul.
  */
 import { searchAnimeMedia } from '../../lib/animeSearch.js'
+import { replyCatalogResult } from '../../lib/catalogButtons.js'
 
 const pluginConfig = {
   name: 'manga',
@@ -26,11 +27,7 @@ const pluginConfig = {
 async function handler(ctx) {
   const query = (ctx.text || '').trim()
   if (!query) {
-    await ctx.replyButtons({
-      text: '📚 Masukkan judul manga. Contoh: .manga One Piece',
-      footer: 'Katalog AniList',
-      buttons: [{ id: 'catalog:open', text: '🎬 Buka Katalog Anime & Manga' }],
-    })
+    await ctx.reply('📚 Masukkan judul manga. Contoh: .manga One Piece')
     return
   }
   await searchAndReply(ctx, query)
@@ -45,22 +42,7 @@ async function searchAndReply(ctx, query) {
       await ctx.reply(`Manga dengan judul “${query}” tidak ditemukan di AniList.`)
       return
     }
-    if (result.cover) {
-      const response = await fetch(result.cover, { signal: AbortSignal.timeout(8000) })
-      if (response.ok && /^image\//i.test(response.headers.get('content-type') || '')) {
-        const buffer = Buffer.from(await response.arrayBuffer())
-        if (buffer.length <= 8 * 1024 * 1024) {
-          const media = await ctx.client.message.upload(buffer, { type: 'image', mimetype: response.headers.get('content-type') || 'image/jpeg' })
-          await ctx.client.message.send(ctx.chat, {
-            imageMessage: {
-              ...media,
-              mimetype: response.headers.get('content-type') || 'image/jpeg',
-              caption: result.text,
-            },
-          })
-        } else await ctx.reply(result.text)
-      } else await ctx.reply(result.text)
-    } else await ctx.reply(result.text)
+    await replyCatalogResult(ctx, query, 'MANGA', result)
     await ctx.react('✅')
   } catch (error) {
     await ctx.react('❌')
