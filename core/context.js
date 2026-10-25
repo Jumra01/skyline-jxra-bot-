@@ -83,6 +83,20 @@ function installGlobalReplyStyle(client) {
   const rawSend = send.bind(client.message)
 
   client.message.send = async (chat, content, opts = {}) => {
+    // `rawFailed` menandai kegagalan dari jalur kirim asli. Kalau kirim asli
+    // sudah gagal, JANGAN dicoba lagi di catch bawah: percobaan kedua pasti
+    // gagal juga, dan konsol jadi dapat dua log untuk satu kegagalan (gejala
+    // nyata saat menu v11 gagal di grup: log hook + log sendHomeVariant).
+    let rawFailed = false
+    const raw = async () => {
+      try {
+        return await rawSend(chat, content, opts)
+      } catch (err) {
+        rawFailed = true
+        throw err
+      }
+    }
+
     try {
       /* Edit (`editKey`) & pesan mentah (`noStyle`) WAJIB lewat jalur asli.
        * Kalau dibungkus varian reply style, `opts` dibuang → editKey hilang
@@ -90,21 +104,21 @@ function installGlobalReplyStyle(client) {
        * loading bar Aurora muncul satu-satu sampai selesai). Pesan yang nanti
        * mau di-edit juga harus teks polos — varian bisa berupa interactive
        * yang tidak bisa di-edit WhatsApp. */
-      if (opts?.editKey || opts?.noStyle) return await rawSend(chat, content, opts)
+      if (opts?.editKey || opts?.noStyle) return await raw()
 
       /* [RECURSION GUARD] Selama sendReplyVariant/sendBasicReply jalan
        * (stylingDepth > 0) SEMUA kiriman lewat jalur asli. Tanpa ini varian
        * berbasis teks (v1/v4/v5) kirim lewat hook ini → hook baca teksnya →
        * panggil sendReplyVariant lagi → loop tanpa ujung (microtask starvation,
        * OOM; gejala lapangan: v1/v4/v5 tidak pernah membalas). */
-      if (isStyling()) return await rawSend(chat, content, opts)
+      if (isStyling()) return await raw()
 
       // Rich responses may show WhatsApp's security/download interstitial on
       // first render. Re-send the exact same payload as an edit to that message;
       // never fabricate verification metadata or alter the rich body.
       const rich = content?.botForwardedMessage?.message?.richResponseMessage
       if (rich) {
-        const sent = await rawSend(chat, content, opts)
+        const sent = await raw()
         const id = sent?.id || sent?.key?.id || sent?.messageId
         if (id) {
           try {
@@ -132,12 +146,12 @@ function installGlobalReplyStyle(client) {
         return sent
       }
       const text = outboundText(content)
-      if (!text || hasMentions(content, opts)) return await rawSend(chat, content, opts)
+      if (!text || hasMentions(content, opts)) return await raw()
 
       const style = getReplyStyle()
       // v8 needs the incoming sender context; the global send hook has none.
       // ctx.reply() invokes v8 with the real context, while raw sends stay raw.
-      if (style === 8) return await rawSend(chat, content, opts)
+      if (style === 8) return await raw()
       const pseudo = { client, chat, event: undefined }
       if (style !== 1) {
         try {
@@ -151,6 +165,7 @@ function installGlobalReplyStyle(client) {
       }
       return await sendBasicReply(pseudo, text)
     } catch (err) {
+      if (rawFailed) throw err // kirim asli sudah gagal — lempar, jangan ulangi
       logger.warn({ err: String(err?.message ?? err) }, 'Global reply style gagal — kirim asli')
       return await rawSend(chat, content, opts)
     }

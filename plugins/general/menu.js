@@ -813,13 +813,25 @@ async function sendHomeVariant(ctx, v) {
         // Header: pin lokasi palsu dengan label bot, durasi, user.
         // Kirim tanpa replyStyle (noStyle) supaya client WA nggak coba pasang
         // contextInfo ke pesan lokasi yang tidak mendukungnya.
+        // `disable*AutoInject` WAJIB: zapo membangun pesan `location` sebagai
+        // field primitif (type/derajat/name/address), bukan submessage objek.
+        // Di grup zapo menyuntikkan ephemeral setting ke contextInfo, lalu
+        // applyContextInfo melempar "cannot apply contextInfo: no compatible
+        // submessage found" — v11 mati total di grup (diam di privat karena
+        // ctx-nya null). Pesan lokasi tidak butuh disappearing mode, jadi
+        // auto-inject dimatikan.
         await ctx.client.message.send(ctx.chat, {
           type: 'location',
           degreesLatitude: -6.2088,
           degreesLongitude: 106.8456,
           name: `${v11Bot} · Aktif ±${v11Uptime}`,
           address: `User: ${v11User}`
-        }, { ...interactiveSendOptions(ctx.chat), noStyle: true })
+        }, {
+          ...interactiveSendOptions(ctx.chat),
+          noStyle: true,
+          disableGroupEphemeralAutoInject: true,
+          disableDirectEphemeralAutoInject: true
+        })
         // Body: daftar kategori menu (teks + tombol)
         // Pakai `grouped` dari luar (jangan deklarasi ulang `const grouped` di
         // sini): semua case berbagi satu block scope, jadi deklarasi di case
