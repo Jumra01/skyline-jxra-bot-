@@ -46,11 +46,17 @@ const digitsOf = (jid) => String(jid || '').split('@')[0].split(':')[0].replace(
  */
 const normalizeJid = (jid) => String(jid || '').replace(/:\d+(?=@)/, '')
 
-/** Jid yang dipakai sebagai token mention (PN diutamakan biar nama ke-resolve). */
+/**
+ * Jid yang dipakai sebagai token mention: **jid participant apa adanya**
+ * (`p.jid`). Jid dari metadata sudah mengikuti addressing mode grup — grup PN
+ * berisi `@s.whatsapp.net`, grup LID berisi `@lid` — dan WhatsApp mencocokkan
+ * token `@<digits>` dengan user part jid yang sama. Memaksa PN di grup LID
+ * bikin token orang lain TIDAK ke-resolve jadi nama (hanya identitas bot/
+ * pengirim sendiri yang tampil), jadi jangan diutamakan.
+ * Fallback: phoneNumber → lid → jid.
+ */
 function tokenJidOf(p) {
-  const jid = normalizeJid(p?.jid)
-  if (p?.phoneNumber) return normalizeJid(p.phoneNumber)
-  return jid
+  return normalizeJid(p?.jid) || normalizeJid(p?.phoneNumber) || normalizeJid(p?.lid)
 }
 
 async function handler(ctx) {
