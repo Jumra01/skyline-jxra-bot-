@@ -674,14 +674,16 @@ async function sendHomeVariant(ctx, v) {
       const v11Bot = config.botName || 'skyline-JXRA'
       const v11Uptime = fmtUptime(process.uptime() * 1000)
       const v11User = ctx.pushName || 'Owner'
-      // Header: pin lokasi palsu dengan label bot, durasi, user
+      // Header: pin lokasi palsu dengan label bot, durasi, user.
+      // Kirim tanpa replyStyle (noStyle) supaya client WA nggak coba pasang
+      // contextInfo ke pesan lokasi yang tidak mendukungnya.
       await ctx.client.message.send(ctx.chat, {
         type: 'location',
         degreesLatitude: -6.2088,
         degreesLongitude: 106.8456,
         name: `${v11Bot} · Aktif ±${v11Uptime}`,
         address: `User: ${v11User}`
-      }, interactiveSendOptions(ctx.chat))
+      }, { ...interactiveSendOptions(ctx.chat), noStyle: true })
       // Body: daftar kategori menu (teks + tombol)
       const grouped = regroup()
       const v11Rows = orderedEntries(grouped).map(([tag, list]) => ({
