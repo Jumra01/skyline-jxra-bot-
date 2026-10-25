@@ -2,17 +2,12 @@
  * © skyline-JXRA
  * Hapus credit gak bikin u jago dumbass. 
  * Hargai sebagaimana u mau dihargai.
- * tagall.js — tag SEMUA member grup, nama tiap orang tampil (mention asli).
+ * tagall.js — mention semua anggota; token @user dirender sebagai nama kontak
+ * masing-masing pada perangkat penerima.
  *
- * Fakta WhatsApp (sudah diuji di grup): token `@<digits>` hanya menotifikasi
- * & menampilkan SATU orang. Gak ada konsep "@semua"/"@everyone" — jid yang
- * cuma ada di `contextInfo.mentionedJid` tanpa token TIDAK jadi tag kelihatan
- * (gejalanya: cuma orang yang punya token yang ke-tag). Karena itu tiap
- * participant WAJIB punya token sendiri di teks.
- *
- * Tetap rapi: token ditulis menyambung dalam satu paragraf (wrap otomatis,
- * TIDAK satu-per-baris, tidak bernomor). Di HP masing-masing penerima, setiap
- * `@<nomor>` dirender jadi NAMA kontak yang mereka simpan sendiri.
+ * WhatsApp membutuhkan token `@<id>` di teks untuk merender mention/notifikasi;
+ * metadata `mentionedJid` saja tidak membuat tag terlihat. JID token mengikuti
+ * addressing mode grup (PN atau LID), lalu token ditulis sebaris agar ringkas.
  *
  * Cek admin via helper resmi (isAdmin/isSuperAdmin flag zapo).
  */
@@ -61,31 +56,35 @@ async function handler(ctx) {
       return
     }
 
+    const me = ctx.client.auth?.getCurrentCredentials?.()
+    const selfIds = new Set([me?.meJid, me?.meLid].filter(Boolean).map(normalizeJid))
     const mentionJids = new Set()
+    const tokens = []
+    const seen = new Set()
+
     for (const p of parts) {
-      // WAHA resolves "all" to each participant's group-native id and excludes
-      // the bot. Use one id per participant; dual PN+LID ids can double-tag.
+      // Mention token must match the participant JID's addressing mode in this
+      // group (PN or LID); WhatsApp resolves each @token to the local contact name.
       const jid = normalizeJid(p.jid || p.phoneNumber || p.lid)
-      if (jid) mentionJids.add(jid)
+      if (!jid || selfIds.has(jid)) continue
+      const user = jid.split('@')[0]
+      const digits = user.replace(/\D/g, '')
+      if (!digits || seen.has(user)) continue
+      seen.add(user)
+      tokens.push(`@${digits}`)
+      mentionJids.add(jid)
     }
 
-    const me = ctx.client.auth?.getCurrentCredentials?.()
-    for (const self of [me?.meJid, me?.meLid]) {
-      const jid = normalizeJid(self)
-      if (jid) mentionJids.delete(jid)
-    }
-    if (!mentionJids.size) {
+    if (!tokens.length) {
       await ctx.reply('⚠️ Gak ada participant lain yang bisa di-tag.')
       return
     }
 
     const caption = (ctx.text || '📢 Semua kumpul sini!').trim()
-    const text = [`*TAGALL* — ${meta.subject ?? 'Grup'}`, '', caption].join('\n')
+    const text = [`*TAGALL* — ${meta.subject ?? 'Grup'}`, '', caption, '', tokens.join(' ')].join('\n')
 
-    // Pola komunitas yang terbukti (WAHA `mentions: ["all"]`): resolve all
-    // participant → kirim daftar JID di field mentions, tanpa token individual
-    // di body. Padanan zapo yang benar adalah opsi send `mentions`, bukan raw
-    // nonJidMentions atau content-level contextInfo.
+    // Tiap peserta perlu token @<id> di body agar WA merender mention sebagai
+    // nama kontak dan memberi notifikasi. noStyle menjaga mentions tidak hilang.
     await ctx.client.message.send(
       ctx.chat,
       { type: 'text', text },
