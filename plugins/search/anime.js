@@ -26,15 +26,23 @@ const pluginConfig = {
 async function handler(ctx) {
   const query = (ctx.text || '').trim()
   if (!query) {
-    await ctx.reply('🎬 Masukkan judul anime. Contoh: .carianime Jujutsu Kaisen')
+    await ctx.replyButtons({
+      text: '🎬 Masukkan judul anime. Contoh: .carianime Jujutsu Kaisen',
+      footer: 'Katalog AniList',
+      buttons: [{ id: 'catalog:open', text: '📚 Buka Katalog Anime & Manga' }],
+    })
     return
   }
+  await searchAndReply(ctx, query, 'ANIME')
+}
+
+export async function searchAndReply(ctx, query, kind = 'ANIME') {
   await ctx.react('🔍')
   try {
-    const result = await searchAnimeMedia(query, 'ANIME')
+    const result = await searchAnimeMedia(query, kind)
     if (!result) {
       await ctx.react('❌')
-      await ctx.reply(`Anime dengan judul “${query}” tidak ditemukan di AniList.`)
+      await ctx.reply(`${kind === 'ANIME' ? 'Anime' : 'Manga'} dengan judul “${query}” tidak ditemukan di AniList.`)
       return
     }
     if (result.cover) {
@@ -59,5 +67,6 @@ async function handler(ctx) {
     await ctx.reply(`Pencarian anime gagal: ${error.message || 'layanan tidak tersedia'}`)
   }
 }
+
 
 export { pluginConfig as config, handler }

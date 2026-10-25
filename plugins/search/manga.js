@@ -26,9 +26,17 @@ const pluginConfig = {
 async function handler(ctx) {
   const query = (ctx.text || '').trim()
   if (!query) {
-    await ctx.reply('📚 Masukkan judul manga. Contoh: .manga One Piece')
+    await ctx.replyButtons({
+      text: '📚 Masukkan judul manga. Contoh: .manga One Piece',
+      footer: 'Katalog AniList',
+      buttons: [{ id: 'catalog:open', text: '🎬 Buka Katalog Anime & Manga' }],
+    })
     return
   }
+  await searchAndReply(ctx, query)
+}
+
+async function searchAndReply(ctx, query) {
   await ctx.react('🔍')
   try {
     const result = await searchAnimeMedia(query, 'MANGA')
