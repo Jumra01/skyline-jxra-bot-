@@ -669,6 +669,40 @@ async function sendHomeVariant(ctx, v) {
         headerImage
       }), interactiveSendOptions(ctx.chat))
       return
+    case 11:
+      // Fake location header: nama bot + durasi aktif + nama user
+      const v11Bot = config.botName || 'skyline-JXRA'
+      const v11Uptime = fmtUptime(process.uptime() * 1000)
+      const v11User = ctx.pushName || 'Owner'
+      // Header: pin lokasi palsu dengan label bot, durasi, user
+      await ctx.client.message.send(ctx.chat, {
+        type: 'location',
+        degreesLatitude: -6.2088,
+        degreesLongitude: 106.8456,
+        name: `${v11Bot} · Aktif ±${v11Uptime}`,
+        address: `User: ${v11User}`
+      }, interactiveSendOptions(ctx.chat))
+      // Body: daftar kategori menu (teks + tombol)
+      const grouped = regroup()
+      const v11Rows = orderedEntries(grouped).map(([tag, list]) => ({
+        id: `menu:cat:${tag}`,
+        title: label(tag),
+        description: `${CATEGORY_INFO[tag] || ''} • ${list.length} fitur`
+      }))
+      const v11Extra = [{ id: 'menu:all', text: '📜 Semua Fitur' }]
+      if (config.reactChannel?.enabled && config.reactChannel?.dedicatedChannelUrl) {
+        v11Extra.push({ url: config.reactChannel.dedicatedChannelUrl, text: '📱 Channel' })
+      }
+      await ctx.client.message.send(ctx.chat, richList({
+        text: overviewText(ctx, grouped),
+        footer: footer(),
+        title: `📂 ${v11Bot} • Kategori`,
+        buttonText: 'Pilih Kategori',
+        sections: [{ title: `${v11Rows.length} kategori`, rows: v11Rows }],
+        extraButtons: v11Extra,
+        headerImage: null
+      }), interactiveSendOptions(ctx.chat))
+      return
     default:
       return sendHome(ctx)
   }

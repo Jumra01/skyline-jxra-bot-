@@ -18,7 +18,8 @@ const VARIANTS = {
   v7:  { id: 7,  name: 'Carousel',            desc: 'Carousel horizontal per kategori (native zapo)' },
   v8:  { id: 8,  name: 'Minimalist',          desc: 'Teks ringkas (12 baris pertama)' },
   v9:  { id: 9,  name: 'NativeFlow',          desc: 'richButtons: tombol + header media' },
-  v10: { id: 10, name: 'Product Catalog',     desc: 'richButtons: Semua Fitur & Menu Utama' }
+  v10: { id: 10, name: 'Product Catalog',     desc: 'richButtons: Semua Fitur & Menu Utama' },
+  v11: { id: 11, name: 'Location',            desc: 'Header fake location: nama bot + durasi aktif + nama user' }
 }
 
 const MAX_VARIANT = Object.keys(VARIANTS).length
