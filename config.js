@@ -214,7 +214,7 @@ export default {
     v9ThumbnailUrl: 'https://skyline.web.id/uploads/6a0484983cb9e74ec0ac32d5.png', // kosong = tanpa gambar
     v9Title: '',      // kosong = nama bot
     v9Brand: '',      // kosong = nama command
-    v9Price: '',      // kosong = "Online"
+    v9Price: '',      // kosong = "Online" · otomatis dikasih penanda 🟢
     v9ProductUrl: '', // kosong = mode gambar biasa (isi https = product card)
     v9IconUrl: '',    // kosong = tanpa ikon (isi https = product card)
 

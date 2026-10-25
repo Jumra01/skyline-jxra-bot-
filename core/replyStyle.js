@@ -474,7 +474,10 @@ async function runReplyVariant(ctx, text, style) {
         const v9Str = (value) => String(value ?? '').trim()
         const styledTitle = toBoldFont(v9Str(v9Cfg.v9Title) || config.botName || 'skyline-JXRA')
         const styledBrand = toBoldFont(v9Str(v9Cfg.v9Brand) || (ctx.command || 'pesan'))
-        const styledPrice = toBoldFont(v9Str(v9Cfg.v9Price) || 'Online')
+        // WhatsApp rich text gak bisa warna teks → penanda hijau pakai emoji 🟢.
+        // Kalau `v9Price` sudah diawali emoji bulat, jangan ditambah lagi.
+        const rawPrice = v9Str(v9Cfg.v9Price) || 'Online'
+        const styledPrice = toBoldFont(/^[\u{1F7E2}\u2705\u{1F49A}]/u.test(rawPrice) ? rawPrice : `🟢 ${rawPrice}`)
         const configuredV9Thumbnail = String(config.reply?.v9ThumbnailUrl || '').trim()
         const productImage = /^https:\/\//i.test(configuredV9Thumbnail) ? configuredV9Thumbnail : ''
         // The product-card primitive always renders a small default icon
