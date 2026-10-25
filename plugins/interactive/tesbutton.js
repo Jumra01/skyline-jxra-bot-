@@ -237,6 +237,38 @@ function pickMediaAsset(exts) {
   return null
 }
 
+/** Upload video dari path yang ada (gif/webm/mp4). */
+async function buildVideoHeaderFromPath(ctx, file) {
+  const bytes = fs.readFileSync(file)
+  const up = await ctx.client.message.upload(bytes, { type: 'video', mimetype: 'video/mp4' })
+  const meta = await (await import('sharp')).default(bytes.slice(0, 4096)).metadata().catch(() => ({}))
+  return {
+    header: {
+      title: '',
+      hasMediaAttachment: true,
+      videoMessage: { ...up, mimetype: 'video/mp4', width: meta.width ?? 640, height: meta.height ?? 360 }
+    },
+    body: { text: 'E · Header video/gif harusnya bisa diputar.' },
+    footer: { text: 'skyline-JXRA · tesbutton' },
+    nativeFlowMessage: { messageVersion: 1, buttons: [quickReply('⚡ Oke', 'tesbtn:e1')] }
+  }
+}
+
+/** Bikin video kecil (loop+fade) via ffmpeg kalau nggak ada aset media. */
+async function buildVideoHeader(ctx) {
+  const out = path.join(process.cwd(), 'assets/voip/_tesbutton_tmp.mp4')
+  try {
+    await execFile('ffmpeg', [
+      '-y', '-loop', '1', '-framerate', '12', '-i', path.join(process.cwd(), 'assets/thumb/menu.jpg'), '-t', '2',
+      '-vf', 'scale=320:180,format=yuv420p,fade=t=in:st=0:d=0.3',
+      '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-b:v', '200k', out
+    ])
+  } catch {}
+  return buildVideoHeaderFromPath(ctx, out)
+}
+
+function isGif(file) { return path.extname(file).toLowerCase() === '.gif' }
+
 /* ══════════════ registry varian ══════════════ */
 
 const ORDER_PARAMS = {
@@ -326,23 +358,15 @@ const VARIANTS = [
   {
     id: 'E',
     label: 'E · header video/gif (upload asli) + tombol',
-    note: 'header media gerak — butuh file gif/webm/mp4 di assets/voip',
+    note: 'header media gerak — butuh file gif/webm/mp4; kalau nggak ada, FFmpeg bikinkan yang kecil otomatis',
     build: async (ctx) => {
       const file = pickMediaAsset(['.gif', '.webm', '.mp4'])
-      if (!file) throw new Error('tidak ada file gif/webm/mp4 di assets/voip')
-      const bytes = fs.readFileSync(file)
-      const up = await ctx.client.message.upload(bytes, { type: 'video', mimetype: 'video/mp4' })
-      const meta = await (await import('sharp')).default(bytes.slice(0, 4096)).metadata().catch(() => ({}))
-      return wrap({
-        header: {
-          title: '',
-          hasMediaAttachment: true,
-          videoMessage: { ...up, mimetype: 'video/mp4', width: meta.width ?? 640, height: meta.height ?? 360 }
-        },
-        body: { text: 'E · Header video harusnya bisa diputar.' },
-        footer: { text: 'skyline-JXRA · tesbutton' },
-        nativeFlowMessage: { messageVersion: 1, buttons: [quickReply('⚡ Oke', 'tesbtn:e1')] }
-      })
+      if (!file) {
+        const video = await buildVideoHeader(ctx)
+        if (!video) throw new Error('gagal bikin video (ffmpeg/sharp gagal)')
+        return wrap(video)
+      }
+      return buildVideoHeaderFromPath(ctx, file)
     }
   },
   {
