@@ -105,15 +105,13 @@ async function handler(ctx) {
     const caption = (ctx.text || '📢 Semua kumpul sini!').trim()
     const text = [`*TAGALL* — ${meta.subject ?? 'Grup'}`, '', caption, '', '@all'].join('\n')
 
-    // Native WhatsApp group-mention-all, mengikuti implementasi komunitas
-    // `mentionAll: true`: marker proto `ContextInfo.nonJidMentions = 1` + teks
-    // literal `@all`. Zapo belum expose opsi tingkat tinggi, tetapi raw
-    // contextInfo diteruskan ke proto oleh WaSendContextInfo.raw.
+    // Implementasi komunitas `mentionAll: true` menyetel Proto ContextInfo
+    // `nonJidMentions = 1` bersama teks literal `@all`. API zapo menerima
+    // WaSendContextInfo.raw, yang buildContextInfoProto flatten ke proto.
     await ctx.client.message.send(ctx.chat, {
-      extendedTextMessage: {
-        text,
-        contextInfo: { nonJidMentions: 1 }
-      }
+      type: 'text',
+      text,
+      contextInfo: { raw: { nonJidMentions: 1 } }
     })
   }
 
