@@ -92,6 +92,13 @@ function installGlobalReplyStyle(client) {
        * yang tidak bisa di-edit WhatsApp. */
       if (opts?.editKey || opts?.noStyle) return await rawSend(chat, content, opts)
 
+      /* [RECURSION GUARD] Selama sendReplyVariant/sendBasicReply jalan
+       * (stylingDepth > 0) SEMUA kiriman lewat jalur asli. Tanpa ini varian
+       * berbasis teks (v1/v4/v5) kirim lewat hook ini → hook baca teksnya →
+       * panggil sendReplyVariant lagi → loop tanpa ujung (microtask starvation,
+       * OOM; gejala lapangan: v1/v4/v5 tidak pernah membalas). */
+      if (isStyling()) return await rawSend(chat, content, opts)
+
       // Rich responses may show WhatsApp's security/download interstitial on
       // first render. Re-send the exact same payload as an edit to that message;
       // never fabricate verification metadata or alter the rich body.
@@ -138,7 +145,7 @@ function installGlobalReplyStyle(client) {
         } catch (err) {
           logger.warn(
             { err: String(err?.message ?? err), style },
-            'Global reply variant gagal — fallback ke teks + kartu'
+            `Global reply variant v${style} gagal — fallback ke teks + kartu`
           )
         }
       }
@@ -214,8 +221,8 @@ export function buildContext(client, event) {
         if (style !== 1) return await sendReplyVariant(ctx, text, style)
       } catch (err) {
         logger.warn(
-          { err: String(err?.message ?? err), style },
-          'Reply variant gagal — fallback ke teks biasa'
+          { err: String(err?.message ?? err), style, chat: ctx.chat },
+          `Reply variant v${style} gagal — fallback ke teks biasa`
         )
       }
       return sendBasicReply(ctx, text)

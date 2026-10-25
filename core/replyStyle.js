@@ -237,7 +237,30 @@ async function loadV4Thumb() {
 export async function sendReplyVariant(ctx, text, style) {
   stylingDepth++
   try {
-    return await runReplyVariant(ctx, text, style)
+    logger.debug(
+      { style, chat: ctx?.chat, len: String(text ?? '').length },
+      `[REPLY] kirim varian v${style}`
+    )
+    const result = await runReplyVariant(ctx, text, style)
+    logger.debug(
+      { style, chat: ctx?.chat, ok: true },
+      `[REPLY] v${style} terkirim`
+    )
+    return result
+  } catch (err) {
+    // Log jelas: varian berapa, chat mana, pesan error, dan 3 baris stack
+    // pertama — biar kegagalan varian langsung kelihatan di panel, bukan diam.
+    const reason = String(err?.message ?? err)
+    logger.warn(
+      {
+        style,
+        chat: ctx?.chat,
+        err: reason,
+        stack: String(err?.stack ?? '').split('\n').slice(1, 4).join(' | '),
+      },
+      `[REPLY] v${style} GAGAL — ${reason}`
+    )
+    throw err
   } finally {
     stylingDepth--
   }
@@ -247,6 +270,10 @@ async function runReplyVariant(ctx, text, style) {
   const { client, chat, event } = ctx
 
   switch (Number(style)) {
+    /* v1 BASIC — teks biasa (default sendBasicReply) */
+    case 1: {
+      return client.message.send(chat, { type: 'text', text }, { quote: event })
+    }
     /* v2 PREMIUM — dokumen + quote kontak palsu */
     case 2:
     /* v6 SIMPLE DOCUMENT — dokumen + quote pesan asli */
