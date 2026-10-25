@@ -542,24 +542,118 @@ function getMenuVariant() {
   return Number(getGlobal('menuVariant') || config.ui?.menuVariant || 2)
 }
 
-// Varian yang butuh render khusus (selain default richList standar)
+// Varian yang butuh render khusus (selain v2 standar)
 async function sendHomeVariant(ctx, v) {
   const grouped = regroup()
   const text = overviewText(ctx, grouped)
+  const rows = orderedEntries(grouped).map(([tag, list]) => ({
+    id: `menu:cat:${tag}`,
+    title: label(tag),
+    description: `${CATEGORY_INFO[tag] || ''} • ${list.length} fitur`
+  }))
+  const extraButtons = [{ id: 'menu:all', text: '📜 Semua Fitur' }]
+  if (config.reactChannel?.enabled && config.reactChannel?.dedicatedChannelUrl) {
+    extraButtons.push({ url: config.reactChannel.dedicatedChannelUrl, text: '📱 Channel' })
+  }
+  const headerImage = await uploadHeaderMedia(ctx.client, findThumb(THUMB_MENU))
 
   switch (v) {
     case 1:
-      // Simple: teks biasa (tanpa kartu interaktif)
+      // Simple: teks biasa tanpa kartu interaktif
       await ctx.reply(text)
       return
     case 3:
     case 6:
-      // Document: kirim sebagai dokumen teks (caption = menu)
-      await ctx.reply(text)
+      // Document: kirim thumbnail menu sebagai dokumen + caption menu
+      {
+        let docBuf = null
+        try { docBuf = fs.readFileSync(absPath(THUMB_MENU + '.jpg')) } catch {}
+        await ctx.client.message.send(ctx.chat, {
+          document: docBuf || Buffer.from(''),
+          mimetype: 'image/jpeg',
+          fileName: `${config.botName}-menu.jpg`,
+          caption: text
+        }, interactiveSendOptions(ctx.chat))
+      }
+      return
+    case 4:
+      // Video Interactive: richButtons dengan header video + tombol saluran/kategori
+      await ctx.client.message.send(ctx.chat, {
+        ...richButtons({
+          text,
+          footer: footer(),
+          buttons: [
+            { id: 'menu:all', text: '📜 Semua Fitur' },
+            ...(config.reactChannel?.dedicatedChannelUrl
+              ? [{ url: config.reactChannel.dedicatedChannelUrl, text: '📱 Channel' }]
+              : []),
+            { id: 'menu:home', text: '🏠 Menu Utama' }
+          ],
+          headerImage
+        })
+      }, interactiveSendOptions(ctx.chat))
+      return
+    case 5:
+      // Button: richButtons (tombol quick_reply, tanpa single_select list)
+      await ctx.client.message.send(ctx.chat, richButtons({
+        text,
+        footer: footer(),
+        buttons: [
+          { id: 'menu:all', text: '📜 Semua Fitur' },
+          { id: 'menu:home', text: '🏠 Menu Utama' },
+          ...(config.reactChannel?.dedicatedChannelUrl
+            ? [{ url: config.reactChannel.dedicatedChannelUrl, text: '📱 Channel' }]
+            : [])
+        ],
+        headerImage
+      }), interactiveSendOptions(ctx.chat))
+      return
+    case 7:
+      // Carousel: tidak ada primitive carousel di zapo → fallback richList dengan tombol kategori
+      await ctx.client.message.send(ctx.chat, richList({
+        text,
+        footer: footer(),
+        title: `📂 ${config.botName} • Kategori`,
+        buttonText: 'Pilih Kategori',
+        sections: [{ title: `${rows.length} kategori`, rows }],
+        extraButtons: [...extraButtons, { id: 'menu:all', text: '📜 Semua' }],
+        headerImage
+      }), interactiveSendOptions(ctx.chat))
       return
     case 8:
       // Minimalist: teks ringkas (12 baris pertama)
       await ctx.reply(text.split('\\n').slice(0, 12).join('\\n'))
+      return
+    case 9:
+      // NativeFlow: richButtons dengan select kategori + tombol owner/saluran
+      await ctx.client.message.send(ctx.chat, richButtons({
+        text,
+        footer: footer(),
+        buttons: [
+          {
+            // single_select kategori disisipkan via nativeFlow manual
+            id: 'menu:home',
+            text: '📂 Kategori'
+          },
+          { id: 'menu:all', text: '📜 Semua Fitur' },
+          ...(config.reactChannel?.dedicatedChannelUrl
+            ? [{ url: config.reactChannel.dedicatedChannelUrl, text: '📱 Channel' }]
+            : [])
+        ],
+        headerImage
+      }), interactiveSendOptions(ctx.chat))
+      return
+    case 10:
+      // Product Catalog: fallback richButtons (productMessage tidak tersedia di zapo)
+      await ctx.client.message.send(ctx.chat, richButtons({
+        text,
+        footer: footer(),
+        buttons: [
+          { id: 'menu:all', text: '📜 Semua Fitur' },
+          { id: 'menu:home', text: '🏠 Menu Utama' }
+        ],
+        headerImage
+      }), interactiveSendOptions(ctx.chat))
       return
     default:
       return sendHome(ctx)
@@ -585,12 +679,8 @@ async function handler(ctx) {
     }
 
     const v = getMenuVariant()
-    // v1, v3, v8 punya render khusus (teks/document/minimalist);
-    // sisanya (v2, v4, v5, v6, v7, v9, v10) pakai richList standar untuk sekarang.
-    if (v === 1 || v === 3 || v === 8) {
-      return sendHomeVariant(ctx, v)
-    }
-    return sendHome(ctx)
+    if (v === 2) return sendHome(ctx)
+    return sendHomeVariant(ctx, v)
   }
 
 export { pluginConfig as config, handler };
