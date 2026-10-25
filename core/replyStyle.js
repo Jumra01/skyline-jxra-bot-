@@ -474,13 +474,19 @@ async function runReplyVariant(ctx, text, style) {
         const status = toBoldFont('Online')
         const configuredV9Thumbnail = String(config.reply?.v9ThumbnailUrl || '').trim()
         const productImage = /^https:\/\//i.test(configuredV9Thumbnail) ? configuredV9Thumbnail : ''
+        // The small circular icon on the product card is the favicon of this URL
+        // (WhatsApp's own channel link would render the WhatsApp logo).
+        const configuredV9ProductUrl = String(config.reply?.v9ProductUrl || '').trim()
+        const productUrl = /^https:\/\//i.test(configuredV9ProductUrl)
+          ? configuredV9ProductUrl
+          : 'https://skyline.web.id'
         const product = {
           __typename: 'GenAIProductItemCardPrimitive',
           title: toBoldFont(config.botName || 'skyline-JXRA'),
           brand: styledCommand,
           price: status,
           sale_price: '',
-          product_url: String(config.reactChannel?.dedicatedChannelUrl || '').trim() || 'https://skyline.web.id',
+          product_url: productUrl,
           image: { url: productImage },
           // Reuse configured thumbnail for the product card's small secondary icon too.
           additional_images: productImage ? [{ url: productImage }] : []

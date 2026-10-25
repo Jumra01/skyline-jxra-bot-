@@ -272,6 +272,10 @@ export default {
     variant: 1,
     // Khusus .setreply v9: URL gambar thumbnail product card/header.
     v9ThumbnailUrl: 'https://skyline.web.id/uploads/6a0484983cb9e74ec0ac32d5.png',
+    // Khusus .setreply v9: link product card. Favicon domain link inilah yang
+    // dipakai WhatsApp untuk ikon bundar kecil di samping nama — JANGAN pakai
+    // link whatsapp.com/channel, karena favicon WhatsApp yang muncul.
+    v9ProductUrl: 'https://skyline.web.id',
     website: 'skyline.web.id',        // dipakai v4 (OG preview otomatis)
     v4: {
       title: 'skyline-JXRA',
