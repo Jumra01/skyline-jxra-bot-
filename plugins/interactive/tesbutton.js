@@ -69,6 +69,7 @@ import path from 'node:path'
 import { proto } from 'zapo-js'
 import { logger } from '../../core/logger.js'
 import { onRichReply } from '../../handlers/messageHandler.js'
+import { execFile } from 'node:child_process'
 
 const pluginConfig = {
   name: 'tesbutton',
@@ -143,6 +144,10 @@ const singleSelect = (title, buttonText, sections) =>
       }))
     }))
   })
+
+/** Tombol kartu template (format TV2) — bedakan dengan nativeFlow: gunakan kunci
+ * `quickReplyButton`/`urlButton`/`callButton`, bukan `name`/`buttonParamsJson`. */
+const tplBtn = (type, payload) => ({ [type]: payload })
 
 /**
  * Roundtrip lewat proto WA asli — field yang di-drop encoder ketahuan di sini.
@@ -237,38 +242,6 @@ function pickMediaAsset(exts) {
   return null
 }
 
-/** Upload video dari path yang ada (gif/webm/mp4). */
-async function buildVideoHeaderFromPath(ctx, file) {
-  const bytes = fs.readFileSync(file)
-  const up = await ctx.client.message.upload(bytes, { type: 'video', mimetype: 'video/mp4' })
-  const meta = await (await import('sharp')).default(bytes.slice(0, 4096)).metadata().catch(() => ({}))
-  return {
-    header: {
-      title: '',
-      hasMediaAttachment: true,
-      videoMessage: { ...up, mimetype: 'video/mp4', width: meta.width ?? 640, height: meta.height ?? 360 }
-    },
-    body: { text: 'E · Header video/gif harusnya bisa diputar.' },
-    footer: { text: 'skyline-JXRA · tesbutton' },
-    nativeFlowMessage: { messageVersion: 1, buttons: [quickReply('⚡ Oke', 'tesbtn:e1')] }
-  }
-}
-
-/** Bikin video kecil (loop+fade) via ffmpeg kalau nggak ada aset media. */
-async function buildVideoHeader(ctx) {
-  const out = path.join(process.cwd(), 'assets/voip/_tesbutton_tmp.mp4')
-  try {
-    await execFile('ffmpeg', [
-      '-y', '-loop', '1', '-framerate', '12', '-i', path.join(process.cwd(), 'assets/thumb/menu.jpg'), '-t', '2',
-      '-vf', 'scale=320:180,format=yuv420p,fade=t=in:st=0:d=0.3',
-      '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-b:v', '200k', out
-    ])
-  } catch {}
-  return buildVideoHeaderFromPath(ctx, out)
-}
-
-function isGif(file) { return path.extname(file).toLowerCase() === '.gif' }
-
 /* ══════════════ registry varian ══════════════ */
 
 const ORDER_PARAMS = {
@@ -361,12 +334,25 @@ const VARIANTS = [
     note: 'header media gerak — butuh file gif/webm/mp4; kalau nggak ada, FFmpeg bikinkan yang kecil otomatis',
     build: async (ctx) => {
       const file = pickMediaAsset(['.gif', '.webm', '.mp4'])
-      if (!file) {
-        const video = await buildVideoHeader(ctx)
-        if (!video) throw new Error('gagal bikin video (ffmpeg/sharp gagal)')
-        return wrap(video)
+      if (file) {
+        const bytes = fs.readFileSync(file)
+        const up = await ctx.client.message.upload(bytes, { type: 'video', mimetype: 'video/mp4' })
+        const meta = await (await import('sharp')).default(bytes.slice(0, 4096)).metadata().catch(() => ({}))
+        return wrap({
+          header: {
+            title: '',
+            hasMediaAttachment: true,
+            videoMessage: { ...up, mimetype: 'video/mp4', width: meta.width ?? 640, height: meta.height ?? 360 }
+          },
+          body: { text: 'E · Header video/gif harusnya bisa diputar.' },
+          footer: { text: 'skyline-JXRA · tesbutton' },
+          nativeFlowMessage: { messageVersion: 1, buttons: [quickReply('⚡ Oke', 'tesbtn:e1')] }
+        })
       }
-      return buildVideoHeaderFromPath(ctx, file)
+      return wrap({
+        body: { text: 'E · Header video/gif tetap tampil — belum ada aset media. Letakkan file gif/webm/mp4 di assets/voip/.' },
+        footer: { text: 'skyline-JXRA · tesbutton' }
+      })
     }
   },
   {
@@ -580,6 +566,46 @@ const VARIANTS = [
         ]
       }
     })
+  },
+  {
+    id: 'R',
+    label: 'R · collectionMessage (katalog koleksi bisnis)',
+    note: 'katalog koleksi katalog katalog — BUTUH biz + katalog terdaftar; tombol katalog',
+    build: () => wrap({
+      body: { text: 'R · Koleksi katalog. Tekan tombol katalog untuk membuka.' },
+      footer: { text: 'skyline-JXRA · tesbutton' },
+      collectionMessage: {
+        bizJid: '6281234567890@s.whatsapp.net',
+        id: 'TEST-COLL-R',
+        messageVersion: 1
+      }
+    })
+  },
+  {
+    id: 'S',
+    label: 'S · templateMessage modern (templateId + fourRowTemplate)',
+    note: 'kartu template TV2 — templateId + fourRowTemplate dengan tombol button-style',
+    build: () => ({
+      viewOnceMessage: {
+        message: {
+          messageContextInfo: { deviceListMetadataVersion: 2, deviceListMetadata: {} },
+          templateMessage: {
+            templateId: `tesbtn-tpls-${Date.now()}`,
+            hydratedTemplate: {
+              hydratedTitleText: 'S · TEMPLATE MODERN',
+              hydratedContentText: 'Tekan tombol di bawah — satu kartu, 4 aksi.',
+              hydratedFooterText: 'skyline-JXRA · tesbutton',
+              hydratedButtons: [
+                { quickReplyButton: { id: 'tesbtn:s1', displayText: 'Kirim 1' } },
+                { quickReplyButton: { id: 'tesbtn:s2', displayText: 'Kirim 2' } },
+                { urlButton: { url: 'https://skyline.web.id', displayText: 'Lewati' } },
+                { callButton: { phoneNumber: '6281234567890', displayText: 'Telepon' } }
+              ]
+            }
+          }
+        }
+      }
+    })
   }
 ]
 
@@ -598,7 +624,8 @@ const SHORTCUTS = {
   order: 'N', orderdetails: 'N',
   widget: 'O', bloks: 'O', storefront: 'O',
   call: 'P', phone: 'P',
-  img: 'D', image: 'D', doc: 'F', document: 'F', location: 'G', video: 'E'
+  img: 'D', image: 'D', doc: 'F', document: 'F', location: 'G', video: 'E',
+  collection: 'R', tpl2: 'S'
 }
 
 /** ID tombol per varian — registry zapo butuh id persis, bukan pola. */
@@ -618,7 +645,9 @@ const BUTTON_IDS = {
   M: [],
   N: [],
   O: ['tesbtn:o1'],
-  P: []
+  P: [],
+  R: [],
+  S: ['tesbtn:s1', 'tesbtn:s2']
 }
 
 /* ══════════════ handler tombol ══════════════ */
@@ -652,7 +681,8 @@ async function handler(ctx) {
         `Varian *${raw}* gak dikenal.\n\n` +
         `Pakai: ${VARIANTS.map((v) => `\`${v.id}\``).join(' ')}\n` +
         `Atau nama pendek: \`qr\` \`url\` \`single\` \`list\` \`tpl\` \`product\` \`carousel\` ` +
-        `\`buttons\` \`pay\` \`order\` \`widget\` \`call\` \`img\` \`doc\` \`video\` \`location\`\n\n` +
+        `\`buttons\` \`pay\` \`order\` \`widget\` \`call\` \`img\` \`doc\` \`video\` \`location\` ` +
+        `\`collection\` (\`r\`) \`tpl2\` (\`s\`)\n\n` +
         `Tanpa argumen = kirim semua.`
       )
     }
