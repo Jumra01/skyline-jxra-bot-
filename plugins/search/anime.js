@@ -43,7 +43,13 @@ async function handler(ctx) {
         const buffer = Buffer.from(await response.arrayBuffer())
         if (buffer.length <= 8 * 1024 * 1024) {
           const media = await ctx.client.message.upload(buffer, { type: 'image', mimetype: response.headers.get('content-type') || 'image/jpeg' })
-          await ctx.client.message.send(ctx.chat, { type: 'image', ...media, caption: result.text })
+          await ctx.client.message.send(ctx.chat, {
+            imageMessage: {
+              ...media,
+              mimetype: response.headers.get('content-type') || 'image/jpeg',
+              caption: result.text,
+            },
+          })
         } else await ctx.reply(result.text)
       } else await ctx.reply(result.text)
     } else await ctx.reply(result.text)
