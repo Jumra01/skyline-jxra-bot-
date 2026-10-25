@@ -2,11 +2,16 @@
  * © skyline-JXRA
  * Hapus credit gak bikin u jago dumbass. 
  * Hargai sebagaimana u mau dihargai.
- * tagall.js — tag semua member grup, tampil sebagai DAFTAR NAMA (bukan @nomor).
+ * tagall.js — tag semua member grup dengan mention ASLI (`@<nomor>`).
  *
- * `mentionedJid` tetap diisi semua participant (biar tiap orang kena notif tag),
- * tapi isi teksnya cuma nama display/user — jadi pesannya rapi, gak ada
- * deretan `@628xxx` satu per satu.
+ * Kenapa harus token `@<digits>`: WhatsApp cuma merender link mention (dan
+ * menggantinya dengan NAMA kontak sesuai yang disimpan di HP masing-masing
+ * penerima) kalau digitnya ada di teks DAN jid-nya ada di `mentions`/
+ * `mentionedJid`. Tanpa token, tag tetap "senyap" tapi gak ada nama tampil.
+ *
+ * Jadi: token ditulis menyambung dalam satu paragraf (ikut wrap otomatis),
+ * BUKAN daftar nomor satu per baris. Nama yang muncul = nama kontak di device
+ * masing-masing member (bot gak bisa maksa nama tertentu).
  *
  * Cek admin via helper resmi (isAdmin/isSuperAdmin flag zapo).
  */
@@ -16,7 +21,7 @@ const pluginConfig = {
   name: "tagall",
   alias: ['tall', 'mentionall'],
   category: "group",
-  description: "Tag semua member grup — tampil sebagai daftar nama (admin grup/staff)",
+  description: "Tag semua member grup — mention asli, tampil sebagai nama kontak (admin grup/staff)",
   usage: ".tagall <teks>",
   example: ".tagall rapat jam 8",
   isOwner: false,
@@ -30,18 +35,26 @@ const pluginConfig = {
   isEnabled: true,
 };
 
-const MAX_NAME = 40
+/** `628xx:12@s.whatsapp.net` → `628xx` */
+const digitsOf = (jid) => String(jid || '').split('@')[0].split(':')[0].replace(/\D/g, '')
 
-/** Nama tampilan member: displayName → username → nomor (tanpa @). */
-function nameOf(p) {
-  const raw =
-    p?.displayName ||
-    p?.username ||
-    p?.phoneNumber?.split('@')[0]?.split(':')[0] ||
-    p?.jid?.split('@')[0]?.split(':')[0] ||
-    'Member'
-  // Buang newline & rapikan spasi biar daftar tetap satu baris per member
-  return String(raw).replace(/\s+/g, ' ').trim().slice(0, MAX_NAME) || 'Member'
+/**
+ * Buang device suffix (`628xx:12@s.whatsapp.net` → `628xx@s.whatsapp.net`).
+ * WA mencocokkan token `@628xx` dengan user part jid di `mentionedJid`, jadi
+ * jid yang masih membawa `:12` bikin mention GAGAL di-render jadi nama
+ * (tokennya cuma jadi teks biasa) walau pesannya tetap terkirim.
+ */
+const normalizeJid = (jid) => String(jid || '').replace(/:\d+(?=@)/, '')
+
+/**
+ * Jid yang dipakai sebagai token mention. PN diutamakan supaya WhatsApp
+ * meresolve nama kontak dengan benar, sisa identitas (LID/PN) tetap
+ * dimasukkan ke `mentionedJid` biar notifikasi sampai di grup LID maupun PN.
+ */
+function tokenJidOf(p) {
+  const jid = normalizeJid(p?.jid)
+  if (p?.phoneNumber) return normalizeJid(p.phoneNumber)
+  return jid
 }
 
 async function handler(ctx) {
@@ -62,25 +75,32 @@ async function handler(ctx) {
       return
     }
 
-    const jids = parts.map((p) => p.jid)
+    const tokens = []
+    const mentionJids = new Set()
+    const seen = new Set()
+
+    for (const p of parts) {
+      const tokenJid = tokenJidOf(p)
+      const digits = digitsOf(tokenJid)
+      if (!digits) continue
+      // Satu orang cukup sekali (hindari token dobel kalau ada multi-jid)
+      if (seen.has(digits)) continue
+      seen.add(digits)
+      tokens.push(`@${digits}`)
+      if (tokenJid) mentionJids.add(tokenJid)
+      for (const id of [p.jid, p.lid, p.phoneNumber]) {
+        const norm = normalizeJid(id)
+        if (norm) mentionJids.add(norm)
+      }
+    }
+
     const caption = (ctx.text || '📢 Semua kumpul sini!').trim()
-    const list = parts.map((p, i) => `${i + 1}. ${nameOf(p)}`).join('\n')
+    const text = [`*TAGALL* — ${meta.subject ?? 'Grup'}`, '', caption, '', tokens.join(' ')].join('\n')
 
-    const text = [
-      `*TAGALL* — ${meta.subject ?? 'Grup'}`,
-      '',
-      caption,
-      '',
-      list,
-      '',
-      `👥 ${parts.length} member`
-    ].join('\n')
-
-    // mentionedJid = semua member (masing-masing kena tag), teksnya cuma nama.
     await ctx.client.message.send(ctx.chat, {
       extendedTextMessage: {
         text,
-        contextInfo: { mentionedJid: jids }
+        contextInfo: { mentionedJid: [...mentionJids] }
       }
     })
   }
