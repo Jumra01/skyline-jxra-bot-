@@ -30,6 +30,7 @@ const CATEGORY_EMOJI = {
   sticker: '🧸',
   ai: '🤖',
   tools: '🛠️',
+  primbon: '🔮',
   game: '🎲',
   rpg: '🧭',
   interactive: '🕹️',
@@ -43,6 +44,7 @@ const CATEGORY_INFO = {
   owner: 'Khusus Owner Bot',
   sticker: 'Stiker & Konversi Media',
   tools: 'Peralatan',
+  primbon: 'Ramalan & tafsir primbon',
   media: 'Olah Media',
   ai: 'Kecerdasan Buatan',
   group: 'Manajemen Grup',
@@ -52,7 +54,7 @@ const CATEGORY_INFO = {
 
 const CATEGORY_ORDER = [
   'general', 'group', 'downloader', 'media', 'sticker',
-  'ai', 'tools', 'game', 'rpg', 'interactive', 'owner', 'other'
+  'ai', 'tools', 'primbon', 'game', 'rpg', 'interactive', 'owner', 'other'
 ]
 
 /* ═══════════ Text transform (small-caps & mono-bold) ═══════════ */
