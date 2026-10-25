@@ -15,7 +15,7 @@ const VARIANTS = {
   v4:  { id: 4,  name: 'Video Interactive',   desc: 'Header video + tombol (Semua Fitur, Channel, Menu Utama)' },
   v5:  { id: 5,  name: 'Button',              desc: 'richButtons: tombol quick_reply (tanpa list kategori)' },
   v6:  { id: 6,  name: 'Document Premium',    desc: 'Thumbnail sebagai dokumen + caption menu' },
-  v7:  { id: 7,  name: 'Carousel',            desc: 'richList + tombol kategori & Semua' },
+  v7:  { id: 7,  name: 'Carousel',            desc: 'Carousel horizontal per kategori (native zapo)' },
   v8:  { id: 8,  name: 'Minimalist',          desc: 'Teks ringkas (12 baris pertama)' },
   v9:  { id: 9,  name: 'NativeFlow',          desc: 'richButtons: tombol + header media' },
   v10: { id: 10, name: 'Product Catalog',     desc: 'richButtons: Semua Fitur & Menu Utama' }

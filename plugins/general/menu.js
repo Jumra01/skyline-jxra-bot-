@@ -606,16 +606,33 @@ async function sendHomeVariant(ctx, v) {
       }), interactiveSendOptions(ctx.chat))
       return
     case 7:
-      // Carousel: tidak ada primitive carousel di zapo → fallback richList dengan tombol kategori
-      await ctx.client.message.send(ctx.chat, richList({
-        text,
-        footer: footer(),
-        title: `📂 ${config.botName} • Kategori`,
-        buttonText: 'Pilih Kategori',
-        sections: [{ title: `${rows.length} kategori`, rows }],
-        extraButtons: [...extraButtons, { id: 'menu:all', text: '📜 Semua' }],
-        headerImage
-      }), interactiveSendOptions(ctx.chat))
+      // Carousel: zapo mendukung carouselMessage (HSCROLL_CARDS)
+      {
+        const cards = orderedEntries(grouped).slice(0, 10).map(([tag, list]) => ({
+          body: { text: `${emojiOf(tag)} ${tag.toUpperCase()}\n${list.slice(0, 5).map((f) => `• ${config.mainPrefix}${f.name}`).join('\n')}${list.length > 5 ? `\n... +${list.length - 5}` : ''}` },
+          footer: { text: `${list.length} fitur` },
+          nativeFlowMessage: {
+            messageVersion: 1,
+            buttons: [{ name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: '📂 Buka', id: `menu:cat:${tag}` }) }]
+          }
+        }))
+        await ctx.client.message.send(ctx.chat, {
+          viewOnceMessage: {
+            message: {
+              messageContextInfo: { deviceListMetadataVersion: 2, deviceListMetadata: {} },
+              interactiveMessage: {
+                body: { text },
+                footer: { text: footer() },
+                carouselMessage: {
+                  cards,
+                  messageVersion: 1,
+                  carouselCardType: 1
+                }
+              }
+            }
+          }
+        }, interactiveSendOptions(ctx.chat))
+      }
       return
     case 8:
       // Minimalist: teks ringkas (12 baris pertama)
