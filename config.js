@@ -207,15 +207,16 @@ export default {
     },
   },
 
-  /* ── GAYA BALASAN (1-7) ── */
+  /* ── GAYA BALASAN (1-9) ── */
   reply: {
     variant: 1,
-    v9ThumbnailUrl: 'https://skyline.web.id/uploads/6a0484983cb9e74ec0ac32d5.png',
-    v9Title: '',
-    v9Brand: '',
-    v9Price: '',
-    v9ProductUrl: '',
-    v9IconUrl: '',
+    // v9 — kosong = default (lihat kanan). Wajib URL https://, path lokal diabaikan.
+    v9ThumbnailUrl: 'https://skyline.web.id/uploads/6a0484983cb9e74ec0ac32d5.png', // kosong = tanpa gambar
+    v9Title: '',      // kosong = nama bot
+    v9Brand: '',      // kosong = nama command
+    v9Price: '',      // kosong = "Online"
+    v9ProductUrl: '', // kosong = mode gambar biasa (isi https = product card)
+    v9IconUrl: '',    // kosong = tanpa ikon (isi https = product card)
     website: 'skyline.web.id',
     v4: {
       title: 'skyline-JXRA',
