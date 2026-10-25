@@ -123,8 +123,11 @@ function cacheMessage(ctx) {
 
   const body = String(ctx.body || '').trim()
   const { kind } = mediaInfo(ctx.event?.message)
+  const senderNumber = digits(ctx.sender)
   bucket.set(id, {
-    sender: digits(ctx.sender),
+    sender: senderNumber,
+    // JID buat mention asli (tag yang bisa diketuk + notifikasi).
+    mentionJid: String(ctx.sender || '').includes('@') ? String(ctx.sender) : `${senderNumber}@s.whatsapp.net`,
     name: String(ctx.pushName || '').slice(0, 40),
     text: body.slice(0, 1000),
     kind,
@@ -188,16 +191,24 @@ async function fetchMedia(entry) {
 }
 
 function headerFor(entry, deleter) {
-  // Tampilkan nama (pushName) dulu biar gak keliatan nomor mentah;
-  // nomor cuma dipakai kalau WhatsApp gak ngasih nama pengirim.
-  const who = String(entry.name || '').trim() || `@${entry.sender}`
+  // `@<nomor>` WAJIB ada di teks supaya mention benar-benar jadi tag
+  // (diketuk + notifikasi). Nama tetap ditampilkan di depan biar enak dibaca;
+  // WhatsApp biasanya mengganti token mention dengan nama kontak.
+  const tag = `@${entry.sender}`
+  const name = String(entry.name || '').trim()
+  const who = name ? `${name} (${tag})` : tag
   const jam = new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' })
-  const oleh = deleter && deleter !== who ? `\n🧹 Dihapus oleh : ${deleter}` : ''
+  const oleh = deleter && deleter !== name ? `\n🧹 Dihapus oleh : ${deleter}` : ''
   return (
     `🗑️ *PESAN DIHAPUS*\n\n` +
     `👤 Pengirim : ${who}\n` +
     `🕒 Dihapus  : ${jam} WIB${oleh}\n`
   )
+}
+
+/** Opsi kirim: mentah (tanpa reply-style) + mention asli kalau ada JID. */
+function sendOpts(entry) {
+  return entry?.mentionJid ? { ...SEND_OPTS, mentions: [entry.mentionJid] } : SEND_OPTS
 }
 
 /** Kirim ulang sesuai jenis media; balikin true kalau berhasil. */
@@ -210,13 +221,13 @@ async function resendMedia(client, chat, entry, deleter) {
   const caption = entry.text ? `${header}\n📝 Caption:\n${entry.text}` : `${header}\n📎 (${kindLabel(kind)} tanpa teks)`
 
   if (kind === 'image') {
-    await client.message.send(chat, { type: 'image', media: buffer, mimetype: mimetype || 'image/jpeg', caption }, SEND_OPTS)
+    await client.message.send(chat, { type: 'image', media: buffer, mimetype: mimetype || 'image/jpeg', caption }, sendOpts(entry))
   } else if (kind === 'video') {
-    await client.message.send(chat, { type: 'video', media: buffer, mimetype: mimetype || 'video/mp4', caption }, SEND_OPTS)
+    await client.message.send(chat, { type: 'video', media: buffer, mimetype: mimetype || 'video/mp4', caption }, sendOpts(entry))
   } else if (kind === 'sticker') {
     // Stiker tidak punya caption — kirim keterangan dulu, lalu stikernya.
-    await client.message.send(chat, `${header}\n📎 Stiker dari ${String(entry.name || '').trim() || `@${entry.sender}`}`, SEND_OPTS)
-    await client.message.send(chat, { type: 'sticker', media: buffer, mimetype: 'image/webp' }, SEND_OPTS)
+    await client.message.send(chat, `${header}\n📎 Stiker`, sendOpts(entry))
+    await client.message.send(chat, { type: 'sticker', media: buffer, mimetype: 'image/webp' }, sendOpts(entry))
   } else if (kind === 'audio') {
     await client.message.send(chat, {
       type: 'audio',
@@ -224,7 +235,7 @@ async function resendMedia(client, chat, entry, deleter) {
       mimetype: mimetype || 'audio/ogg; codecs=opus',
       ptt: Boolean(node.ptt),
       caption,
-    }, SEND_OPTS)
+    }, sendOpts(entry))
   } else if (kind === 'document') {
     await client.message.send(chat, {
       type: 'document',
@@ -232,7 +243,7 @@ async function resendMedia(client, chat, entry, deleter) {
       mimetype: mimetype || 'application/octet-stream',
       fileName: String(node.fileName || `pesan-dihapus-${Date.now()}`),
       caption,
-    }, SEND_OPTS)
+    }, sendOpts(entry))
   } else {
     return false
   }
@@ -281,7 +292,7 @@ addProtocolHook('antidelete', async (client, event) => {
     : `(${kindLabel(entry.kind)} tanpa teks)`
 
   try {
-    await client.message.send(chat, `${headerFor(entry, deleter)}\n📝 Isi pesan:\n${isi}`, SEND_OPTS)
+    await client.message.send(chat, `${headerFor(entry, deleter)}\n📝 Isi pesan:\n${isi}`, sendOpts(entry))
   } catch (err) {
     logger.warn({ err: String(err?.message || err) }, '[Antidelete] gagal kirim ulang')
   }
