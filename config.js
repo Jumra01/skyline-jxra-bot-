@@ -232,10 +232,12 @@ export default {
     menuVariant: 4,             // default menu (1, 2, 4). 4 = Location Button (Hoshino v21)
     menuCode: 'SKYLINE',       // kode copy untuk limited_time_offer (v4)
     menuThumb: 'assets/thumb/v4-thumb', // foto header v4 (ganti file INI, tanpa ekstensi; < 800KB)
-    // Header lokasi pemula (default skyline.web.id, ganti di config saja)
+    // Header lokasi pemula (default skyline.web.id, ganti di config saja).
+    // `url` = tujuan saat pin/header lokasi di ketuk (kosong = pakai saluran)
     menuLocation: {
       lat: -7.2575, long: 112.7521,
-      name: 'skyline-JXRA', address: 'https://skyline.web.id'
+      name: 'skyline-JXRA', address: 'https://skyline.web.id',
+      url: ''                           // ketuk pin → buka URL ini (mis. saluran/web sendiri)
     }
   },
 

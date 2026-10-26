@@ -720,6 +720,8 @@ async function sendHomeVariant(ctx, v) {
           const v4Thumb = config.ui?.menuThumb || THUMB_MENU     // foto header (ganti file = ganti foto+teks)
           const v4Code = (config.ui?.menuCode || 'SKYLINE').toUpperCase()
           const chanUrl = (config.cta?.channelUrl) || config.reactChannel?.dedicatedChannelUrl || config.cta?.url || 'https://whatsapp.com/channel/0029Vb8Tph9BVJl06WWw5q3B'
+          // Tujuan ketukan pin/header lokasi. Kosong = pakai saluran (chanUrl).
+          const v4Url = String(locCfg.url || '').trim() || chanUrl
           const now = new Date()
           const dateStr = now.toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
           const timeStr = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
@@ -762,6 +764,7 @@ Gunakan ${config.mainPrefix}menu <kategori> · ${config.mainPrefix}help <fitur>
 © ${v4Bot}`,
             headerTitle: v4Bot, headerSubtitle: `${v4Web} · ${dateStr} ${timeStr} WIB`,
             locationThumb: v4LocationThumb,
+            locationUrl: v4Url,
             sections: [{ title: `📂 ${v4Rows.length} Kategori`, rows: v4Rows }],
             channelUrl: chanUrl,
             copyCode: v4Code,
