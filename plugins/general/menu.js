@@ -896,7 +896,7 @@ async function sendHomeVariant(ctx, v) {
           const locCfg = config.ui?.menuLocation || {}
           const lat = Number(locCfg.lat ?? locCfg.latitude)
           const long = Number(locCfg.long ?? locCfg.lng ?? locCfg.longitude)
-          const v21Thumb = await jpegThumbBuffer(findThumb(THUMB_MENU), 320)
+          const v21Thumb = await jpegThumbBuffer(findThumb(config.ui?.menuThumb || THUMB_MENU), 320)
           const location = {
             degreesLatitude: Number.isFinite(lat) ? lat : -7.2575,
             degreesLongitude: Number.isFinite(long) ? long : 112.7521,

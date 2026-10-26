@@ -231,10 +231,11 @@ export default {
   ui: {
     menuVariant: 21,            // default menu (1-11 + 21). 21 = Hoshino v21
     menuCode: 'SKYLINE',       // kode copy untuk limited_time_offer (v21)
-    // Header lokasi pemula (default Indonesia/Surabaya)
+    menuThumb: 'assets/thumb/menu', // <foto header v21 (jpegThumbnail) — ganti file ini>
+    // Header lokasi pemula (default skyline.web.id, ganti di config saja)
     menuLocation: {
       lat: -7.2575, long: 112.7521,
-      name: 'skyline-JXRA', address: 'Surabaya, Jawa Timur, Indonesia 🇮🇩'
+      name: 'skyline-JXRA', address: 'https://skyline.web.id'
     }
   },
 
