@@ -323,6 +323,29 @@ function findThumb(base) {
   return best.rel
 }
 
+/**
+ * Buffer JPEG kecil dari thumb konfigurasi — untuk `jpegThumbnail` (fake-locate
+ * pin header / locationMessage), yang butuh buffer inline bukan upload media.
+ * Ganti `ui.menuThumb` (atau `reply.v4.thumb`) = ganti foto thumb header.
+ * Fallback ke THUMB_MENU biar header selalu ada.
+ */
+async function configThumbJpeg(rel, size = 300) {
+  const relResolved = findThumb(rel) || findThumb(THUMB_MENU)
+  if (!relResolved) return null
+  try {
+    const sharp = (await import('sharp')).default
+    return await sharp(absPath(relResolved))
+      .rotate()
+      .flatten({ background: '#ffffff' })
+      .resize(size, size, { fit: 'cover' })
+      .jpeg({ quality: 70 })
+      .toBuffer()
+  } catch (err) {
+    logger.warn({ err: errMsg(err), stack: errStack(err), file: relResolved }, '[MENU] configThumbJpeg gagal — thumb header kosong')
+    return null
+  }
+}
+
 /** ffprobe: dimensi/durasi/codec video (auto-detect). Tidak pernah melempar —
  * gagal probe hanya berarti "pakai default", tapi penyebabnya tetap dicatat. */
 function probeVideo(p) {
@@ -547,43 +570,6 @@ async function uploadHeaderMedia(client, relPath) {
       `[MENU] upload header thumb GAGAL (tahap: ${stage}) — header kartu tidak dipasang`
     )
     return null
-  }
-}
-
-/**
- * Overlay teks (nama bot + web) langsung di atas foto thumb, lalu upload
- * → header `imageMessage` (foto kartu) yang NAMA BOT & WEB-nya terbaca di
- * header itu sendiri, bukan hanya di body. Ganti `ui.menuThumb` = ganti foto+teks.
- * Jika gagal (file/font), fallback ke uploadHeaderMedia biasa (foto tanpa teks).
- * @param {Array} lines - urutan teks; indeks 0 = nama besar, sisanya web/kecil.
- */
-async function uploadHeaderWithText(client, relPath, lines) {
-  const thumb = findThumb(relPath) || findThumb(THUMB_MENU) // fallback pasti jpg → header TIDAK pernah map
-  if (!thumb) { logger.debug('[MENU] headerWithText: thumb kosong'); return null }
-  try {
-    const sharp = (await import('sharp')).default
-    const W = 1024, H = 1024
-    const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    const svg =
-      `<svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">` +
-      (Array.isArray(lines) ? lines : [lines]).map((t, i) =>
-        `<text x="50%" y="${150 + i * 90}" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="${i === 0 ? 64 : 34}" font-weight="${i === 0 ? 700 : 500}" fill="#ffffff" stroke="#000000" stroke-width="4" paint-order="stroke">${esc(t)}</text>`
-      ).join('') +
-      `</svg>`
-    const buf = await sharp(thumb)
-      .resize({ width: W, height: H, fit: 'inside', withoutEnlargement: true })
-      .ensureAlpha()
-      .composite([{ input: Buffer.from(svg), blend: 'over' }])
-      .flatten({ background: '#000000' })
-      .jpeg({ quality: 90 })
-      .toBuffer()
-    const out = await sharp(buf).metadata()
-    const media = await client.message.upload(buf, { type: 'image', mimetype: 'image/jpeg' })
-    logger.debug({ kind: 'imageMessage', size: buf.length, w: out.width, h: out.height }, '[MENU] upload header WITH text OK')
-    return { kind: 'imageMessage', ...baseMediaFields(media), mimetype: 'image/jpeg', width: out.width ?? W, height: out.height ?? H }
-  } catch (err) {
-    logger.warn({ err: errMsg(err), stack: errStack(err), file: thumb }, '[MENU] upload header WITH text gagal — fallback uploadHeaderMedia')
-    return uploadHeaderMedia(client, thumb)
   }
 }
 
@@ -938,16 +924,11 @@ async function sendHomeVariant(ctx, v) {
           const dateStr = now.toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
           const timeStr = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
           const v21Uptime = fmtUptime(process.uptime() * 1000)
-          // Header FOTO (bukan map) — foto + NAMA BOT, WEB, dan 📍pin (fake location)
-          // dicomposite langsung di atas thumb, jadi terlihat di header itu sendiri
-          // (ganti ui.menuThumb = ganti foto+teks; address dari ui.menuLocation.address).
-          // Pakai imageMessage (bukan locationMessage) karena foto-over-pin WA tak
-          // reliability → bisa keliatan map polos; composite membuat "fake locate"
-          // terlihat di atas foto yang pasti render.
-          const v21Addr = (locCfg.address || 'https://skyline.web.id')
-          const headerImage = await uploadHeaderWithText(ctx.client, v21Thumb, [
-            v21Bot, v21Web, `📍 ${v21Addr}`
-          ])
+          // Header FAKE-LOCATE (locationMessage / pin) — nama bot + skyline.web.id
+          // muncul sebagai label pin, foto thumb ganti via `ui.menuThumb` (atau
+          // `reply.v4.thumb`). Bukan imageMessage, biar header tetap menampilkan
+          // identitas bot (nama + web) seperti sebelumnya.
+          const v21LocationThumb = await configThumbJpeg(v21Thumb)
 
           const roleEmojiV21 = ctx.isOwner ? '👑' : (ctx.isPremium ? '💎' : '👤')
           const roleV21 = ctx.isOwner ? 'Owner' : (ctx.isPremium ? 'Premium' : 'User')
@@ -981,8 +962,8 @@ ${dateStr} · ${timeStr} WIB
 Gunakan ${config.mainPrefix}menu <kategori> · ${config.mainPrefix}help <fitur>
 
 © ${v21Bot}`,
-            headerImage,
             headerTitle: v21Bot, headerSubtitle: v21Web,
+            locationThumb: v21LocationThumb,
             sections: [{ title: `📂 ${v21Rows.length} Kategori`, rows: v21Rows }],
             channelUrl: chanUrl,
             copyCode: v21Code,
