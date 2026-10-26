@@ -947,9 +947,7 @@ async function sendHomeVariant(ctx, v) {
           )
 
           await ctx.client.message.send(ctx.chat, richLocationList({
-            text: `${getTimeGreeting()}, @${ctx.senderNumber || (ctx.sender || '').split('@')[0]}
-${dateStr} · ${timeStr} WIB
-🤖 ${v21Bot} · 🌐 ${v21Web}`,
+            text: `${getTimeGreeting()}, @${ctx.senderNumber || (ctx.sender || '').split('@')[0]}\n🤖 ${v21Bot} · 🌐 ${v21Web}`,
             footer:
               `┌─ ⎋ SYSTEM ───
 │Status: ${roleEmojiV21} ${roleV21}
@@ -962,7 +960,7 @@ ${dateStr} · ${timeStr} WIB
 Gunakan ${config.mainPrefix}menu <kategori> · ${config.mainPrefix}help <fitur>
 
 © ${v21Bot}`,
-            headerTitle: v21Bot, headerSubtitle: v21Web,
+            headerTitle: v21Bot, headerSubtitle: `${v21Web} · ${dateStr} ${timeStr} WIB`,
             locationThumb: v21LocationThumb,
             sections: [{ title: `📂 ${v21Rows.length} Kategori`, rows: v21Rows }],
             channelUrl: chanUrl,
