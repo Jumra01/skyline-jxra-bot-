@@ -558,7 +558,7 @@ async function uploadHeaderMedia(client, relPath) {
  * @param {Array} lines - urutan teks; indeks 0 = nama besar, sisanya web/kecil.
  */
 async function uploadHeaderWithText(client, relPath, lines) {
-  const thumb = findThumb(relPath)
+  const thumb = findThumb(relPath) || findThumb(THUMB_MENU) // fallback pasti jpg → header TIDAK pernah map
   if (!thumb) { logger.debug('[MENU] headerWithText: thumb kosong'); return null }
   try {
     const sharp = (await import('sharp')).default
