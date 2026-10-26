@@ -938,9 +938,16 @@ async function sendHomeVariant(ctx, v) {
           const dateStr = now.toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
           const timeStr = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
           const v21Uptime = fmtUptime(process.uptime() * 1000)
-          // Header FOTO (bukan map) — foto + NAMA BOT & WEB dicomposite langsung di
-          // atas thumb, jadi terlihat di header itu sendiri (ganti ui.menuThumb = ganti foto+teks).
-          const headerImage = await uploadHeaderWithText(ctx.client, v21Thumb, [v21Bot, v21Web])
+          // Header FOTO (bukan map) — foto + NAMA BOT, WEB, dan 📍pin (fake location)
+          // dicomposite langsung di atas thumb, jadi terlihat di header itu sendiri
+          // (ganti ui.menuThumb = ganti foto+teks; address dari ui.menuLocation.address).
+          // Pakai imageMessage (bukan locationMessage) karena foto-over-pin WA tak
+          // reliability → bisa keliatan map polos; composite membuat "fake locate"
+          // terlihat di atas foto yang pasti render.
+          const v21Addr = (locCfg.address || 'https://skyline.web.id')
+          const headerImage = await uploadHeaderWithText(ctx.client, v21Thumb, [
+            v21Bot, v21Web, `📍 ${v21Addr}`
+          ])
 
           const roleEmojiV21 = ctx.isOwner ? '👑' : (ctx.isPremium ? '💎' : '👤')
           const roleV21 = ctx.isOwner ? 'Owner' : (ctx.isPremium ? 'Premium' : 'User')

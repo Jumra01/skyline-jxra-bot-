@@ -411,9 +411,13 @@ async function runReplyVariant(ctx, text, style) {
       })
     }
 
-    /* v7 FAKE LOCATION — interactive header lokasi palsu */
+    /* v7 FAKE LOCATION — interactive header lokasi palsu (fakelocate) */
     case 7: {
-      const jpeg = await thumb300()
+      // Nama bot + address (skyline.web.id) + foto thumb semua dari config →
+      // ganti di config.ui.menuLocation.address / config.reply.v4.thumb.
+      const v7 = config.reply?.v7 || {}
+      const jpeg = await loadV4Thumb()   // thumb ganti lewat config.reply.v4.thumb
+      const addr = v7.address || config.ui?.menuLocation?.address || 'https://skyline.web.id'
       return client.message.send(
         chat,
         {
@@ -423,8 +427,8 @@ async function runReplyVariant(ctx, text, style) {
               locationMessage: {
                 degreesLatitude: 0,
                 degreesLongitude: 0,
-                name: config.botName,
-                address: 'WhatsApp Bot Multi Device',
+                name: config.botName || 'skyline-JXRA',
+                address: addr,
                 ...(jpeg ? { jpegThumbnail: jpeg } : {})
               }
             },
