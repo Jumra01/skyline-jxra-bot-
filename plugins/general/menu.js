@@ -13,7 +13,7 @@ import config from '../../config.js'
 import { listFeatures } from '../loader.js'
 import { totalUsers, getBalance, getUser } from '../../core/database.js'
 import { getCharacter } from '../../core/rpg.js'
-import { richList, richButtons, richLocationList, interactiveSendOptions } from '../../lib/richMessage.js'
+import { richList, richLocationList, interactiveSendOptions } from '../../lib/richMessage.js'
 import { logger } from '../../core/logger.js'
 import { onRichReply } from '../../handlers/messageHandler.js'
 import { getGlobal } from '../../core/groupSettings.js'
@@ -400,33 +400,6 @@ function videoThumbFrame(p) {
   return Buffer.from(r.stdout)
 }
 
-/**
- * Buat jpegThumbnail buffer (max `max` px, default 320) dari file foto.
- * Dipakai untuk `jpegThumbnail` di pesan location / header card agar WA
- * render preview foto di atas pin/kartu. Return null kalau gagal.
- */
-async function jpegThumbBuffer(relPath, max = 320) {
-  if (!relPath) return null
-  const p = absPath(relPath)
-  try {
-    if (!fs.existsSync(p)) return null
-    const sharp = (await import('sharp')).default
-    const buf = await sharp(p)
-      .rotate()
-      .flatten({ background: '#ffffff' })
-      .resize({ width: max, height: max, fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 65 })
-      .toBuffer()
-    return buf
-  } catch (err) {
-    logger.warn(
-      { file: relPath, err: errMsg(err) },
-      '[MENU] jpegThumbBuffer gagal — card tanpa thumbnail'
-    )
-    return null
-  }
-}
-
 /** Transcode ke mp4 h264 (720p cap, tanpa upscale) biar pasti bisa diputar */
 function transcodeMp4(p) {
   const out = path.join(os.tmpdir(), `zapo-thumb-${process.pid}-${Date.now()}.mp4`)
@@ -708,8 +681,16 @@ const pluginConfig = {
   energi: 0,
 };
 
+/** ID variant lama yang sudah dihapus → dipetakan ulang ke variant yang ada. */
+function normalizeMenuVariant(v) {
+  const n = Number(v)
+  if (n === 21) return 4   // Hoshino v21 dijadikan v4
+  if ([3, 5, 6, 7, 8, 9, 10, 11].includes(n)) return 2   // variant yang dihapus → Standard
+  return n
+}
+
 function getMenuVariant() {
-  return Number(getGlobal('menuVariant') || config.ui?.menuVariant || 2)
+  return normalizeMenuVariant(getGlobal('menuVariant') || config.ui?.menuVariant || 2)
 }
 
 // Varian yang butuh render khusus (selain v2 standar)
@@ -717,18 +698,8 @@ async function sendHomeVariant(ctx, v) {
   try {
     const grouped = regroup()
     const text = overviewText(ctx, grouped)
-    const rows = orderedEntries(grouped).map(([tag, list]) => ({
-      id: `menu:cat:${tag}`,
-      title: label(tag),
-      description: `${CATEGORY_INFO[tag] || ''} • ${list.length} fitur`
-    }))
-    const extraButtons = [{ id: 'menu:all', text: '📜 Semua Fitur' }]
-    if (config.reactChannel?.enabled && config.reactChannel?.dedicatedChannelUrl) {
-      extraButtons.push({ url: config.reactChannel.dedicatedChannelUrl, text: '📱 Channel' })
-    }
-    const headerImage = await uploadHeaderMedia(ctx.client, findThumb(THUMB_MENU))
     logger.debug(
-      { varian: v, kategori: rows.length, header: Boolean(headerImage) },
+      { varian: v, kategori: Object.keys(grouped).length },
       `[MENU] sendHomeVariant — render v${v}`
     )
 
@@ -737,235 +708,64 @@ async function sendHomeVariant(ctx, v) {
         // Simple: teks biasa tanpa kartu interaktif
         await ctx.reply(text)
         return
-      case 3:
-      case 6:
-        // Document: kirim thumbnail menu sebagai dokumen + caption menu.
-        // Pakai findThumb (auto-detect foto/video terbaru) — dulu hardcoded
-        // `.jpg`, jadi kalau hanya ada .png/.mp4, docBuf kosong → dokumen
-        // kosong yang ditolak WA tanpa penjelasan di konsol.
-        {
-          const docRel = findThumb(THUMB_MENU) || THUMB_MENU + '.jpg'
-          let docBuf = null
-          let docErr = null
-          try { docBuf = fs.readFileSync(absPath(docRel)) } catch (err) { docErr = err }
-          if (!docBuf) {
-            logger.warn(
-              { file: docRel, err: docErr ? errMsg(docErr) : 'file tidak ada' },
-              `[MENU] v${v} dokumen kosong — caption saja yang dikirim`
-            )
-          }
-          await ctx.client.message.send(ctx.chat, {
-            type: 'document', media: docBuf || Buffer.from(''),
-            mimetype: 'image/jpeg', fileName: `${config.botName}-menu.jpg`,
-            caption: text
-          }, interactiveSendOptions(ctx.chat))
-        }
-        return
       case 4:
-        // Video Interactive: richButtons dengan header video + tombol saluran/kategori
-        await ctx.client.message.send(ctx.chat, richButtons({
-          text,
-          footer: footer(),
-          buttons: [
-            { id: 'menu:all', text: '📜 Semua Fitur' },
-            ...(config.reactChannel?.dedicatedChannelUrl
-              ? [{ url: config.reactChannel.dedicatedChannelUrl, text: '📱 Channel' }]
-              : []),
-            { id: 'menu:home', text: '🏠 Menu Utama' }
-          ],
-          headerImage
-        }), interactiveSendOptions(ctx.chat))
-        return
-      case 5:
-        // Button: richButtons (tombol quick_reply, tanpa single_select list)
-        await ctx.client.message.send(ctx.chat, richButtons({
-          text,
-          footer: footer(),
-          buttons: [
-            { id: 'menu:all', text: '📜 Semua Fitur' },
-            { id: 'menu:home', text: '🏠 Menu Utama' },
-            ...(config.reactChannel?.dedicatedChannelUrl
-              ? [{ url: config.reactChannel.dedicatedChannelUrl, text: '📱 Channel' }]
-              : [])
-          ],
-          headerImage
-        }), interactiveSendOptions(ctx.chat))
-        return
-      case 7:
-        // Carousel: zapo mendukung carouselMessage (HSCROLL_CARDS)
-        {
-          const cards = orderedEntries(grouped).slice(0, 10).map(([tag, list]) => ({
-            body: { text: `${emojiOf(tag)} ${tag.toUpperCase()}\n${list.slice(0, 5).map((f) => `• ${config.mainPrefix}${f.name}`).join('\n')}${list.length > 5 ? `\n... +${list.length - 5}` : ''}` },
-            footer: { text: `${list.length} fitur` },
-            nativeFlowMessage: {
-              messageVersion: 1,
-              buttons: [{ name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: '📂 Buka', id: `menu:cat:${tag}` }) }]
-            }
-          }))
-          await ctx.client.message.send(ctx.chat, {
-            viewOnceMessage: {
-              message: {
-                messageContextInfo: { deviceListMetadataVersion: 2, deviceListMetadata: {} },
-                interactiveMessage: {
-                  body: { text },
-                  footer: { text: footer() },
-                  carouselMessage: {
-                    cards,
-                    messageVersion: 1,
-                    carouselCardType: 1
-                  }
-                }
-              }
-            }
-          }, interactiveSendOptions(ctx.chat))
-        }
-        return
-      case 8:
-        // Minimalist: teks ringkas (12 baris pertama)
-        await ctx.reply(text.split('\n').slice(0, 12).join('\n'))
-        return
-      case 9:
-        // NativeFlow: richButtons dengan select kategori + tombol owner/saluran
-        await ctx.client.message.send(ctx.chat, richButtons({
-          text,
-          footer: footer(),
-          buttons: [
-            {
-              // single_select kategori disisipkan via nativeFlow manual
-              id: 'menu:home',
-              text: '📂 Kategori'
-            },
-            { id: 'menu:all', text: '📜 Semua Fitur' },
-            ...(config.reactChannel?.dedicatedChannelUrl
-              ? [{ url: config.reactChannel.dedicatedChannelUrl, text: '📱 Channel' }]
-              : [])
-          ],
-          headerImage
-        }), interactiveSendOptions(ctx.chat))
-        return
-      case 10:
-        // Product Catalog: fallback richButtons (productMessage tidak tersedia di zapo)
-        await ctx.client.message.send(ctx.chat, richButtons({
-          text,
-          footer: footer(),
-          buttons: [
-            { id: 'menu:all', text: '📜 Semua Fitur' },
-            { id: 'menu:home', text: '🏠 Menu Utama' }
-          ],
-          headerImage
-        }), interactiveSendOptions(ctx.chat))
-        return
-      case 11:
-        // Fake location header: nama bot + durasi aktif + nama user,
-        // thumbnail foto menu, diikuti body daftar kategori.
-        // WA render `locationMessage` dengan `jpegThumbnail` di atas pin —
-        // itu "thumb fake location"-nya yang sebelumnya gagal muncul karena
-        // bentuk lama `{type:'location'}` (proto primitif, encode jadi pesan
-        // kosong). Bentuk benar = submessage `locationMessage` objek.
-        // Di grup zapo menyuntikkan ephemeral ke contextInfo, tapi karena
-        // locationMessage kini objek, pickContextInfoTarget menemukannya →
-        // applyContextInfo aman. noStyle tetap dikirim supaya hook global
-        // (core/context.js) tidak membeli ini balik jadi kartu lain.
-        {
-          const v11Bot = config.botName || 'skyline-JXRA'
-          const v11Uptime = fmtUptime(process.uptime() * 1000)
-          const v11User = ctx.pushName || 'Owner'
-          const v11Thumb = await jpegThumbBuffer(findThumb(THUMB_MENU), 320)
-          await ctx.client.message.send(ctx.chat, {
-            locationMessage: {
-              degreesLatitude: -6.2088,
-              degreesLongitude: 106.8456,
-              name: `${v11Bot} · Aktif ±${v11Uptime}`,
-              address: `User: ${v11User}`,
-              isLive: false,
-              ...(v11Thumb ? { jpegThumbnail: v11Thumb } : {})
-            }
-          }, {
-            ...interactiveSendOptions(ctx.chat),
-            noStyle: true,
-            disableGroupEphemeralAutoInject: true,
-            disableDirectEphemeralAutoInject: true
-          })
-          // Body: daftar kategori menu (teks + tombol). headerImage dipasang
-          // supaya kartu tidak "polosan button doang".
-          const v11Rows = orderedEntries(grouped).map(([tag, list]) => ({
-            id: `menu:cat:${tag}`,
-            title: label(tag),
-            description: `${CATEGORY_INFO[tag] || ''} • ${list.length} fitur`
-          }))
-          const v11Extra = [{ id: 'menu:all', text: '📜 Semua Fitur' }]
-          if (config.reactChannel?.enabled && config.reactChannel?.dedicatedChannelUrl) {
-            v11Extra.push({ url: config.reactChannel.dedicatedChannelUrl, text: '📱 Channel' })
-          }
-          await ctx.client.message.send(ctx.chat, richList({
-            text: overviewText(ctx, grouped),
-            footer: footer(),
-            title: `📂 ${v11Bot} • Kategori`,
-            buttonText: 'Pilih Kategori',
-            sections: [{ title: `${v11Rows.length} kategori`, rows: v11Rows }],
-            extraButtons: v11Extra,
-            headerImage: headerImage
-          }), interactiveSendOptions(ctx.chat))
-        }
-        return
-      case 21:
-        // Hoshino v21 (Location Button) — header FOTO + 3 tombol nativeFlow
+        // Location Button (Hoshino v21) — header pin lokasi + 3 tombol nativeFlow
         // (single_select kategori, cta_url saluran, quick_reply allmenu) +
         // bottom_sheet + limited_time_offer (copy_code badge).
         // SEMUA lewat config — ganti `ui.menuThumb`/`menuLocation.address`/`menuCode`:
         {
-          const v21Bot = config.botName || 'skyline-JXRA'   // nama bot (di body+footer+thumb overlay)
+          const v4Bot = config.botName || 'skyline-JXRA'   // nama bot (di body+footer+thumb overlay)
           const locCfg = config.ui?.menuLocation || {}
-          const v21Web = locCfg.address || 'https://skyline.web.id' // nama web/alamat
-          const v21Thumb = config.ui?.menuThumb || THUMB_MENU     // foto header (ganti file = ganti foto+teks)
-          const v21Code = (config.ui?.menuCode || 'SKYLINE').toUpperCase()
+          const v4Web = locCfg.address || 'https://skyline.web.id' // nama web/alamat
+          const v4Thumb = config.ui?.menuThumb || THUMB_MENU     // foto header (ganti file = ganti foto+teks)
+          const v4Code = (config.ui?.menuCode || 'SKYLINE').toUpperCase()
           const chanUrl = (config.cta?.channelUrl) || config.reactChannel?.dedicatedChannelUrl || config.cta?.url || 'https://whatsapp.com/channel/0029Vb8Tph9BVJl06WWw5q3B'
           const now = new Date()
           const dateStr = now.toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
           const timeStr = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
-          const v21Uptime = fmtUptime(process.uptime() * 1000)
+          const v4Uptime = fmtUptime(process.uptime() * 1000)
           // Header FAKE-LOCATE (locationMessage / pin) — nama bot + skyline.web.id
           // muncul sebagai label pin, foto thumb ganti via `ui.menuThumb` (atau
           // `reply.v4.thumb`). Bukan imageMessage, biar header tetap menampilkan
           // identitas bot (nama + web) seperti sebelumnya.
-          const v21LocationThumb = await configThumbJpeg(v21Thumb)
+          const v4LocationThumb = await configThumbJpeg(v4Thumb)
 
-          const roleEmojiV21 = ctx.isOwner ? '👑' : (ctx.isPremium ? '💎' : '👤')
-          const roleV21 = ctx.isOwner ? 'Owner' : (ctx.isPremium ? 'Premium' : 'User')
-          let limitV21 = '∞'
+          const roleEmojiV4 = ctx.isOwner ? '👑' : (ctx.isPremium ? '💎' : '👤')
+          const roleV4 = ctx.isOwner ? 'Owner' : (ctx.isPremium ? 'Premium' : 'User')
+          let limitV4 = '∞'
           if (!ctx.isOwner && !ctx.isPremium) {
-            try { const u = getUser(ctx.sender); limitV21 = u?.limit ?? 25 } catch { limitV21 = 25 }
+            try { const u = getUser(ctx.sender); limitV4 = u?.limit ?? 25 } catch { limitV4 = 25 }
           }
 
-          const v21Rows = orderedEntries(grouped).map(([tag, list]) => ({
+          const v4Rows = orderedEntries(grouped).map(([tag, list]) => ({
             id: `menu:cat:${tag}`,
             title: label(tag),
             description: `${CATEGORY_INFO[tag] || ''} • ${list.length} fitur`
           }))
-          const totalFiturV21 = v21Rows.reduce(
+          const totalFiturV4 = v4Rows.reduce(
             (a, r) => a + Number(r.description.match(/(\d+) fitur/)?.[1] || 0), 0
           )
 
           await ctx.client.message.send(ctx.chat, richLocationList({
-            text: `${getTimeGreeting()}, @${ctx.senderNumber || (ctx.sender || '').split('@')[0]}\n🤖 ${v21Bot} · 🌐 ${v21Web}`,
+            text: `${getTimeGreeting()}, @${ctx.senderNumber || (ctx.sender || '').split('@')[0]}\n🤖 ${v4Bot} · 🌐 ${v4Web}`,
             footer:
               `┌─ ⎋ SYSTEM ───
-│Status: ${roleEmojiV21} ${roleV21}
-│Uptime: ${v21Uptime}
-│Limit: ${limitV21}
+│Status: ${roleEmojiV4} ${roleV4}
+│Uptime: ${v4Uptime}
+│Limit: ${limitV4}
 │Mode: ${ctx.isGroup ? 'Group' : 'Private'}
-│Fitur: ${totalFiturV21} di ${v21Rows.length} kategori
+│Fitur: ${totalFiturV4} di ${v4Rows.length} kategori
 └─────────────
 
 Gunakan ${config.mainPrefix}menu <kategori> · ${config.mainPrefix}help <fitur>
 
-© ${v21Bot}`,
-            headerTitle: v21Bot, headerSubtitle: `${v21Web} · ${dateStr} ${timeStr} WIB`,
-            locationThumb: v21LocationThumb,
-            sections: [{ title: `📂 ${v21Rows.length} Kategori`, rows: v21Rows }],
+© ${v4Bot}`,
+            headerTitle: v4Bot, headerSubtitle: `${v4Web} · ${dateStr} ${timeStr} WIB`,
+            locationThumb: v4LocationThumb,
+            sections: [{ title: `📂 ${v4Rows.length} Kategori`, rows: v4Rows }],
             channelUrl: chanUrl,
-            copyCode: v21Code,
-            offerText: v21Bot.toUpperCase()
+            copyCode: v4Code,
+            offerText: v4Bot.toUpperCase()
           }), interactiveSendOptions(ctx.chat))
         }
         return
@@ -1010,4 +810,4 @@ async function handler(ctx) {
     return sendHomeVariant(ctx, v)
   }
 
-export { pluginConfig as config, handler, sendHomeVariant, sendHome, sendCategory, sendAll };
+export { pluginConfig as config, handler, sendHomeVariant, sendHome, sendCategory, sendAll, normalizeMenuVariant };
