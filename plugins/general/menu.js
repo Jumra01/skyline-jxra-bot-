@@ -886,22 +886,24 @@ async function sendHomeVariant(ctx, v) {
         }
         return
       case 21:
-        // Hoshino v21 layout (diterjemahkan ke zapo): pin lokasi di header
-        // kartu interaktif + single_select kategori + cta_url saluran +
-        // quick_reply allmenu + bottom_sheet + limited_time_offer (copy_code).
-        // v21 meletakkan locationMessage langsung di header kartu — itu
-        // 'thumb fake location' yang jadi bagian header, bukan pesan terpisah.
+        // Port Hoshino v21 (Location Button) ke zapo: pin lokasi sebagai header
+        // kartu + single_select kategori + cta_url saluran + quick_reply allmenu
+        // + bottom_sheet + limited_time_offer (copy_code). title/subtitle di
+        // atas pin; jpegThumbnail foto menu agar header tampil FOTO bukan map
+        // polos — gaya 'fake location setreply v9'.
         {
           const v21Bot = config.botName || 'skyline-JXRA'
           const locCfg = config.ui?.menuLocation || {}
           const lat = Number(locCfg.lat ?? locCfg.latitude)
           const long = Number(locCfg.long ?? locCfg.lng ?? locCfg.longitude)
+          const v21Thumb = await jpegThumbBuffer(findThumb(THUMB_MENU), 320)
           const location = {
             degreesLatitude: Number.isFinite(lat) ? lat : -7.2575,
             degreesLongitude: Number.isFinite(long) ? long : 112.7521,
             name: locCfg.name || v21Bot,
             address: locCfg.address || 'Surabaya, Jawa Timur, Indonesia 🇮🇩',
-            isLive: false
+            isLive: false,
+            ...(v21Thumb ? { jpegThumbnail: v21Thumb } : {})
           }
           const v21Uptime = fmtUptime(process.uptime() * 1000)
           const now = new Date()
@@ -912,10 +914,7 @@ async function sendHomeVariant(ctx, v) {
           const roleV21 = ctx.isOwner ? 'Owner' : (ctx.isPremium ? 'Premium' : 'User')
           let limitV21 = '∞'
           if (!ctx.isOwner && !ctx.isPremium) {
-            try {
-              const u = getUser(ctx.sender)
-              limitV21 = u?.limit ?? 25
-            } catch { limitV21 = 25 }
+            try { const u = getUser(ctx.sender); limitV21 = u?.limit ?? 25 } catch { limitV21 = 25 }
           }
 
           const v21Rows = orderedEntries(grouped).map(([tag, list]) => ({
@@ -927,31 +926,10 @@ async function sendHomeVariant(ctx, v) {
             (a, r) => a + Number(r.description.match(/(\d+) fitur/)?.[1] || 0), 0
           )
 
-          const v21Extra = []
-          if (config.reactChannel?.enabled && config.reactChannel?.dedicatedChannelUrl) {
-            v21Extra.push({ url: config.reactChannel.dedicatedChannelUrl, text: '📱 Channel' })
-          }
-          v21Extra.push({ id: 'menu:all', text: '📜 Semua Fitur' })
-
-          const codeV21 = (config.ui?.menuCode || 'SKYLINE').toUpperCase()
           const chanUrl = config.reactChannel?.dedicatedChannelUrl || config.cta?.url || 'https://whatsapp.com/channel/0029Vb8Tph9BVJl06WWw5q3B'
-          const messageParamsV21 = {
-            bottom_sheet: {
-              list_title: 'Pilih Kategori',
-              button_title: ' ',
-              in_thread_buttons_limit: 3,
-              divider_indices: [1, 2]
-            },
-            limited_time_offer: {
-              text: v21Bot.toUpperCase(),
-              url: chanUrl,
-              copy_code: codeV21,
-              expiration_time: Date.now() + 3_600_000
-            }
-          }
 
           await ctx.client.message.send(ctx.chat, richLocationList({
-            text: `${getTimeGreeting()}, *${ctx.pushName || 'User'}* 🪸\nHai, aku ${v21Bot}. Menu cepat & interaktif siap dipakai.\n${timeStr} · ${dateStr}`,
+            text: `${getTimeGreeting()}, @${ctx.senderNumber || (ctx.sender || '').split('@')[0]}\n${dateStr} · ${timeStr} WIB`,
             footer:
               `┌─ ⎋ SYSTEM ───\n` +
               `│Status: ${roleEmojiV21} ${roleV21}\n` +
@@ -961,16 +939,18 @@ async function sendHomeVariant(ctx, v) {
               `│Fitur: ${totalFiturV21} di ${v21Rows.length} kategori\n` +
               `└─────────────\n\nGunakan ${config.mainPrefix}menu <kategori> · ${config.mainPrefix}help <fitur>\n\n© ${v21Bot}`,
             location,
+            headerTitle: v21Bot.toUpperCase(),
+            headerSubtitle: `Online · ${timeStr} WIB`,
             sections: [{ title: `📂 ${v21Rows.length} Kategori`, rows: v21Rows }],
-            extraButtons: v21Extra,
-            messageParams: messageParamsV21,
-            title: 'Pilih Kategori',
-            buttonText: 'Pilih Kategori'
+            channelUrl: chanUrl,
+            copyCode: (config.ui?.menuCode || 'SKYLINE').toUpperCase(),
+            offerText: v21Bot.toUpperCase()
           }), interactiveSendOptions(ctx.chat))
         }
         return
       default:
         return sendHome(ctx)
+
     }
     logger.debug({ varian: v }, `[MENU] sendHomeVariant v${v} terkirim`)
   } catch (err) {
