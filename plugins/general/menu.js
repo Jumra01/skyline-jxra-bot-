@@ -886,29 +886,23 @@ async function sendHomeVariant(ctx, v) {
         }
         return
       case 21:
-        // Port Hoshino v21 (Location Button) ke zapo: pin lokasi sebagai header
-        // kartu + single_select kategori + cta_url saluran + quick_reply allmenu
-        // + bottom_sheet + limited_time_offer (copy_code). title/subtitle di
-        // atas pin; jpegThumbnail foto menu agar header tampil FOTO bukan map
-        // polos — gaya 'fake location setreply v9'.
+        // Hoshino v21 (Location Button) — header FOTO + 3 tombol nativeFlow
+        // (single_select kategori, cta_url saluran, quick_reply allmenu) +
+        // bottom_sheet + limited_time_offer (copy_code badge).
+        // SEMUA lewat config — ganti `ui.menuThumb`/`menuLocation.address`/`menuCode`:
         {
-          const v21Bot = config.botName || 'skyline-JXRA'
+          const v21Bot = config.botName || 'skyline-JXRA'   // nama bot (di body+footer)
           const locCfg = config.ui?.menuLocation || {}
-          const lat = Number(locCfg.lat ?? locCfg.latitude)
-          const long = Number(locCfg.long ?? locCfg.lng ?? locCfg.longitude)
-          const v21Thumb = await jpegThumbBuffer(findThumb(config.ui?.menuThumb || THUMB_MENU), 320)
-          const location = {
-            degreesLatitude: Number.isFinite(lat) ? lat : -7.2575,
-            degreesLongitude: Number.isFinite(long) ? long : 112.7521,
-            name: locCfg.name || v21Bot,
-            address: locCfg.address || 'Surabaya, Jawa Timur, Indonesia 🇮🇩',
-            isLive: false,
-            ...(v21Thumb ? { jpegThumbnail: v21Thumb } : {})
-          }
-          const v21Uptime = fmtUptime(process.uptime() * 1000)
+          const v21Web = locCfg.address || 'https://skyline.web.id' // nama web/alamat
+          const v21Thumb = config.ui?.menuThumb || THUMB_MENU     // foto header (ganti file)
+          const v21Code = (config.ui?.menuCode || 'SKYLINE').toUpperCase()
+          const chanUrl = config.reactChannel?.dedicatedChannelUrl || config.cta?.url || 'https://whatsapp.com/channel/0029Vb8Tph9BVJl06WWw5q3B'
           const now = new Date()
           const dateStr = now.toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
           const timeStr = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
+          const v21Uptime = fmtUptime(process.uptime() * 1000)
+          // Header FOTO (bukan map): upload thumb — render reliable di semua device
+          const headerImage = await uploadHeaderMedia(ctx.client, findThumb(v21Thumb))
 
           const roleEmojiV21 = ctx.isOwner ? '👑' : (ctx.isPremium ? '💎' : '👤')
           const roleV21 = ctx.isOwner ? 'Owner' : (ctx.isPremium ? 'Premium' : 'User')
@@ -926,24 +920,26 @@ async function sendHomeVariant(ctx, v) {
             (a, r) => a + Number(r.description.match(/(\d+) fitur/)?.[1] || 0), 0
           )
 
-          const chanUrl = config.reactChannel?.dedicatedChannelUrl || config.cta?.url || 'https://whatsapp.com/channel/0029Vb8Tph9BVJl06WWw5q3B'
-
           await ctx.client.message.send(ctx.chat, richLocationList({
-            text: `${getTimeGreeting()}, @${ctx.senderNumber || (ctx.sender || '').split('@')[0]}\n${dateStr} · ${timeStr} WIB`,
+            text: `${getTimeGreeting()}, @${ctx.senderNumber || (ctx.sender || '').split('@')[0]}
+${dateStr} · ${timeStr} WIB
+🤖 ${v21Bot} · 🌐 ${v21Web}`,
             footer:
-              `┌─ ⎋ SYSTEM ───\n` +
-              `│Status: ${roleEmojiV21} ${roleV21}\n` +
-              `│Uptime: ${v21Uptime}\n` +
-              `│Limit: ${limitV21}\n` +
-              `│Mode: ${ctx.isGroup ? 'Group' : 'Private'}\n` +
-              `│Fitur: ${totalFiturV21} di ${v21Rows.length} kategori\n` +
-              `└─────────────\n\nGunakan ${config.mainPrefix}menu <kategori> · ${config.mainPrefix}help <fitur>\n\n© ${v21Bot}`,
-            location,
-            headerTitle: v21Bot.toUpperCase(),
-            headerSubtitle: `Online · ${timeStr} WIB`,
+              `┌─ ⎋ SYSTEM ───
+│Status: ${roleEmojiV21} ${roleV21}
+│Uptime: ${v21Uptime}
+│Limit: ${limitV21}
+│Mode: ${ctx.isGroup ? 'Group' : 'Private'}
+│Fitur: ${totalFiturV21} di ${v21Rows.length} kategori
+└─────────────
+
+Gunakan ${config.mainPrefix}menu <kategori> · ${config.mainPrefix}help <fitur>
+
+© ${v21Bot}`,
+            headerImage,
             sections: [{ title: `📂 ${v21Rows.length} Kategori`, rows: v21Rows }],
             channelUrl: chanUrl,
-            copyCode: (config.ui?.menuCode || 'SKYLINE').toUpperCase(),
+            copyCode: v21Code,
             offerText: v21Bot.toUpperCase()
           }), interactiveSendOptions(ctx.chat))
         }

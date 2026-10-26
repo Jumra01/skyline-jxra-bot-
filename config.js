@@ -231,7 +231,7 @@ export default {
   ui: {
     menuVariant: 21,            // default menu (1-11 + 21). 21 = Hoshino v21
     menuCode: 'SKYLINE',       // kode copy untuk limited_time_offer (v21)
-    menuThumb: 'assets/thumb/menu', // <foto header v21 (jpegThumbnail) — ganti file ini>
+    menuThumb: 'assets/thumb/v4-thumb.jpg', // foto header v21 (ganti file ini; < 800KB)
     // Header lokasi pemula (default skyline.web.id, ganti di config saja)
     menuLocation: {
       lat: -7.2575, long: 112.7521,
