@@ -550,6 +550,43 @@ async function uploadHeaderMedia(client, relPath) {
   }
 }
 
+/**
+ * Overlay teks (nama bot + web) langsung di atas foto thumb, lalu upload
+ * → header `imageMessage` (foto kartu) yang NAMA BOT & WEB-nya terbaca di
+ * header itu sendiri, bukan hanya di body. Ganti `ui.menuThumb` = ganti foto+teks.
+ * Jika gagal (file/font), fallback ke uploadHeaderMedia biasa (foto tanpa teks).
+ * @param {Array} lines - urutan teks; indeks 0 = nama besar, sisanya web/kecil.
+ */
+async function uploadHeaderWithText(client, relPath, lines) {
+  const thumb = findThumb(relPath)
+  if (!thumb) { logger.debug('[MENU] headerWithText: thumb kosong'); return null }
+  try {
+    const sharp = (await import('sharp')).default
+    const W = 1024, H = 1024
+    const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    const svg =
+      `<svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">` +
+      (Array.isArray(lines) ? lines : [lines]).map((t, i) =>
+        `<text x="50%" y="${150 + i * 90}" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="${i === 0 ? 64 : 34}" font-weight="${i === 0 ? 700 : 500}" fill="#ffffff" stroke="#000000" stroke-width="4" paint-order="stroke">${esc(t)}</text>`
+      ).join('') +
+      `</svg>`
+    const buf = await sharp(thumb)
+      .resize({ width: W, height: H, fit: 'inside', withoutEnlargement: true })
+      .ensureAlpha()
+      .composite([{ input: Buffer.from(svg), blend: 'over' }])
+      .flatten({ background: '#000000' })
+      .jpeg({ quality: 90 })
+      .toBuffer()
+    const out = await sharp(buf).metadata()
+    const media = await client.message.upload(buf, { type: 'image', mimetype: 'image/jpeg' })
+    logger.debug({ kind: 'imageMessage', size: buf.length, w: out.width, h: out.height }, '[MENU] upload header WITH text OK')
+    return { kind: 'imageMessage', ...baseMediaFields(media), mimetype: 'image/jpeg', width: out.width ?? W, height: out.height ?? H }
+  } catch (err) {
+    logger.warn({ err: errMsg(err), stack: errStack(err), file: thumb }, '[MENU] upload header WITH text gagal — fallback uploadHeaderMedia')
+    return uploadHeaderMedia(client, thumb)
+  }
+}
+
 function footer() {
   return `Pilih tombol dibawah • Made with ♡ by ${config.botName}`
 }
@@ -891,18 +928,19 @@ async function sendHomeVariant(ctx, v) {
         // bottom_sheet + limited_time_offer (copy_code badge).
         // SEMUA lewat config — ganti `ui.menuThumb`/`menuLocation.address`/`menuCode`:
         {
-          const v21Bot = config.botName || 'skyline-JXRA'   // nama bot (di body+footer)
+          const v21Bot = config.botName || 'skyline-JXRA'   // nama bot (di body+footer+thumb overlay)
           const locCfg = config.ui?.menuLocation || {}
           const v21Web = locCfg.address || 'https://skyline.web.id' // nama web/alamat
-          const v21Thumb = config.ui?.menuThumb || THUMB_MENU     // foto header (ganti file)
+          const v21Thumb = config.ui?.menuThumb || THUMB_MENU     // foto header (ganti file = ganti foto+teks)
           const v21Code = (config.ui?.menuCode || 'SKYLINE').toUpperCase()
-          const chanUrl = config.reactChannel?.dedicatedChannelUrl || config.cta?.url || 'https://whatsapp.com/channel/0029Vb8Tph9BVJl06WWw5q3B'
+          const chanUrl = (config.cta?.channelUrl) || config.reactChannel?.dedicatedChannelUrl || config.cta?.url || 'https://whatsapp.com/channel/0029Vb8Tph9BVJl06WWw5q3B'
           const now = new Date()
           const dateStr = now.toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
           const timeStr = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
           const v21Uptime = fmtUptime(process.uptime() * 1000)
-          // Header FOTO (bukan map): upload thumb — render reliable di semua device
-          const headerImage = await uploadHeaderMedia(ctx.client, findThumb(v21Thumb))
+          // Header FOTO (bukan map) — foto + NAMA BOT & WEB dicomposite langsung di
+          // atas thumb, jadi terlihat di header itu sendiri (ganti ui.menuThumb = ganti foto+teks).
+          const headerImage = await uploadHeaderWithText(ctx.client, v21Thumb, [v21Bot, v21Web])
 
           const roleEmojiV21 = ctx.isOwner ? '👑' : (ctx.isPremium ? '💎' : '👤')
           const roleV21 = ctx.isOwner ? 'Owner' : (ctx.isPremium ? 'Premium' : 'User')
@@ -937,6 +975,7 @@ Gunakan ${config.mainPrefix}menu <kategori> · ${config.mainPrefix}help <fitur>
 
 © ${v21Bot}`,
             headerImage,
+            headerTitle: v21Bot, headerSubtitle: v21Web,
             sections: [{ title: `📂 ${v21Rows.length} Kategori`, rows: v21Rows }],
             channelUrl: chanUrl,
             copyCode: v21Code,
