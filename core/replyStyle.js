@@ -14,7 +14,6 @@ import config from '../config.js'
 import { logger } from './logger.js'
 import { getThumbBuffer, getAdReply } from './cta.js'
 import { isPremiumActive } from './database.js'
-import { generateVerificationMetadata } from '../lib/jhrich.js'
 
 const DATA_DIR = path.join(process.cwd(), 'src', 'data')
 const FILE = path.join(DATA_DIR, 'replyStyle.json')
@@ -628,31 +627,32 @@ async function runReplyVariant(ctx, text, style) {
           { view_model: { primitive: { text: richBody, __typename: 'GenAIMarkdownTextUXPrimitive' }, __typename: 'GenAISingleLayoutViewModel' } }
         ]
       }
-      try {
-        const richResult = await client.message.send(chat, {
-          botForwardedMessage: {
-            message: {
-              richResponseMessage: {
-                messageType: 1,
-                submessages: [{ messageType: 2, messageText: richBody }],
-                unifiedResponse: { data: Buffer.from(JSON.stringify(payload)).toString('base64') },
-                contextInfo: { forwardingScore: 1, isForwarded: true, forwardedAiBotMessageInfo: { botJid: '236911050403982@bot' }, forwardOrigin: 4 }
-              }
-            }
-          },
-          messageContextInfo: {
-            deviceListMetadata: {},
-            deviceListMetadataVersion: 2,
-            botMetadata: {
-              messageDisclaimerText: '',
-              verificationMetadata: generateVerificationMetadata(),
-              botResponseId: crypto.randomUUID()
+      /* Envelope v8 wajib POLOS — hanya `{ isForwarded, forwardOrigin: 4 }`.
+       * Field `forwardedAiBotMessageInfo` + `forwardingScore` + wrapper
+       * `messageContextInfo.botMetadata.verificationMetadata` (palsu) bikin
+       * WhatsApp menampilkan prompt "Please update WhatsApp to the latest
+       * version" padahal WA sudah versi terbaru — jalur `unifiedResponse`
+       * (GenAI) memverifikasi metadata itu. Sudah dibuktikan saat fix
+       * `.tesrich html`; pola aman = persis `sendNativeHtml` (lib/emeraldCard.js).
+       * Payload dibangun SEKALI dan dipakai ulang untuk edit-identik. */
+      const richContent = {
+        botForwardedMessage: {
+          message: {
+            richResponseMessage: {
+              messageType: 1,
+              submessages: [{ messageType: 2, messageText: richBody }],
+              unifiedResponse: { data: Buffer.from(JSON.stringify(payload)).toString('base64') },
+              contextInfo: { isForwarded: true, forwardOrigin: 4 }
             }
           }
-        }, { additionalAttributes: { type: 'text' } })
+        }
+      }
+      try {
+        const richResult = await client.message.send(chat, richContent, { additionalAttributes: { type: 'text' } })
         const richId = richResult?.id || richResult?.key?.id || richResult?.messageId
         if (richId) {
           try {
+            const meJid = client.getCurrentMeJid?.() || client.getCurrentCredentials?.()?.meJid
             await client.message.send(chat, {
               botForwardedMessage: {
                 message: {
@@ -661,31 +661,16 @@ async function runReplyVariant(ctx, text, style) {
                       remoteJid: chat,
                       fromMe: true,
                       id: richId,
-                      ...(String(chat).endsWith('@g.us') ? { participant: client.getCurrentMeJid?.() || client.getCurrentCredentials?.()?.meJid } : {})
+                      ...(String(chat).endsWith('@g.us') && meJid ? { participant: meJid } : {})
                     },
                     type: 14,
-                    editedMessage: {
-                      botForwardedMessage: {
-                        message: {
-                          richResponseMessage: {
-                            messageType: 1,
-                            submessages: [{ messageType: 2, messageText: richBody }],
-                            unifiedResponse: { data: Buffer.from(JSON.stringify(payload)).toString('base64') },
-                            contextInfo: { forwardingScore: 1, isForwarded: true, forwardedAiBotMessageInfo: { botJid: '236911050403982@bot' }, forwardOrigin: 4 }
-                          }
-                        }
-                      },
-                      messageContextInfo: {
-                        deviceListMetadata: {}, deviceListMetadataVersion: 2,
-                        botMetadata: { messageDisclaimerText: '', verificationMetadata: generateVerificationMetadata(), botResponseId: crypto.randomUUID() }
-                      }
-                    }
+                    editedMessage: richContent
                   }
                 }
               }
             }, { additionalAttributes: { type: 'text' } })
           } catch (editErr) {
-            logger.warn({ err: String(editErr?.message ?? editErr) }, 'reply v8 rich edit-bypass gagal')
+            logger.warn({ err: String(editErr?.message ?? editErr) }, 'reply v8 rich edit-identik gagal')
           }
           return richResult
         }
