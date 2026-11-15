@@ -946,7 +946,7 @@ async function gemmaOnce(body, website, timeoutMs) {
  * tetap dibatasi `timeoutMs` biar bot gak nunggu kebangetan, dan status "ramai"
  * sengaja TIDAK dihitung ke breaker (biar 3× ramai gak bikin fitur mati 5 menit).
  */
-export async function gemmaChat({ message, history = [], system = '', timeoutMs = 60000, retries = 2 } = {}) {
+export async function gemmaChat({ message, history = [], system = '', image = '', timeoutMs = 60000, retries = 2 } = {}) {
   const teks = String(message || '').trim();
   if (!teks) throw new SkylineApiError('Pesan kosong', 400);
 
@@ -954,8 +954,14 @@ export async function gemmaChat({ message, history = [], system = '', timeoutMs 
 
   breakerCheck('gemma');
 
+  // Gambar (vision): data URL base64. Server upload ke upstream & balas
+  // `image_attached` — false = model GAK melihat gambarnya (client boleh
+  // jalur cadangan OCR/deskripsi).
+  const gambar = String(image || '').trim().slice(0, 2_200_000);
+
   const body = { message: teks.slice(0, 4000) };
   if (apikey) body.apikey = apikey;
+  if (gambar) body.image = gambar;
   if (Array.isArray(history) && history.length) {
     body.history = history
       .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && String(m.content || '').trim())
@@ -966,9 +972,11 @@ export async function gemmaChat({ message, history = [], system = '', timeoutMs 
 
   // Versi "ringan": tanpa riwayat + persona dipotong. Dipakai di percobaan
   // terakhir kalau server bilang ramai — payload kecil lebih gampang diterima
-  // waktu server penuh / kena batas ukuran.
+  // waktu server penuh / kena batas ukuran. Gambar TETAP dibawa: tanpa itu
+  // balasan soal isi gambarnya pasti ngawur.
   const liteBody = { message: teks.slice(0, 2000) };
   if (apikey) liteBody.apikey = apikey;
+  if (gambar) liteBody.image = gambar;
   if (system) liteBody.system = String(system).slice(0, 1200);
 
   // Batas tunggu: `timeoutMs` <= 0 = tanpa batas (dipakai 10 menit sebagai
@@ -998,6 +1006,10 @@ export async function gemmaChat({ message, history = [], system = '', timeoutMs 
       return {
         reply,
         model: String(json.model || 'gemma-4-31b'),
+        // Gambar beneran dilihat model? Kalau gambar dikirim tapi server
+        // balas `image_attached` bukan true (upload gagal / server lama),
+        // anggap false supaya client pakai jalur cadangan.
+        imageAttached: gambar ? json.image_attached === true : true,
         tookMs: Number(json.took_ms) || 0,
         attempts,
         website

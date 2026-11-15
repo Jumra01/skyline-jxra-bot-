@@ -56,7 +56,10 @@ import { kindOf, kindOfJid, parseKind, KIND_LABEL, getGlobalKind, setGlobalKind,
 import { extractFacts, remember, factsFor, formatBlock, forget } from '../../lib/aiMemory.js'
 import { gemmaChat, gemmaLoad, warmGemma, isConfigured as skylineReady, keyTag, keySource, explainSkylineError } from '../../scraper/SKYLINE.js'
 import { isBotMentioned, stripMention, botIdentity, withTimeout, findImgNode } from '../../lib/aiTrigger.js'
+import { downloadMedia } from '../../lib/media.js'
+import { readImage, visionContext } from '../../lib/visionFallback.js'
 import { mayExec, parseRunMarkers, runBotCommand, allowNames, splitCommand } from '../../lib/commandExec.js'
+import sharp from 'sharp'
 import { getFeature } from '../loader.js'
 import { isAdmission } from '../../lib/ella.js'
 import {
@@ -642,7 +645,60 @@ async function applyRunMarkers(ctx, reply, { execOn = false, open = false, conf 
   }
 }
 
-async function runChat(ctx, text, { mode = 'onlychat', hasImage = false } = {}) {
+/* ══════════════════════ vision (lihat gambar/stiker) ══════════════════════ */
+const VISION_MAX_DIM = 1024              // sisi terpanjang setelah resize
+const VISION_B64_MAX = 2_190_000         // batas base64 yang diterima server (2,2 jt char)
+
+/** Pesan default kalau user kirim gambar/stiker tanpa caption. */
+const VISION_PROMPT = 'Lihat gambar/stiker yang menyertai pesan ini, lalu jawab singkat sesuai isinya.'
+
+/**
+ * Unduh gambar/stiker dari pesan (langsung atau yang di-quote) → siap dikirim
+ * ke server sebagai vision BENERAN (bukan OCR). Balikin null kalau gak ada
+ * gambar / gagal unduh / gagal proses.
+ *
+ * Stiker webp diflatten ke putih biar transparansinya gak jadi hitam.
+ * Hasilnya JPEG 1024px — cukup kecil buat body 10MB + cap base64 server.
+ */
+async function grabVision(ctx) {
+  const hit = findImgNode(ctx?.event?.message)
+  if (!hit) return null
+  try {
+    const media = await withTimeout(downloadMedia(ctx.client, ctx.event), 20000, null)
+    const raw = media?.buffer
+    if (!raw?.length) return null
+
+    let jpeg = await sharp(raw, { animated: false })
+      .rotate()
+      .resize(VISION_MAX_DIM, VISION_MAX_DIM, { fit: 'inside', withoutEnlargement: true })
+      .flatten({ background: '#ffffff' })
+      .jpeg({ quality: 82 })
+      .toBuffer()
+
+    // Kebesaran? Kompresi ulang lebih kecil. Kalau masih lewat batas, gambar
+    // tetap dibawa tanpa dataUrl → jalur cadangan (OCR) yang pegang.
+    if (Math.ceil(jpeg.length / 3) * 4 > VISION_B64_MAX) {
+      jpeg = await sharp(jpeg)
+        .resize(768, 768, { fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality: 65 })
+        .toBuffer()
+    }
+    const dataUrl = Math.ceil(jpeg.length / 3) * 4 <= VISION_B64_MAX
+      ? `data:image/jpeg;base64,${jpeg.toString('base64')}`
+      : ''
+
+    logger.debug(
+      { jenis: hit.field, asliKB: Math.round(raw.length / 1024), kirimKB: Math.round(jpeg.length / 1024), dataUrl: Boolean(dataUrl) },
+      '[Ella2] gambar siap dikirim ke otak'
+    )
+    return { dataUrl, buffer: jpeg, field: hit.field }
+  } catch (err) {
+    logger.warn({ err: String(err?.message || err).slice(0, 120) }, '[Ella2] gambar gagal diproses buat vision')
+    return null
+  }
+}
+
+async function runChat(ctx, text, { mode = 'onlychat', hasImage = false, vision = null } = {}) {
   const conf = cfg()
   const key = storeKey(ctx)
   let h = store.get(key)
@@ -668,9 +724,13 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false } = {}) 
   const execOn = mayExec(ctx, { mode: conf.exec, isGroupAdmin: info.group?.isGroupAdmin })
   // Owner/staff bot = bebas minta command apa pun; admin grup terikat daftar.
   const openExec = Boolean(ctx.isOwner || ctx.isStaff)
-  const imageNote = hasImage
-    ? '\n\n[CATATAN] Dia juga mengirim gambar/stiker, tapi kamu belum bisa melihat isinya. Jangan ngarang isi gambarnya; kalau perlu, bilang singkat belum bisa lihat.'
-    : ''
+  const imageNote = vision?.dataUrl
+    ? '\n\n[CATATAN] User mengirim gambar/stiker bersama pesan ini — gambarnya terlihat olehmu. Jawab sesuai isi gambarnya; jangan ngarang.'
+    : vision
+      ? '\n\n[CATATAN] User mengirim gambar/stiker, tapi belum tentu kebaca — jawab dengan hati-hati, jangan ngarang isi gambarnya.'
+      : hasImage
+        ? '\n\n[CATATAN] Dia juga mengirim gambar/stiker, tapi gambarnya gagal diambil — kamu belum bisa melihat isinya. Jangan ngarang isi gambarnya; kalau perlu, bilang singkat belum bisa lihat.'
+        : ''
 
   const system = buildElla2System({
     name: info.name,
@@ -716,16 +776,20 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false } = {}) 
 
   let reply = ''
   let tookMs = 0
+  let imageAttached = true
   try {
     const r = await withChatQueue(storeKey(ctx), () => gemmaChat({
       message: text,
       history,
       system,
+      image: vision?.dataUrl || '',
       timeoutMs: conf.timeoutMs,
       retries: conf.retries,
     }))
     reply = r.reply
     tookMs = r.tookMs
+    imageAttached = r.imageAttached !== false
+    if (vision && !imageAttached) logger.warn('[Ella2] upload gambar ke server gagal — pakai jalur cadangan')
     if (r.attempts > 1) {
       logger.info(
         `[Ella2] akhirnya jawab — ${r.attempts}× coba • ${(r.tookMs / 1000).toFixed(1)}s • model ${r.model} • ${ctx.isGroup ? 'grup' : 'pribadi'}`
@@ -749,6 +813,37 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false } = {}) 
       ].join('\n')
     )
     return { ok: false, reply: humanError(err) }
+  }
+
+  /* Vision gagal (upload ke server error / gambar kebesaran) → jalur cadangan:
+   * OCR + deskripsi otomatis dibaca jadi teks, lalu tanya ulang ke otak.
+   * Cuma jalan kalau beneran ada gambar — obrolan teks biasa tetap 1 request. */
+  if (vision && !imageAttached) {
+    let fallbackOk = false
+    try {
+      const baca = await readImage(vision.buffer)
+      if (baca.ada) {
+        logger.info(
+          { ocr: baca.teks ? baca.teks.length : 0, deskripsi: baca.deskripsi ? baca.deskripsi.length : 0 },
+          '[Ella2] vision utama gagal — gambar dibaca lewat jalur cadangan (OCR + deskripsi)'
+        )
+        const r2 = await withChatQueue(storeKey(ctx), () => gemmaChat({
+          message: text,
+          history,
+          system: `${system}\n\n${visionContext(baca)}`,
+          timeoutMs: conf.timeoutMs,
+          retries: 1,
+        }))
+        reply = r2.reply
+        tookMs = r2.tookMs
+        fallbackOk = true
+      }
+    } catch (err) {
+      logger.warn({ err: String(err?.message || err).slice(0, 120) }, '[Ella2] jalur cadangan gambar gagal')
+    }
+    if (!fallbackOk) {
+      reply = `${reply}\n\n>⚠️ Gambarnya gagal diproses — jawaban di atas mungkin meleset.`
+    }
   }
 
   if (admission(reply)) {
@@ -854,17 +949,22 @@ async function onMention(ctx) {
     )
     return true
   }
-  if (!text) {
-    await ctx.reply('Aku belum bisa lihat gambar di versi ini 😅 tulis aja maksudnya ya.')
-    return true
-  }
 
   const stopTyping = keepTyping(ctx.client, ctx.chat)
   let r
+  let vision = null
   try {
-    r = await runChat(ctx, text, { hasImage: adaGambar })
+    vision = adaGambar ? await grabVision(ctx) : null
+    r = (!text && !vision)
+      ? null
+      // Gambar tanpa caption → kasih prompt default, biar tetap dijawab.
+      : await runChat(ctx, text || VISION_PROMPT, { hasImage: adaGambar, vision })
   } finally {
     stopTyping()
+  }
+  if (!r) {
+    await ctx.reply('Gambarnya gagal diunduh 😅 tulis aja maksudnya ya.')
+    return true
   }
   await ctx.reply(r.reply)
   return true
@@ -899,6 +999,7 @@ function statusText(ctx, { groupAdmin = false } = {}) {
     '📌 *Cara pakai*',
     `> ${p}ella2 <teks> — ngobrol`,
     '> tag / bales pesan Ella v2 — auto balas (kalau auto nyala)',
+    '> tag/bales + foto atau stiker — Ella lihat langsung isinya 🖼️',
     '> tag + _"cariin foto kucing"_ — Ella jalanin `.pinterest kucing`',
     '> tag + _"downloadin lagu X"_ — Ella jalanin `.play X`',
     '> owner/admin bisa minta aksi: _"tutup grup"_, _"buka grup"_, _"kick dia"_, dll',
@@ -1127,25 +1228,30 @@ async function handler(ctx) {
     )
   }
 
-  /* status / bantuan */
-  if (!rest || ['status', 'info', 'help', 'bantuan'].includes(sub)) {
+  /* gambar/stiker yang dikirim langsung atau di-quote — ikut "dilihat" Ella */
+  const hit = findImgNode(ctx?.event?.message)
+
+  /* status / bantuan — `.ella2` polos (kalau lagi megang gambar, bukan status) */
+  if ((['status', 'info', 'help', 'bantuan'].includes(sub) || !rest) && !(!rest && hit)) {
     const groupAdmin = ctx.isGroup ? await withTimeout(isGroupAdmin(ctx), 2500, false) : false
     return ctx.reply(statusText(ctx, { groupAdmin }))
   }
 
   /* ngobrol */
-  const hit = findImgNode(ctx?.event?.message)
   let text = rest
   if (text.length > MAX_CHARS) text = text.slice(0, MAX_CHARS)
-  if (!text && hit) return ctx.reply('Aku belum bisa lihat gambar di versi ini 😅 tulis aja maksudnya ya.')
 
   const stopTyping = keepTyping(ctx.client, ctx.chat)
   let r
   try {
-    r = await runChat(ctx, text, { hasImage: Boolean(hit) })
+    const vision = hit ? await grabVision(ctx) : null
+    r = (!text && !vision)
+      ? null
+      : await runChat(ctx, text || VISION_PROMPT, { hasImage: Boolean(hit), vision })
   } finally {
     stopTyping()
   }
+  if (!r) return ctx.reply('Gambarnya gagal diunduh 😅 tulis aja maksudnya ya.')
   return ctx.reply(r.reply)
 }
 
@@ -1182,6 +1288,7 @@ addMentionHandler('ella2', onMention, 20)
 export { pluginConfig as config, handler }
 export const _internals = {
   cfg, runChat, humanError, onMention, handler, hereOn, sourceOf, statusText, admission,
+  grabVision, VISION_PROMPT,
   contextFor, nowWIB, store, STORE_FILE, loadStore, execRoleLabel, applyRunMarkers,
   mayExec, parseRunMarkers, runBotCommand, DEFAULT_EXEC_ALLOW,
   DEFAULT_EXEC_USER, USER_HINTS, userCatalog, userCatalogDetailed, focusCatalog,
