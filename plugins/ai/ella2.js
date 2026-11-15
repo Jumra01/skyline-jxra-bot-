@@ -131,7 +131,7 @@ const DEFAULT_EXEC_USER = [
 /** Label pendek buat prompt (command → contoh pakai + kegunaan). */
 const USER_HINTS = {
   pinterest: 'pinterest <kata kunci> — cari gambar',
-  pap: 'pap <deskripsi> — foto sesuai permintaan (Pinterest + AI edit)',
+  pap: 'pap <permintaan edit> — foto dari folder assets/ella2, disesuaikan AI',
   play: 'play <judul> — cari & kirim lagu',
   yta: 'yta <judul/link> — audio YouTube',
   ytv: 'ytv <judul/link> — video YouTube',
@@ -291,6 +291,12 @@ function pickFocus(text, names) {
   }
   return picked.slice(0, 5)
 }
+
+/** Kata kerja perintah — sinyal kuat user BENERAN minta fitur. Kata benda
+ * saja ("lagunya enak ya", "fotonya blur") bukan permintaan, jadi jangan
+ * dipakai buat nyalain jaring pengaman / blok "paling cocok". */
+const STRONG_REQ =
+  /(minta|kirim|cariin|nyari|carikan|downloadin|download|buatin|bikinin|mainin|mainkan|putarin|putarkan|ngecek|cek|liatin|ingetin|generate|posting|post|upload)\b/i
 
 /** Katalog versi enak dibaca (buat `.ella2 aksi`). */
 function userCatalogDetailed(names = cfg().execUser) {
@@ -794,7 +800,8 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false, vision 
     // 3-5 fitur yang paling mungkin dimaksud pesan ini (biar Ella tepat sasaran).
     // Fitur umum boleh diminta siapa pun (member sekalipun) — jadi shortlist
     // & jaring pengaman tetap aktif walau dia bukan owner/admin.
-    focusList: focusCatalog(pickFocus(text, catalogNamesFor(tier, conf.execUser))),
+    // Cuma kalau ada KATA KERJA perintah — nyebut kata benda doang bukan permintaan.
+    focusList: focusCatalog(STRONG_REQ.test(text) ? pickFocus(text, catalogNamesFor(tier, conf.execUser)) : []),
     roleTier: tier,
     // 2.000 char: daftar fitur dijamin utuh (blok alat dipotong paling akhir).
     maxChars: hasImage ? 1800 : 2000,
@@ -897,10 +904,11 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false, vision 
     reply = SAFE_LINE
   }
 
-  /* Jaring pengaman: user jelas minta fitur tapi model lupa nulis [[RUN]].
-   * Cuma jalan kalau meleset (1 request ekstra, dan cuma kalau antrean lowong),
-   * jadi obrolan biasa tetap 1 request. */
-  if (allowedNames.length && !/\[\[\s*RUN\s*:/i.test(reply) && pickFocus(text, allowedNames).length && gemmaLoad().queued === 0) {
+  /* Jaring pengaman: user BENERAN minta fitur tapi model lupa nulis [[RUN]].
+   * Dua syarat: ada KATA KERJA perintah (STRONG_REQ) + ada fitur yang cocok
+   * di INTENT_MAP. Cuma jalan kalau meleset (1 request ekstra, dan cuma kalau
+   * antrean lowong), jadi obrolan biasa tetap 1 request. */
+  if (allowedNames.length && STRONG_REQ.test(text) && !/\[\[\s*RUN\s*:/i.test(reply) && pickFocus(text, allowedNames).length && gemmaLoad().queued === 0) {
     const picked = await forceRunPick(text, allowedNames.concat(conf.execAllow))
     if (picked) {
       logger.info(`[Ella2] model lupa [[RUN]] — dipaksa lewat router: ${picked}`)
@@ -922,20 +930,27 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false, vision 
 
 /* ══════════════════════ router cadangan ══════════════════════ */
 /**
- * Dipakai kalau model lupa nulis `[[RUN: ...]]` padahal user jelas minta fitur.
- * Prompt-nya sempit (cuma daftar perintah) → cepat & jarang salah.
+ * Dipakai kalau model lupa nulis `[[RUN: ...]]` padahal user BENERAN minta
+ * fitur. Router WAJIB bisa bilang NONE (bukan maksa milih) — kalau user cuma
+ * ngobrol/nanya, jawab NONE. Prompt-nya sempit → cepat & jarang salah.
  */
 async function forceRunPick(text, names) {
   const list = [...new Set(names.map((n) => String(n).trim()).filter(Boolean))]
   if (!list.length) return ''
   const sys =
-    `Kamu router command bot. Pilih SATU perintah paling cocok buat pesan user.\n` +
-    `Daftar: ${list.join(' | ')}\n` +
-    `Jawab HANYA satu baris: [[RUN: <perintah>]] — tanpa penjelasan, tanpa tanda kutip.`
+    `Kamu router command bot. TUGASMU: tentukan apakah pesan user BENAR-BENAR minta fitur/perintah.\n` +
+    `Daftar perintah: ${list.join(' | ')}\n` +
+    `Aturan:\n` +
+    `- Kalau user NYURUH/NANYA-MINTA fitur yang ada di daftar (contoh: "cariin lagu X", "download video X", "kirim foto") → jawab HANYA [[RUN: <perintah>]]\n` +
+    `- Kalau cuma NGOBROL/NANYA/MEMABAS kata-katanya ("lagunya enak ya", "fotonya blur", "kapan daily ku reset") → jawab HANYA [[RUN: NONE]]\n` +
+    `- Tanpa penjelasan, tanpa tanda kutip, HANYA satu baris.`
   try {
     const r = await gemmaChat({ message: text, system: sys, timeoutMs: 30000, retries: 0 })
     const m = String(r.reply || '').match(/\[\[\s*RUN\s*:\s*(.+?)\s*\]\]/i)
-    return m ? m[1].replace(/[`*]/g, '').trim() : ''
+    if (!m) return ''
+    const pick = m[1].replace(/[`*]/g, '').trim()
+    // Router bilang NONE = bukan permintaan → jangan eksekusi apa-apa.
+    return /^none$/i.test(pick) ? '' : pick
   } catch (err) {
     logger.debug({ err: String(err?.message || err).slice(0, 100) }, '[Ella2] router cadangan gagal')
     return ''
