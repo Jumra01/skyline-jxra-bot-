@@ -107,6 +107,7 @@ export default {
     maxHistory: 4,
     timeoutMs: 180_000,
     memory: true,
+    vision: true,
     retries: 4,
     queueMax: 2,
     warmupMin: 25,

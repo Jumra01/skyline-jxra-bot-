@@ -58,6 +58,7 @@ import { gemmaChat, gemmaLoad, warmGemma, isConfigured as skylineReady, keyTag, 
 import { isBotMentioned, stripMention, botIdentity, withTimeout, findImgNode } from '../../lib/aiTrigger.js'
 import { downloadMedia } from '../../lib/media.js'
 import { readImage, visionContext } from '../../lib/visionFallback.js'
+import { geminiChat } from '../../lib/geminiWeb.js'
 import { mayExec, parseRunMarkers, runBotCommand, allowNames, splitCommand } from '../../lib/commandExec.js'
 import sharp from 'sharp'
 import { getFeature } from '../loader.js'
@@ -198,6 +199,7 @@ function cfg() {
     replyTrigger: c.replyTrigger !== false,
     privateAuto: c.privateAuto !== false,
     memory: c.memory !== false,
+    vision: c.vision !== false,
     maxHistory: num(c.maxHistory, 2, HISTORY_MAX, 8),
     timeoutMs: num(c.timeoutMs, 5000, 180_000, 60_000),
     systemPrompt: String(c.systemPrompt || '').trim(),
@@ -649,8 +651,36 @@ async function applyRunMarkers(ctx, reply, { execOn = false, open = false, conf 
 const VISION_MAX_DIM = 1024              // sisi terpanjang setelah resize
 const VISION_B64_MAX = 2_190_000         // batas base64 yang diterima server (2,2 jt char)
 
-/** Pesan default kalau user kirim gambar/stiker tanpa caption. */
-const VISION_PROMPT = 'Lihat gambar/stiker yang menyertai pesan ini, lalu jawab singkat sesuai isinya.'
+/** Aksi default kalau user kirim gambar/stiker tanpa caption (gaya roleplay). */
+const VISION_PROMPT = '(user mengirim gambar/stiker ini tanpa teks — bereaksi natural ke isinya, sesuai peranmu)'
+
+/** Prompt "mata" — minta deskripsi visual akurat & detail (bahasa Indonesia). */
+const EYES_PROMPT =
+  'Jelaskan gambar ini lengkap dan akurat, buat bahan asisten AI: subjeknya apa, ekspresi/pose, warna rambut dan mata, pakaian, gaya gambar (foto/anime/ilustrasi/meme), latar, dan teks yang terlihat (salin persis kalau ada). Singkat tapi detail — fakta visual aja, tanpa opini.'
+
+/**
+ * "Mata" Ella2: gambar di-deskripsiin dulu lewat Gemini web (fitur vision
+ * lama `.bot`/`.ella` — akurat soal detail kayak warna rambut). Hasilnya
+ * jadi konteks teks buat otak Gemma. Balikin '' kalau gagal → caller
+ * pakai jalur alternatif (gambar dikirim langsung ke Gemma).
+ */
+async function describeImage(vision) {
+  if (!vision?.buffer?.length) return ''
+  try {
+    const r = await geminiChat({
+      message: EYES_PROMPT,
+      instruction: 'Kamu penglihatan gambar. Jawab deskripsi visual yang akurat saja, tanpa basa-basi.',
+      timeoutMs: 30000,
+      images: [{ buffer: vision.buffer, mimetype: 'image/jpeg', filename: vision.field === 'stickerMessage' ? 'stiker.jpg' : 'foto.jpg' }],
+    })
+    const desc = String(r?.text || '').trim().slice(0, 1500)
+    if (desc) logger.debug({ chars: desc.length }, '[Ella2] mata (Gemini) berhasil describe gambar')
+    return desc
+  } catch (err) {
+    logger.warn({ err: String(err?.message || err).slice(0, 140) }, '[Ella2] mata (Gemini) gagal — pakai jalur alternatif')
+    return ''
+  }
+}
 
 /**
  * Unduh gambar/stiker dari pesan (langsung atau yang di-quote) → siap dikirim
@@ -724,12 +754,19 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false, vision 
   const execOn = mayExec(ctx, { mode: conf.exec, isGroupAdmin: info.group?.isGroupAdmin })
   // Owner/staff bot = bebas minta command apa pun; admin grup terikat daftar.
   const openExec = Boolean(ctx.isOwner || ctx.isStaff)
-  const imageNote = vision?.dataUrl
-    ? '\n\n[CATATAN] User mengirim gambar/stiker bersama pesan ini — gambarnya terlihat olehmu. Jawab sesuai isi gambarnya; jangan ngarang.'
-    : vision
-      ? '\n\n[CATATAN] User mengirim gambar/stiker, tapi belum tentu kebaca — jawab dengan hati-hati, jangan ngarang isi gambarnya.'
-      : hasImage
-        ? '\n\n[CATATAN] Dia juga mengirim gambar/stiker, tapi gambarnya gagal diambil — kamu belum bisa melihat isinya. Jangan ngarang isi gambarnya; kalau perlu, bilang singkat belum bisa lihat.'
+  /* Mata dulu, baru ngomong: kalau ada gambar, deskripsiin lewat Gemini
+   * (akurat — kasus "rambut silver" vs "hitam" itu gara-gara resolusi vision
+   * Gemma yang kependekan). Hasilnya jadi konteks teks buat Gemma. */
+  const visionDesc = vision?.dataUrl ? await describeImage(vision) : ''
+
+  /* Roleplay: model JANGAN pernah ngebahas mekaniknya ("aku lihat gambarmu",
+   * "ini stiker ya", dsb) — cukup respon isi gambarnya langsung. */
+  const imageNote = visionDesc
+    ? `\n\n[GAMBAR] Deskripsi lengkap gambar dari penglihatan:\n"""${visionDesc}"""\nItu fakta isi gambarnya — pakai buat menjawab dan bereaksi sesuai peranmu. JANGAN menyebut bahwa kamu sedang melihat, membaca, menganalisis, atau menerima gambar/deskripsi — cukup natural ke isi gambarnya.`
+    : vision?.dataUrl
+      ? '\n\n[GAMBAR] Ada gambar dari user dan kamu bisa melihat isinya. Langsung tanggapi isi gambarnya sesuai peranmu. JANGAN menyebut bahwa kamu sedang melihat, membaca, menganalisis, atau menerima gambar/stiker — cukup bereaksi natural ke isinya.'
+      : vision || hasImage
+        ? '\n\n[GAMBAR] Ada gambar dari user tapi belum tentu kebaca — jangan ngarang isi gambarnya, jangan bahas soal gambarnya.'
         : ''
 
   const system = buildElla2System({
@@ -782,14 +819,16 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false, vision 
       message: text,
       history,
       system,
-      image: vision?.dataUrl || '',
+      // Mata (Gemini) udah ngasih deskripsi akurat? Jangan kirim gambar lagi —
+      // view low-res Gemma malah bisa kontradiksi fakta dari deskripsi.
+      image: visionDesc ? '' : (vision?.dataUrl || ''),
       timeoutMs: conf.timeoutMs,
       retries: conf.retries,
     }))
     reply = r.reply
     tookMs = r.tookMs
     imageAttached = r.imageAttached !== false
-    if (vision && !imageAttached) logger.warn('[Ella2] upload gambar ke server gagal — pakai jalur cadangan')
+    if (vision && !visionDesc && !imageAttached) logger.warn('[Ella2] upload gambar ke server gagal — pakai jalur cadangan')
     if (r.attempts > 1) {
       logger.info(
         `[Ella2] akhirnya jawab — ${r.attempts}× coba • ${(r.tookMs / 1000).toFixed(1)}s • model ${r.model} • ${ctx.isGroup ? 'grup' : 'pribadi'}`
@@ -815,10 +854,10 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false, vision 
     return { ok: false, reply: humanError(err) }
   }
 
-  /* Vision gagal (upload ke server error / gambar kebesaran) → jalur cadangan:
-   * OCR + deskripsi otomatis dibaca jadi teks, lalu tanya ulang ke otak.
-   * Cuma jalan kalau beneran ada gambar — obrolan teks biasa tetap 1 request. */
-  if (vision && !imageAttached) {
+  /* Vision utama gagal semua (mata Gemini mati + upload gambar ke server
+   * error/gambar kebesaran) → jalur cadangan terakhir: OCR + deskripsi
+   * otomatis, lalu tanya ulang ke otak. */
+  if (vision && !visionDesc && (!vision.dataUrl || !imageAttached)) {
     let fallbackOk = false
     try {
       const baca = await readImage(vision.buffer)
@@ -912,7 +951,7 @@ async function onMention(ctx) {
   // Tanda "typing…" dikirim duluan, biar user tahu pesannya masuk.
   if (config.typingPresence) void sendTyping(ctx.client, ctx.chat)
 
-  const adaGambar = Boolean(conf.mentionTrigger && findImgNode(ctx?.event?.message))
+  const adaGambar = Boolean(conf.mentionTrigger && conf.vision && findImgNode(ctx?.event?.message))
   let text = stripMention(ctx.body, botIdentity(ctx).num)
   if (text.length > MAX_CHARS) text = text.slice(0, MAX_CHARS)
 
@@ -1229,7 +1268,7 @@ async function handler(ctx) {
   }
 
   /* gambar/stiker yang dikirim langsung atau di-quote — ikut "dilihat" Ella */
-  const hit = findImgNode(ctx?.event?.message)
+  const hit = conf.vision ? findImgNode(ctx?.event?.message) : null
 
   /* status / bantuan — `.ella2` polos (kalau lagi megang gambar, bukan status) */
   if ((['status', 'info', 'help', 'bantuan'].includes(sub) || !rest) && !(!rest && hit)) {
@@ -1288,7 +1327,7 @@ addMentionHandler('ella2', onMention, 20)
 export { pluginConfig as config, handler }
 export const _internals = {
   cfg, runChat, humanError, onMention, handler, hereOn, sourceOf, statusText, admission,
-  grabVision, VISION_PROMPT,
+  grabVision, describeImage, EYES_PROMPT, VISION_PROMPT,
   contextFor, nowWIB, store, STORE_FILE, loadStore, execRoleLabel, applyRunMarkers,
   mayExec, parseRunMarkers, runBotCommand, DEFAULT_EXEC_ALLOW,
   DEFAULT_EXEC_USER, USER_HINTS, userCatalog, userCatalogDetailed, focusCatalog,
