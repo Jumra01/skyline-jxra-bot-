@@ -2,30 +2,35 @@
  * © skyline-JXRA
  * Hapus credit gak bikin u jago dumbass.
  * Hargai sebagaimana u mau dihargai.
- * pap.js — "kirim foto" sesuai permintaan: base dicari di Pinterest, terus
- * dieksekusi Omni Editor biar cocok sama konteks obrolan.
+ * pap.js — "kirim foto" sesuai permintaan: ambil SATU foto base dari folder
+ * lokal `assets/ella2/` (diisi manual oleh owner), terus dieksekusi Omni Editor
+ * biar cocok sama permintaan/obrolan, lalu dikirim.
  *
- * Dipakai 2 jalur:
- *   • manual : `.pap selfie pake baju merah di kafe`
- *   • Ella2  : user minta foto → model nulis `[[RUN: pap <deskripsi>]]`
+ *   • manual : `.pap pake baju merah, latar kafe`
+ *   • Ella2  : user minta foto → model nulis `[[RUN: pap <permintaan edit>]`
  *
- * Alur: JHPin(query) → unduh base → omniEdit(base, sesuai permintaan) → kirim.
- * Kalau Omni gagal, foto base tetap dikirim (biar ga kosong) + catatan jujur.
+ * Kenapa asset lokal (bukan Pinterest): hasil pin kadang kena sensor/
+ * gak nyambung sama maksud — foto base dikontrol penuh dari folder.
+ * Folder: `assets/pap/` (jpg/png/webp/gif). Ganti isinya kapan aja, restart
+ * bot ga perlu — dibaca tiap request.
  */
-import axios from 'axios'
-import { JHPin } from '../../scraper/PINSEARCH.js'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { omniEdit, skylineCreds } from '../../scraper/SKYLINE.js'
 import { logger } from '../../core/logger.js'
 
 const MAX_IMAGE = 10 * 1024 * 1024
 
+const IMG_EXT = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.gif': 'image/gif' }
+
 const pluginConfig = {
   name: 'pap',
   alias: ['genpap', 'fotoai'],
   category: 'ai',
-  description: 'Kirim foto sesuai permintaan — base dari Pinterest, disesuaikan AI (Omni)',
-  usage: '.pap <deskripsi foto>',
-  example: '.pap selfie pake baju merah di kafe',
+  description: 'Kirim foto (dari folder assets/ella2) yang disesuaikan AI sama permintaan',
+  usage: '.pap <permintaan edit foto>',
+  example: '.pap pake baju merah, latar kafe',
   isOwner: false,
   isPremium: false,
   isGroup: false,
@@ -38,13 +43,14 @@ const pluginConfig = {
 }
 
 const HELP =
-  '📷 *PAP — foto sesuai permintaah*\n\n' +
-  'Cari base foto di Pinterest → AI sesuaikan sama permintaanmu → dikirim balik.\n\n' +
+  '📷 *PAP — foto sesuai permintaan*\n\n' +
+  'Ambil satu foto dari folder `assets/ella2/` → AI sesuaikan sama permintaanmu → dikirim balik.\n\n' +
   '*Cara pakai:*\n' +
-  '> `.pap <deskripsi foto>`\n\n' +
+  '> `.pap <permintaan edit>`\n\n' +
   '*Contoh:*\n' +
-  '> `.pap selfie pake baju merah di kafe`\n' +
-  '> `.pap foto estetik sunset di pantai`'
+  '> `.pap pake baju merah, latar kafe`\n' +
+  '> `.pap gaya selfie di pantai sore hari`\n\n' +
+  '> Isi folder `assets/ella2/` dengan foto-foto base ya.'
 
 /** Instruksi edit ke Omni — biar hasilnya "menyesuaikan permintaan". */
 const editPrompt = (req) =>
@@ -52,26 +58,30 @@ const editPrompt = (req) =>
   'Keep it looking like a natural, realistic photo with good quality — ' +
   'only change what the request asks for.'
 
-/** Cari base foto di Pinterest → URL pertama dari hasil teratas. */
-async function findBase(query) {
-  const r = await JHPin(query, 10)
-  const imgs = r?.data?.images || []
-  if (!r?.status || !imgs.length) return ''
-  // Acak dari 5 teratas — biar hasilnya gak itu-itu terus.
-  const pool = imgs.slice(0, 5)
-  return pool[Math.floor(Math.random() * pool.length)]
+function papDir() {
+  return process.env.PAP_DIR
+    ? process.env.PAP_DIR
+    : fileURLToPath(new URL('../../assets/ella2', import.meta.url))
 }
 
-/** Unduh URL → data URL (batas 10MB, mime dari response). */
-async function toDataUrl(url) {
-  const res = await axios.get(url, { responseType: 'arraybuffer', timeout: 45000, validateStatus: () => true })
-  const buf = Buffer.from(res.data || [])
-  if (!buf.length) throw new Error('base foto kosong')
-  if (buf.length > MAX_IMAGE) throw new Error('base foto kegedean')
-  const mime = String(res.headers?.['content-type'] || '').split(';')[0]
-  return {
-    buf,
-    dataUrl: `data:${mime.startsWith('image/') ? mime : 'image/jpeg'};base64,${buf.toString('base64')}`,
+/** Pilih SATU foto base acak dari folder (jpg/png/webp/gif). null kalau kosong. */
+function pickBase() {
+  let files = []
+  try {
+    files = fs.readdirSync(papDir())
+      .filter((f) => IMG_EXT[path.extname(f.toLowerCase())])
+  } catch {
+    return null
+  }
+  if (!files.length) return null
+  const name = files[Math.floor(Math.random() * files.length)]
+  try {
+    const buf = fs.readFileSync(path.join(papDir(), name))
+    if (!buf.length || buf.length > MAX_IMAGE) return null
+    return { buf, mime: IMG_EXT[path.extname(name.toLowerCase())] || 'image/jpeg' }
+  } catch (err) {
+    logger.warn({ err: String(err?.message || err).slice(0, 120) }, '[Pap] gagal baca foto base')
+    return null
   }
 }
 
@@ -84,39 +94,28 @@ async function sendImage(ctx, buf, mimetype, caption, event) {
 }
 
 async function handler(ctx) {
-  const p = ctx.prefix || '.'
   const query = String(ctx.text || '').trim().slice(0, 200)
   if (!query) return ctx.reply(HELP)
   if (!skylineCreds().apikey) return ctx.reply('⚠️ API key belum diisi — fitur foto AI lagi mati.')
 
   const event = ctx.message ?? ctx.event ?? ctx.raw ?? ctx.msg ?? null
+
+  // 1) ambil satu foto base dari folder
+  const base = pickBase()
+  if (!base) {
+    await ctx.react?.('📂')
+    return ctx.reply(
+      '📂 *Belum ada foto base nih*\n\n' +
+        'Isi folder `assets/ella2/` dengan foto-foto base dulu ya (jpg/png/webp/gif), terus coba lagi.'
+    )
+  }
+  const dataUrl = `data:${base.mime};base64,${base.buf.toString('base64')}`
+
   await ctx.react?.('⏳')
 
-  // 1) base dari Pinterest
-  let pinUrl = ''
+  // 2) eksekusi Omni — sesuaikan sama permintaan
   try {
-    pinUrl = await findBase(query)
-  } catch (e) {
-    logger.warn({ err: String(e?.message || e).slice(0, 140) }, '[Pap] cari base gagal')
-  }
-  if (!pinUrl) {
-    await ctx.react?.('❎')
-    return ctx.reply('😵 Foto base-nya gagal dicari — coba ganti kata kunci ya.')
-  }
-
-  // 2) unduh base
-  let base = null
-  try {
-    base = await toDataUrl(pinUrl)
-  } catch (e) {
-    logger.warn({ err: String(e?.message || e).slice(0, 140) }, '[Pap] unduh base gagal')
-    await ctx.react?.('❎')
-    return ctx.reply('📥 Base foto gagal diunduh — coba lagi sebentar lagi ya.')
-  }
-
-  // 3) eksekusi Omni — sesuaikan sama permintaan
-  try {
-    const out = await omniEdit({ image: base.dataUrl, prompt: editPrompt(query) })
+    const out = await omniEdit({ image: dataUrl, prompt: editPrompt(query) })
     await ctx.react?.('🎨')
     logger.info({ query: query.slice(0, 80), kb: Math.round(out.buffer.length / 1024) }, '[Pap] foto jadi')
     return await sendImage(ctx, out.buffer, out.mimetype || 'image/jpeg', '', event)
@@ -127,11 +126,11 @@ async function handler(ctx) {
     return await sendImage(
       ctx,
       base.buf,
-      'image/jpeg',
+      base.mime,
       '⚠️ AI-nya lagi sial, ini foto base-nya dulu ya.',
       event
     )
   }
 }
 
-export { pluginConfig as config, handler }
+export { pluginConfig as config, handler, papDir }
