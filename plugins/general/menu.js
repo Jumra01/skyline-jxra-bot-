@@ -323,6 +323,29 @@ function findThumb(base) {
   return best.rel
 }
 
+/**
+ * Buffer JPEG kecil dari thumb konfigurasi — untuk `jpegThumbnail` (fake-locate
+ * pin header / locationMessage), yang butuh buffer inline bukan upload media.
+ * Ganti `ui.menuThumb` (atau `reply.v4.thumb`) = ganti foto thumb header.
+ * Fallback ke THUMB_MENU biar header selalu ada.
+ */
+async function configThumbJpeg(rel, size = 300) {
+  const relResolved = findThumb(rel) || findThumb(THUMB_MENU)
+  if (!relResolved) return null
+  try {
+    const sharp = (await import('sharp')).default
+    return await sharp(absPath(relResolved))
+      .rotate()
+      .flatten({ background: '#ffffff' })
+      .resize(size, size, { fit: 'cover' })
+      .jpeg({ quality: 70 })
+      .toBuffer()
+  } catch (err) {
+    logger.warn({ err: errMsg(err), stack: errStack(err), file: relResolved }, '[MENU] configThumbJpeg gagal — thumb header kosong')
+    return null
+  }
+}
+
 /** ffprobe: dimensi/durasi/codec video (auto-detect). Tidak pernah melempar —
  * gagal probe hanya berarti "pakai default", tapi penyebabnya tetap dicatat. */
 function probeVideo(p) {
@@ -523,87 +546,10 @@ async function uploadHeaderMedia(client, relPath) {
   }
 }
 
-/**
- * Upload header foto + strip LABEL di bawah gambar — meniru tampilan kartu awal
- * (thumb + `skyline-JXRA` tebal + baris `web · tanggal jam` di bawahnya) tanpa
- * `locationMessage`, karena WA selalu menggambar peta untuk pin dan tak pernah
- * menampilkan foto (gejala "thumb ketimpa maps").
- *
- * Strip & teks di-composite pakai sharp SVG langsung ke foto (imageMessage tidak
- * membawa label teks). Gagal composite → jatuh ke `uploadHeaderMedia` (foto polos).
- */
-async function uploadHeaderWithText(client, relPath, title, subtitle = '') {
-  const thumb = findThumb(relPath)
-  if (!thumb) {
-    logger.warn({ base: relPath }, '[MENU] headerWithText: thumb tidak ditemukan — tanpa header')
-    return null
-  }
-  try {
-    const sharp = (await import('sharp')).default
-    // 1. Foto di-rotate + resize (rasio asli dipertahankan, tanpa crop)
-    const base = await sharp(absPath(thumb))
-      .rotate()
-      .resize({ width: 1024, height: 1024, fit: 'inside', withoutEnlargement: true })
-      .ensureAlpha()
-      .toBuffer()
-    const { width: W, height: H } = await sharp(base).metadata()
-    if (!W || !H) throw new Error('dimensi foto thumb tidak terbaca')
-
-    // 2. Strip label bawah (proporsional tinggi gambar)
-    const bandH = Math.round(H * 0.24)
-    const bandY = H - bandH
-    const titleSize = Math.round(H * 0.072)
-    const subSize = Math.round(H * 0.040)
-    const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    // Font auto-shrink biar baris panjang (tanggal+jam) ga keluar frame
-    const fitSize = (text, size, maxW) => {
-      let s = size
-      while (s > 18 && String(text).length * s * 0.56 > maxW) s -= 2
-      return s
-    }
-    const tSize = fitSize(title, titleSize, W * 0.9)
-    const sSize = fitSize(subtitle, subSize, W * 0.92)
-    const svg =
-      `<svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">` +
-      `<rect x="0" y="${bandY}" width="${W}" height="${bandH}" fill="#000000" fill-opacity="0.55"/>` +
-      (title
-        ? `<text x="50%" y="${bandY + Math.round(bandH * 0.44)}" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="${tSize}" font-weight="700" fill="#ffffff" stroke="#000000" stroke-width="4" paint-order="stroke">${esc(title)}</text>`
-        : '') +
-      (subtitle
-        ? `<text x="50%" y="${bandY + Math.round(bandH * 0.78)}" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="${sSize}" font-weight="500" fill="#e9e9e9" stroke="#000000" stroke-width="3" paint-order="stroke">${esc(subtitle)}</text>`
-        : '') +
-      `</svg>`
-
-    // 3. Composite strip → JPEG
-    const buf = await sharp(base)
-      .composite([{ input: Buffer.from(svg), blend: 'over' }])
-      .flatten({ background: '#000000' })
-      .jpeg({ quality: 90 })
-      .toBuffer()
-    const media = await client.message.upload(buf, { type: 'image', mimetype: 'image/jpeg' })
-    logger.debug(
-      { size: buf.length, w: W, h: H, file: thumb, title, subtitle },
-      '[MENU] upload header WITH label OK (v4)'
-    )
-    return {
-      kind: 'imageMessage',
-      ...baseMediaFields(media),
-      mimetype: 'image/jpeg',
-      width: W,
-      height: H
-    }
-  } catch (err) {
-    logger.warn(
-      { err: errMsg(err), stack: errStack(err), file: thumb },
-      '[MENU] upload header WITH label gagal — fallback uploadHeaderMedia'
-    )
-    return uploadHeaderMedia(client, thumb)
-  }
-}
-
 function footer() {
   return `Pilih tombol dibawah • Made with ♡ by ${config.botName}`
 }
+
 /** Log kegagalan kirim menu: sebutkan varian, chat, dan penyebab + stack. */
 function logMenuFail(where, ctx, err, extra = {}) {
   logger.error(
@@ -763,9 +709,9 @@ async function sendHomeVariant(ctx, v) {
         await ctx.reply(text)
         return
       case 4:
-        // Location Button (Hoshino v21) — header FOTO (bukan pin/maps) + 3 tombol
-        // nativeFlow (single_select kategori, cta_url saluran, quick_reply allmenu)
-        // + bottom_sheet + limited_time_offer (copy_code badge).
+        // Location Button (Hoshino v21) — header pin lokasi + 3 tombol nativeFlow
+        // (single_select kategori, cta_url saluran, quick_reply allmenu) +
+        // bottom_sheet + limited_time_offer (copy_code badge).
         // SEMUA lewat config — ganti `ui.menuThumb`/`menuLocation.address`/`menuCode`:
         {
           const v4Bot = config.botName || 'skyline-JXRA'   // nama bot (di body+footer+thumb overlay)
@@ -774,16 +720,17 @@ async function sendHomeVariant(ctx, v) {
           const v4Thumb = config.ui?.menuThumb || THUMB_MENU     // foto header (ganti file = ganti foto+teks)
           const v4Code = (config.ui?.menuCode || 'SKYLINE').toUpperCase()
           const chanUrl = (config.cta?.channelUrl) || config.reactChannel?.dedicatedChannelUrl || config.cta?.url || 'https://whatsapp.com/channel/0029Vb8Tph9BVJl06WWw5q3B'
+          // Tujuan ketukan pin/header lokasi. Kosong = pakai saluran (chanUrl).
+          const v4Url = String(locCfg.url || '').trim() || chanUrl
           const now = new Date()
           const dateStr = now.toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
           const timeStr = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
           const v4Uptime = fmtUptime(process.uptime() * 1000)
-          // Header FOTO dari asset (`ui.menuThumb`) + strip label bawah (nama bot +
-          // web · tanggal jam) — locationMessage/pin DIBUANG: WA selalu menggambar
-          // Google Maps yang menutupi thumb ("thumb ketimpa maps").
-          // Gagal upload → header kosong (log warn), bukan peta.
-          const v4LabelSub = `${v4Web} · ${dateStr} ${timeStr} WIB`
-          const v4Header = await uploadHeaderWithText(ctx.client, v4Thumb, v4Bot, v4LabelSub)
+          // Header FAKE-LOCATE (locationMessage / pin) — nama bot + skyline.web.id
+          // muncul sebagai label pin, foto thumb ganti via `ui.menuThumb` (atau
+          // `reply.v4.thumb`). Bukan imageMessage, biar header tetap menampilkan
+          // identitas bot (nama + web) seperti sebelumnya.
+          const v4LocationThumb = await configThumbJpeg(v4Thumb)
 
           const roleEmojiV4 = ctx.isOwner ? '👑' : (ctx.isPremium ? '💎' : '👤')
           const roleV4 = ctx.isOwner ? 'Owner' : (ctx.isPremium ? 'Premium' : 'User')
@@ -815,8 +762,9 @@ async function sendHomeVariant(ctx, v) {
 Gunakan ${config.mainPrefix}menu <kategori> · ${config.mainPrefix}help <fitur>
 
 © ${v4Bot}`,
-            headerImage: v4Header,
             headerTitle: v4Bot, headerSubtitle: `${v4Web} · ${dateStr} ${timeStr} WIB`,
+            locationThumb: v4LocationThumb,
+            locationUrl: v4Url,
             sections: [{ title: `📂 ${v4Rows.length} Kategori`, rows: v4Rows }],
             channelUrl: chanUrl,
             copyCode: v4Code,
