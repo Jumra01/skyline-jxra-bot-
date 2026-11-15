@@ -524,12 +524,15 @@ async function uploadHeaderMedia(client, relPath) {
 }
 
 /**
- * Upload header foto + teks overlay (nama bot & web) di atasnya — dipakai menu
- * v4. `imageMessage` tidak membawa label teks, jadi judul/alamat ditulis langsung
- * ke foto pakai sharp SVG (putih + stroke hitam biar terbaca di thumb terang).
- * Gagal composite → jatuh ke `uploadHeaderMedia` (foto polos, tanpa teks).
+ * Upload header foto + strip LABEL di bawah gambar — meniru tampilan kartu awal
+ * (thumb + `skyline-JXRA` tebal + baris `web · tanggal jam` di bawahnya) tanpa
+ * `locationMessage`, karena WA selalu menggambar peta untuk pin dan tak pernah
+ * menampilkan foto (gejala "thumb ketimpa maps").
+ *
+ * Strip & teks di-composite pakai sharp SVG langsung ke foto (imageMessage tidak
+ * membawa label teks). Gagal composite → jatuh ke `uploadHeaderMedia` (foto polos).
  */
-async function uploadHeaderWithText(client, relPath, lines) {
+async function uploadHeaderWithText(client, relPath, title, subtitle = '') {
   const thumb = findThumb(relPath)
   if (!thumb) {
     logger.warn({ base: relPath }, '[MENU] headerWithText: thumb tidak ditemukan — tanpa header')
@@ -537,38 +540,62 @@ async function uploadHeaderWithText(client, relPath, lines) {
   }
   try {
     const sharp = (await import('sharp')).default
-    const W = 1024, H = 1024
+    // 1. Foto di-rotate + resize (rasio asli dipertahankan, tanpa crop)
+    const base = await sharp(absPath(thumb))
+      .rotate()
+      .resize({ width: 1024, height: 1024, fit: 'inside', withoutEnlargement: true })
+      .ensureAlpha()
+      .toBuffer()
+    const { width: W, height: H } = await sharp(base).metadata()
+    if (!W || !H) throw new Error('dimensi foto thumb tidak terbaca')
+
+    // 2. Strip label bawah (proporsional tinggi gambar)
+    const bandH = Math.round(H * 0.24)
+    const bandY = H - bandH
+    const titleSize = Math.round(H * 0.072)
+    const subSize = Math.round(H * 0.040)
     const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    // Font auto-shrink biar baris panjang (tanggal+jam) ga keluar frame
+    const fitSize = (text, size, maxW) => {
+      let s = size
+      while (s > 18 && String(text).length * s * 0.56 > maxW) s -= 2
+      return s
+    }
+    const tSize = fitSize(title, titleSize, W * 0.9)
+    const sSize = fitSize(subtitle, subSize, W * 0.92)
     const svg =
       `<svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">` +
-      (Array.isArray(lines) ? lines : [lines]).map((t, i) =>
-        `<text x="50%" y="${150 + i * 90}" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="${i === 0 ? 64 : 34}" font-weight="${i === 0 ? 700 : 500}" fill="#ffffff" stroke="#000000" stroke-width="4" paint-order="stroke">${esc(t)}</text>`
-      ).join('') +
+      `<rect x="0" y="${bandY}" width="${W}" height="${bandH}" fill="#000000" fill-opacity="0.55"/>` +
+      (title
+        ? `<text x="50%" y="${bandY + Math.round(bandH * 0.44)}" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="${tSize}" font-weight="700" fill="#ffffff" stroke="#000000" stroke-width="4" paint-order="stroke">${esc(title)}</text>`
+        : '') +
+      (subtitle
+        ? `<text x="50%" y="${bandY + Math.round(bandH * 0.78)}" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="${sSize}" font-weight="500" fill="#e9e9e9" stroke="#000000" stroke-width="3" paint-order="stroke">${esc(subtitle)}</text>`
+        : '') +
       `</svg>`
-    const buf = await sharp(thumb)
-      .resize({ width: W, height: H, fit: 'inside', withoutEnlargement: true })
-      .ensureAlpha()
+
+    // 3. Composite strip → JPEG
+    const buf = await sharp(base)
       .composite([{ input: Buffer.from(svg), blend: 'over' }])
       .flatten({ background: '#000000' })
       .jpeg({ quality: 90 })
       .toBuffer()
-    const out = await sharp(buf).metadata()
     const media = await client.message.upload(buf, { type: 'image', mimetype: 'image/jpeg' })
     logger.debug(
-      { size: buf.length, w: out.width, h: out.height, file: thumb },
-      '[MENU] upload header WITH text OK (v4)'
+      { size: buf.length, w: W, h: H, file: thumb, title, subtitle },
+      '[MENU] upload header WITH label OK (v4)'
     )
     return {
       kind: 'imageMessage',
       ...baseMediaFields(media),
       mimetype: 'image/jpeg',
-      width: out.width ?? W,
-      height: out.height ?? H
+      width: W,
+      height: H
     }
   } catch (err) {
     logger.warn(
       { err: errMsg(err), stack: errStack(err), file: thumb },
-      '[MENU] upload header WITH text gagal — fallback uploadHeaderMedia'
+      '[MENU] upload header WITH label gagal — fallback uploadHeaderMedia'
     )
     return uploadHeaderMedia(client, thumb)
   }
@@ -751,10 +778,12 @@ async function sendHomeVariant(ctx, v) {
           const dateStr = now.toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
           const timeStr = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
           const v4Uptime = fmtUptime(process.uptime() * 1000)
-          // Header FOTO dari asset (`ui.menuThumb`) + overlay nama bot & web —
-          // locationMessage/pin DIBUANG: WA selalu menggambar Google Maps yang
-          // menutupi thumb ("thumb ketimpa maps"). Gagal upload → header kosong.
-          const v4Header = await uploadHeaderWithText(ctx.client, v4Thumb, [v4Bot, v4Web])
+          // Header FOTO dari asset (`ui.menuThumb`) + strip label bawah (nama bot +
+          // web · tanggal jam) — locationMessage/pin DIBUANG: WA selalu menggambar
+          // Google Maps yang menutupi thumb ("thumb ketimpa maps").
+          // Gagal upload → header kosong (log warn), bukan peta.
+          const v4LabelSub = `${v4Web} · ${dateStr} ${timeStr} WIB`
+          const v4Header = await uploadHeaderWithText(ctx.client, v4Thumb, v4Bot, v4LabelSub)
 
           const roleEmojiV4 = ctx.isOwner ? '👑' : (ctx.isPremium ? '💎' : '👤')
           const roleV4 = ctx.isOwner ? 'Owner' : (ctx.isPremium ? 'Premium' : 'User')
@@ -773,7 +802,7 @@ async function sendHomeVariant(ctx, v) {
           )
 
           await ctx.client.message.send(ctx.chat, richLocationList({
-            text: `${getTimeGreeting()}, @${ctx.senderNumber || (ctx.sender || '').split('@')[0]}\n${dateStr} · ${timeStr} WIB\n🤖 ${v4Bot} · 🌐 ${v4Web}`,
+            text: `${getTimeGreeting()}, @${ctx.senderNumber || (ctx.sender || '').split('@')[0]}\n🤖 ${v4Bot} · 🌐 ${v4Web}`,
             footer:
               `┌─ ⎋ SYSTEM ───
 │Status: ${roleEmojiV4} ${roleV4}
