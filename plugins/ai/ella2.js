@@ -101,6 +101,7 @@ const DEFAULT_EXEC_ALLOW = [
  */
 const DEFAULT_EXEC_USER = [
   'pinterest',
+  'pap',
   'play',
   'yta',
   'ytv',
@@ -130,6 +131,7 @@ const DEFAULT_EXEC_USER = [
 /** Label pendek buat prompt (command → contoh pakai + kegunaan). */
 const USER_HINTS = {
   pinterest: 'pinterest <kata kunci> — cari gambar',
+  pap: 'pap <deskripsi> — foto sesuai permintaan (Pinterest + AI edit)',
   play: 'play <judul> — cari & kirim lagu',
   yta: 'yta <judul/link> — audio YouTube',
   ytv: 'ytv <judul/link> — video YouTube',
@@ -267,6 +269,9 @@ function catalogNamesFor(tier, names = cfg().execUser) {
 /* Kata kunci di pesan user → fitur yang paling mungkin dia maksud.
  * Ditaruh terpisah di prompt biar Ella langsung nembak yang tepat. */
 const INTENT_MAP = [
+  // Perintah minta foto (imperatif) — jangan cuma kata "foto" biasa, biar
+  // jaring pengaman ga asal ngecas fitur pas lagi ngobrol doang.
+  { re: /(kirim|minta|buat|kasih|post|upload).{0,20}(foto|pap\b)|\bpap\b|fotoan/i, cmds: ['pap'] },
   { re: /(foto|gambar|image|wallpaper|pp\b|profil)/i, cmds: ['pinterest', 'hd', 'unblur', 'removebg'] },
   { re: /(lagu|musik|music|audio|mp3|spotify)/i, cmds: ['play', 'yta', 'spotify', 'tomp3'] },
   { re: /(video|youtube|yt\b|film)/i, cmds: ['ytv', 'ytsearch'] },

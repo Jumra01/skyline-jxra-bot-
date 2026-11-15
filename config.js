@@ -132,7 +132,7 @@ export default {
     ],
     execDeny: [],
     execUser: [
-      'pinterest', 'play', 'yta', 'ytv', 'ytsearch', 'tiktok', 'ig', 'fb', 'twitter',
+      'pinterest', 'pap', 'play', 'yta', 'ytv', 'ytsearch', 'tiktok', 'ig', 'fb', 'twitter',
       'spotify', 'sticker', 'toimg', 'brat', 'smeme', 'iqc', 'omniedit', 'hd', 'unblur',
       'removebg', 'tomp3', 'tourl', 'ping', 'menu', 'balance', 'daily',
     ],
