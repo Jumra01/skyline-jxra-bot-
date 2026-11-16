@@ -182,6 +182,9 @@ async function handler(ctx) {
     if (e?.code === 'ECONNABORTED' || /timeout|kelamaan/i.test(msg)) {
       return ctx.reply('⏱️ Timeout — server Omni Editor terlalu lama merespons. Coba lagi nanti.')
     }
+    if (/nolak request|ditolak|reject/i.test(msg)) {
+      return ctx.reply('🚫 AI-nya nolak ngolah gambar ini (kemungkinan kena sensor). Coba ubah prompt-nya ya.')
+    }
     return ctx.reply('❌ Gagal ngolah gambar: ' + msg.slice(0, 160))
   }
 }

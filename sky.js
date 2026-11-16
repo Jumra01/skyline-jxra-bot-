@@ -51,8 +51,12 @@ function setupOwnerMetaHandler(client) {
       const primary = event.key.participant ?? event.key.remoteJid
       const alt = event.key.participantAlt ?? event.key.remoteJidAlt
 
-      const lidJid = primary?.endsWith('@lid') ? primary : (alt?.endsWith('@lid') ? alt : null)
-      const pnJid = primary?.endsWith('@lid') ? alt : primary
+      const lidServer = (j) => {
+        const s = String(j || '')
+        return s.endsWith('@lid') || s.endsWith('@hosted') || s.endsWith('@hosted.lid')
+      }
+      const lidJid = lidServer(primary) ? primary : (lidServer(alt) ? alt : null)
+      const pnJid = lidServer(primary) ? alt : primary
 
       const senderNumber = pnJid ? pnJid.split('@')[0].split(':')[0] : ''
 

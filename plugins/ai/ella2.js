@@ -591,6 +591,15 @@ async function applyRunMarkers(ctx, reply, { execOn = false, open = false, conf 
     const name = splitCommand(a).name
     // Alias (`yts`, `ytmp3`, `pin`) diresolve ke nama asli dulu.
     const canonical = String(getFeature(name)?.name || name).toLowerCase()
+    const feat = getFeature(canonical)
+    /* Perintah khusus grup (`g open`, `kick`, dll) dijalanin dari chat
+     * pribadi = mubazir — fiturnya pasti nolak ("`g` cuma bisa di grup").
+     * Lewati senyap biar balasan Ella ga berisik. Kasus nyata: "buka
+     * bajunya sayang" kena [[RUN: g open]] di PRIBADI. */
+    if (feat?.isGroup && !ctx.isGroup) {
+      logger.info({ cmd: a }, '[Ella2] aksi grup dilewati — ini chat pribadi')
+      continue
+    }
     if (open || execOn || userSet.has(name) || userSet.has(canonical)) runnable.push(a)
     else denied.push(name)
   }
@@ -840,6 +849,7 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false, vision 
     reply = r.reply
     tookMs = r.tookMs
     imageAttached = r.imageAttached !== false
+    lastGemmaRunAt = Date.now()
     if (vision && !visionDesc && !imageAttached) logger.warn('[Ella2] upload gambar ke server gagal — pakai jalur cadangan')
     if (r.attempts > 1) {
       logger.info(
@@ -888,6 +898,7 @@ async function runChat(ctx, text, { mode = 'onlychat', hasImage = false, vision 
         reply = r2.reply
         tookMs = r2.tookMs
         fallbackOk = true
+        lastGemmaRunAt = Date.now()
       }
     } catch (err) {
       logger.warn({ err: String(err?.message || err).slice(0, 120) }, '[Ella2] jalur cadangan gambar gagal')
@@ -946,6 +957,7 @@ async function forceRunPick(text, names) {
     `- Tanpa penjelasan, tanpa tanda kutip, HANYA satu baris.`
   try {
     const r = await gemmaChat({ message: text, system: sys, timeoutMs: 30000, retries: 0 })
+    lastGemmaRunAt = Date.now()
     const m = String(r.reply || '').match(/\[\[\s*RUN\s*:\s*(.+?)\s*\]\]/i)
     if (!m) return ''
     const pick = m[1].replace(/[`*]/g, '').trim()
@@ -1315,10 +1327,15 @@ async function handler(ctx) {
 }
 
 /* ══════════════════════ warm-up berkala ══════════════════════ */
+/** Kapan request Gemma terakhir yang beneran dipakai (chat/router). Warm-up
+ * cuma perlu kalau space berpotensi ketiduran — kalau barusan dipakai, space
+ * masih hangat, jadi warm-up itu mubazir (dan makan kuota). */
+let lastGemmaRunAt = 0
 /**
  * Upstream bisa "tidur" kalau lama ga dipakai — request pertama setelah tidur
  * bisa >90 dtk dan itu berakhir jadi 503 "ramai" padahal cuma cold start.
  * Ping ringan tiap `config.ella2.warmupMin` menit bikin jalurnya tetap hangat.
+ * Hemat kuota: lewati kalau ada pemakaian nyata dalam interval yang sama.
  */
 let warmTimer = null
 function startWarmup() {
@@ -1330,6 +1347,11 @@ function startWarmup() {
     return
   }
   const tick = async () => {
+    const sisa = menit * 60_000 - (Date.now() - lastGemmaRunAt)
+    if (sisa > 0) {
+      logger.debug(`[Ella2] warm-up dilewati — Gemma barusan dipakai (${Math.ceil(sisa / 60000)} mnt lalu)`)
+      return
+    }
     const r = await warmGemma({ timeoutMs: 45000 })
     if (!r.ok) logger.debug(`[Ella2] warm-up gagal (${r.code || r.status || '?'})`)
   }

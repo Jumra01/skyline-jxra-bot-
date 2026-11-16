@@ -127,7 +127,7 @@ async function handler(ctx) {
       ctx,
       base.buf,
       base.mime,
-      '⚠️ AI-nya lagi sial, ini foto base-nya dulu ya.',
+      '🚫 AI-nya nolak ngolah permintaan ini (kemungkinan kena sensor) — ini foto base-nya ya.',
       event
     )
   }

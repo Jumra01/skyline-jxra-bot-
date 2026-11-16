@@ -1039,9 +1039,9 @@ export async function gemmaChat({ message, history = [], system = '', image = ''
       liteNext = busy && (i >= maxAttempts - 1 || maxAttempts <= 2);
 
       // Jeda eksponensial + jitter. "Ramai" biasanya bertahan menit (antrean
-      // upstream), jadi jeda busy naik sampai 30 dtk: 2s → 6s → 18s → 30s.
+      // upstream), jadi jeda busy naik sampai 30 dtk: 4s → 12s → 30s.
       // Gangguan lain (502/504) tetap singkat.
-      const base = busy ? 2000 * 3 ** (i - 1) : 700 * i;
+      const base = busy ? 4000 * 3 ** (i - 1) : 700 * i;
       const jeda = Math.min(busy ? 30000 : 6000, base) + Math.floor(Math.random() * 400);
 
       // Masih ada chat lain di antrean? Kasih giliran dulu — jangan numpuk

@@ -184,11 +184,25 @@ export function isUnsendableChat(jid) {
 
 export function buildContext(client, event) {
   installGlobalReplyStyle(client)
+
+  /** Server LID — termasuk varian "hosted" WA (`@hosted`, `@hosted.lid`).
+   * Fanout zapo ke device LID/hosted sering gagal "missing signal session",
+   * jadi kirim/identitas pakai PN alternatif kalau ada. */
+  const isLidServer = (j) => {
+    const s = String(j || '')
+    return s.endsWith('@lid') || s.endsWith('@hosted') || s.endsWith('@hosted.lid')
+  }
+
   const primary = event.key.participant ?? event.key.remoteJid
   const alt = event.key.participantAlt ?? event.key.remoteJidAlt
 
-  const pnJid = primary?.endsWith('@lid') ? (alt ?? primary) : primary
-  const lidJid = primary?.endsWith('@lid') ? primary : alt?.endsWith('@lid') ? alt : undefined
+  const pnJid = isLidServer(primary) ? (alt ?? primary) : primary
+  const lidJid = isLidServer(primary) ? primary : (alt && isLidServer(alt) ? alt : undefined)
+
+  // Chat tujuan: hindari varian LID/hosted kalau ada PN alternatif —
+  // mis. balasan ke `1994xxx@hosted.lid` gagal terus di zapo (liat log
+  // "direct fanout dropping primary recipient device without signal session").
+  const chatJid = (isLidServer(event.key.remoteJid) && alt && !isLidServer(alt)) ? alt : event.key.remoteJid
 
   const senderNumber = digits(pnJid)
 
@@ -204,7 +218,7 @@ export function buildContext(client, event) {
   const ctx = {
     client,
     event,
-    chat: event.key.remoteJid,
+    chat: chatJid,
     sender: pnJid,
     senderLid: lidJid,
     senderNumber,
