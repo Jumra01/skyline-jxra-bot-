@@ -601,7 +601,7 @@ const pluginConfig = {
   description: 'Lab diagnosa kartu rich HTML WhatsApp — tes audio/video (remote, data URI, WebSocket+blob) + jalur WebAudio (#11–#13)',
   usage: '.richlab',
   example: '.richlab',
-  isOwner: false,
+  isOwner: true, // WAJIB owner: kartu berisi URL lengkap + apikey skyline
   isPremium: false,
   isGroup: false,
   isPrivate: false,
