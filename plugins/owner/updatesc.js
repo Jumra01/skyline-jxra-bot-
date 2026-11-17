@@ -50,6 +50,7 @@ import {
   readKeep, writeKeep, saveKeep, assetPristine, backupStatus, restoreFromBackup
 } from '../../lib/keepSettings.js'
 import { normalizeBackup } from '../../lib/keepMigrate.js'
+import { getBotNumber } from '../../core/staff.js'
 
 const pexec = promisify(execFile)
 const pgunzip = promisify(gunzip)
@@ -115,10 +116,14 @@ async function autoRestore() {
     return {
       kept: r.kept.length + r.assetsKept.length,
       lost: r.lost.length + r.assetsLost.length,
+      keptKeys: r.kept,
+      lostKeys: r.lost,
+      assetsKept: r.assetsKept,
+      assetsLost: r.assetsLost,
       error: null
     }
   } catch (err) {
-    return { kept: 0, lost: 0, error: String(err?.message || err) }
+    return { kept: 0, lost: 0, keptKeys: [], lostKeys: [], assetsKept: [], assetsLost: [], error: String(err?.message || err) }
   }
 }
 
@@ -126,10 +131,139 @@ async function autoRestore() {
 async function pendingNow() {
   try {
     const st = await backupStatus()
-    return { config: st.config.length > 0, assets: st.assets.length }
+    return {
+      config: st.config.length > 0,
+      configKeys: st.config,
+      assets: st.assets.length,
+      assetList: st.assets.map((a) => a.rel)
+    }
   } catch {
-    return { config: false, assets: 0 }
+    return { config: false, configKeys: [], assets: 0, assetList: [] }
   }
+}
+
+/* Nama ramah buat baris pemulihan: `skyline.apikey` → API skyline dll. */
+function friendlyKey(key) {
+  if (/\.apikey$/i.test(key)) return { st: '🔐', nm: 'API key skyline' }
+  if (/spotify/i.test(key)) return { st: '🎵', nm: 'Spotify client' }
+  if (/thumb/i.test(key)) return { st: '🖼️', nm: 'Thumbnail reply v9' }
+  if (/product/i.test(key)) return { st: '🔗', nm: 'Product URL v9' }
+  if (/icon/i.test(key)) return { st: '🎨', nm: 'Icon URL v9' }
+  if (/title/i.test(key)) return { st: '🏷️', nm: 'Title v9' }
+  if (/brand/i.test(key)) return { st: '🏷️', nm: 'Brand v9' }
+  if (/price/i.test(key)) return { st: '💰', nm: 'Price v9' }
+  return { st: '⚙️', nm: key }
+}
+
+function friendlyAsset(rel) {
+  if (/thumb|\.jpe?g$|\.png$|\.webp$/i.test(rel)) return { st: '🖼️', nm: `thumb ${path.basename(rel)}` }
+  return { st: '📎', nm: path.basename(rel) }
+}
+
+/* Satu laporan pemulihan setting: baris buat kartu, baris console, &
+ * baris teks fallback. Dipakai semua jalur `.updatesc` biar gak ada
+ * kartu kedua terpisah. */
+function restoreReport(restored, pending) {
+  const items = []
+  const textLines = []
+  const logLines = []
+
+  for (const k of restored?.keptKeys || []) {
+    const f = friendlyKey(k)
+    items.push({ st: f.st, nm: f.nm, tag: 'DIPULIHKAN', tagCls: 'ok' })
+    textLines.push(`♻️ ${f.nm} *dipulihkan*`)
+  }
+  for (const rel of restored?.assetsKept || []) {
+    const f = friendlyAsset(rel)
+    items.push({ st: f.st, nm: f.nm, tag: 'DIPULIHKAN', tagCls: 'ok' })
+    textLines.push(`♻️ ${f.nm} *dipulihkan*`)
+  }
+  for (const k of restored?.lostKeys || []) {
+    const f = friendlyKey(k)
+    items.push({ st: f.st, nm: f.nm, tag: 'GAGAL', tagCls: 'bad' })
+    textLines.push(`⚠️ ${f.nm} *gagal* dipulihkan`)
+  }
+  for (const rel of restored?.assetsLost || []) {
+    const f = friendlyAsset(rel)
+    items.push({ st: f.st, nm: f.nm, tag: 'GAGAL', tagCls: 'bad' })
+    textLines.push(`⚠️ ${f.nm} *gagal* dipulihkan`)
+  }
+  if (restored?.error) {
+    items.push({ st: '⚠️', nm: 'auto-restore error', tag: 'GAGAL', tagCls: 'bad' })
+    textLines.push(`⚠️ auto-restore error: ${trunc(restored.error, 60)}`)
+  }
+  // backup yang belum kebalik (perlu `.restore` manual)
+  for (const k of pending?.configKeys || []) {
+    const f = friendlyKey(k)
+    items.push({ st: f.st, nm: f.nm, tag: 'MENUNGGU', tagCls: 'warn' })
+  }
+  for (const rel of pending?.assetList || []) {
+    const f = friendlyAsset(rel)
+    items.push({ st: f.st, nm: f.nm, tag: 'MENUNGGU', tagCls: 'warn' })
+  }
+
+  const keptTotal = (restored?.keptKeys?.length || 0) + (restored?.assetsKept?.length || 0)
+  const lostTotal = (restored?.lostKeys?.length || 0) + (restored?.assetsLost?.length || 0)
+  const stillPending = (pending?.configKeys?.length || 0) + (pending?.assetList?.length || 0)
+
+  if (restored?.error) {
+    logLines.push({ pr: '♻️', tx: 'restore setting → GAGAL', cls: 'bad' })
+  } else if (keptTotal) {
+    logLines.push({
+      pr: '♻️',
+      tx: `restore ${keptTotal} setting → ok${lostTotal ? ` (${lostTotal} gagal)` : ''}`,
+      cls: lostTotal ? 'warn' : 'ok'
+    })
+  } else {
+    logLines.push({ pr: '♻️', tx: 'restore setting → tidak ada backup', cls: 'dim' })
+  }
+  if (stillPending) {
+    logLines.push({ pr: '🔐', tx: `${stillPending} backup belum balik → .restore`, cls: 'warn' })
+  }
+
+  const notes = []
+  if (restored?.error) {
+    notes.push({ t: `⚠️ Restore otomatis gagal:<br><b>${hesc(trunc(restored.error, 64))}</b><br>Jalankan <b>.restore</b> manual.`, cls: 'warn' })
+  } else if (lostTotal) {
+    notes.push({ t: `⚠️ <b>${lostTotal} setting gagal</b> dipulihkan.<br>Backup masih disimpan — jalankan <b>.restore</b>.`, cls: 'warn' })
+  }
+  if (stillPending) {
+    notes.push({ t: `🔐 Masih ada <b>${stillPending} backup</b> belum kebalik —<br>jalankan <b>.restore</b> buat coba lagi.`, cls: 'warn' })
+  }
+
+  const stat = {
+    k: '♻️ pemulihan',
+    v: restored?.error ? 'GAGAL' : keptTotal ? `${keptTotal} balik` : stillPending ? `${stillPending} tertunda` : 'tidak perlu',
+    cls: restored?.error || lostTotal ? 'bad' : keptTotal ? 'ok' : stillPending ? 'warn' : 'dim'
+  }
+
+  return { restore: items.length ? { items, notes } : (notes.length ? { items: [], notes } : null), textLines, logLines, stat }
+}
+
+/* Tombol di dalam rich HTML. Kalau nomor bot kebaca, tombol jadi link
+ * `wa.me/<bot>?text=<command>` — sekali tap langsung kirim command. */
+function cmdHref(cmd) {
+  const n = getBotNumber()
+  return n ? `https://wa.me/${n}?text=${encodeURIComponent(cmd)}` : null
+}
+
+function actionButtons({ restart = false, restore = false, compareUrl = null, extra = [] } = {}) {
+  const out = []
+  if (restart) out.push({ t: '🔄 .restart', cls: 'blue', href: cmdHref('.restart') })
+  if (restore) out.push({ t: '♻️ .restore', cls: '', href: cmdHref('.restore') })
+  if (compareUrl) out.push({ t: '📋 lihat diff', cls: 'green', href: compareUrl })
+  return [...out, ...extra].filter((b) => b.t)
+}
+
+function shortRepo() {
+  const gh = parseGitHubRepo(REPO_URL)
+  return gh ? `${gh.owner}/${gh.repo}` : 'GitHub'
+}
+
+function compareUrl(oldHash, newHash) {
+  const gh = parseGitHubRepo(REPO_URL)
+  if (!gh || !oldHash || !newHash) return null
+  return `https://github.com/${gh.owner}/${gh.repo}/compare/${oldHash}...${newHash}`
 }
 
 function restoredNote(r) {
@@ -338,10 +472,39 @@ body{font-family:-apple-system,'Segoe UI',Roboto,sans-serif;color:#eef3ff;paddin
 .ft{margin-top:4px;font-size:9.5px;color:#61739c;text-align:center;line-height:1.6}
 .ft b{color:#9fd0ff}
 .btnline{display:flex;gap:7px;justify-content:center;margin-top:8px;flex-wrap:wrap}
-.btn{font-size:10px;font-weight:700;color:#0a1122;background:linear-gradient(135deg,#e7edf9,#a8b6d8);
+.btn{display:inline-block;text-decoration:none;font-size:10px;font-weight:700;color:#0a1122;
+  background:linear-gradient(135deg,#e7edf9,#a8b6d8);
   padding:6px 14px;border-radius:99px;box-shadow:0 1px 0 #fff inset,0 4px 12px rgba(0,0,0,.35)}
 .btn.blue{color:#fff;background:linear-gradient(135deg,#3b82f6,#1d4ed8);
   box-shadow:0 1px 0 rgba(255,255,255,.25) inset,0 4px 14px rgba(59,130,246,.45)}
+.btn.green{color:#052e1c;background:linear-gradient(135deg,#9df0c4,#34d399);
+  box-shadow:0 1px 0 rgba(255,255,255,.45) inset,0 4px 14px rgba(52,211,153,.35)}
+.term{background:linear-gradient(180deg,#05090f,#070d1a);border:1px solid rgba(148,163,184,.24);
+  border-radius:10px;padding:9px 11px;margin-bottom:9px;
+  box-shadow:0 1px 0 rgba(255,255,255,.06) inset,0 8px 20px rgba(0,0,0,.45)}
+.term .bar{display:flex;align-items:center;gap:5px;margin-bottom:7px;padding-bottom:6px;
+  border-bottom:1px solid rgba(148,163,184,.16)}
+.term .dot{width:7px;height:7px;border-radius:99px;display:inline-block}
+.term .dot.r{background:#ff5f56}.term .dot.y{background:#ffbd2e}.term .dot.g{background:#27c93f}
+.term .tt{font-size:8.5px;letter-spacing:1.3px;color:#61739c;margin-left:auto;text-transform:uppercase}
+.ln{font-family:ui-monospace,SFMono-Regular,monospace;font-size:10.5px;line-height:1.62;
+  color:#c7d3ea;display:flex;gap:6px;word-break:break-word}
+.ln .pr{flex-shrink:0;width:10px;text-align:center;color:#4b5f8a}
+.ln.cmd .pr,.ln.cmd .tx{color:#9fd0ff}
+.ln.ok .pr{color:#34d399}.ln.ok .tx{color:#b6f2d2}
+.ln.warn .pr{color:#ffbd2e}.ln.warn .tx{color:#ffe0a8}
+.ln.bad .pr{color:#ff5c7a}.ln.bad .tx{color:#ffc1cc}
+.ln.dim .tx{color:#8fa3cc}
+.rshead{font-size:9px;letter-spacing:1.4px;color:#8fa3cc;text-transform:uppercase;margin-bottom:6px;
+  display:flex;align-items:center;gap:5px}
+.rsrow{display:flex;align-items:center;gap:7px;font-size:11.5px;color:#dfe8fb;padding:3px 0}
+.rsrow .st{font-size:11px;flex-shrink:0}
+.rsrow .nm{color:#c7d3ea;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rsrow .tag{margin-left:auto;font-size:9px;font-weight:800;letter-spacing:.6px;padding:2px 8px;border-radius:99px;flex-shrink:0}
+.rsrow .tag.ok{color:#9df0c4;background:rgba(52,211,153,.14);border:1px solid rgba(52,211,153,.4)}
+.rsrow .tag.bad{color:#ffb3c1;background:rgba(255,92,122,.14);border:1px solid rgba(255,92,122,.4)}
+.rsrow .tag.warn{color:#ffd28a;background:rgba(255,184,77,.14);border:1px solid rgba(255,184,77,.4)}
+.rsrow .tag.dim{color:#8fa3cc;background:rgba(148,163,184,.12);border:1px solid rgba(148,163,184,.3)}
 `
 
 function wrapHtml(inner, title) {
@@ -373,7 +536,8 @@ function sectionBlock(icon, label, items) {
 function buildResultHtml(d) {
   // d: { icon, title, sub, pill:{t,cls}, head, meta:[], chips:[{e,n,k}],
   //      notes:[{t,cls}], stats:[{k,v,cls}], sections:[{icon,label,items}],
-  //      buttons:[{t,cls}] }
+  //      log:[{pr,tx,cls}], restore:{items:[{nm,tag,tagCls,st}], notes:[]},
+  //      buttons:[{t,cls,href}] }
   const chips = d.chips?.length
     ? `<div class="chips">${d.chips.map((c) => `<div class="chip"><div class="e">${c.e}</div><div class="n">${hesc(String(c.n))}</div><div class="k">${hesc(c.k)}</div></div>`).join('')}</div>`
     : ''
@@ -387,12 +551,21 @@ function buildResultHtml(d) {
     .map((s) => `<div class="stat"><span>${s.k}</span><span class="v ${s.cls || ''}">${s.v}</span></div>`)
     .join('')
   const sections = (d.sections || []).map((s) => sectionBlock(s.icon, s.label, s.items)).join('')
+  const log = d.log?.length
+    ? `<div class="term"><div class="bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="tt">console · updatesc</span></div>${d.log.map((l) => `<div class="ln ${l.cls || 'dim'}"><span class="pr">${hesc(l.pr)}</span><span class="tx">${hesc(l.tx)}</span></div>`).join('')}</div>`
+    : ''
+  const restore = d.restore?.items?.length
+    ? `<div class="card"><div class="rshead">♻️ <span>pemulihan setting</span></div>${d.restore.items.map((r) => `<div class="rsrow"><span class="st">${r.st}</span><span class="nm">${hesc(r.nm)}</span><span class="tag ${r.tagCls}">${hesc(r.tag)}</span></div>`).join('')}</div>`
+    : ''
+  const restoreNotes = (d.restore?.notes || []).map((n) => `<div class="note ${n.cls || ''}">${n.t}</div>`).join('')
   const buttons = d.buttons?.length
-    ? `<div class="btnline">${d.buttons.map((b) => `<span class="btn ${b.cls || ''}">${hesc(b.t)}</span>`).join('')}</div>`
+    ? `<div class="btnline">${d.buttons.map((b) => b.href
+      ? `<a class="btn ${b.cls || ''}" href="${hesc(b.href)}">${hesc(b.t)}</a>`
+      : `<span class="btn ${b.cls || ''}">${hesc(b.t)}</span>`).join('')}</div>`
     : ''
   return wrapHtml(
     hd(d.icon, d.title, d.sub, d.pill.t, d.pill.cls) +
-      `<div class="card">${d.head}</div>` + meta + chips + notes + stats + sections + buttons,
+      `<div class="card">${d.head}</div>` + meta + chips + notes + log + stats + sections + restore + restoreNotes + buttons,
     d.title
   )
 }
@@ -755,41 +928,72 @@ async function handler(ctx) {
     try {
       const { short, msg, pkgChanged, removed } = await apiSync()
       const { installed, installErr } = await npmInstallMaybe(ctx, pkgChanged)
+      const restored = await autoRestore()
+      const pending = await pendingNow()
+      const rr = restoreReport(restored, pending)
       await ctx.react(installErr ? '⚠️' : '✅')
+      const log = [
+        { pr: '$', tx: 'sync via GitHub API (tarball)', cls: 'cmd' },
+        { pr: '✓', tx: `${short} · ${trunc(msg, 46)}`, cls: 'ok' },
+        { pr: '✓', tx: `file disamain dari origin/main`, cls: 'ok' },
+        removed.length
+          ? { pr: '✓', tx: `${removed.length} file usang dihapus`, cls: 'ok' }
+          : { pr: '•', tx: 'tidak ada file usang', cls: 'dim' },
+        { pr: '$', tx: 'npm install --omit=dev', cls: 'cmd' },
+        installed
+          ? { pr: '✓', tx: 'dependency terpasang', cls: 'ok' }
+          : installErr
+            ? { pr: '✗', tx: 'npm install gagal — cek log panel', cls: 'bad' }
+            : { pr: '•', tx: 'package.json gak berubah — dilewati', cls: 'dim' },
+        ...rr.logLines
+      ]
       await replyRich(ctx, {
         icon: '🌐',
         title: 'UPDATE SELESAI',
-        sub: 'mode GitHub API (tanpa git)',
+        sub: `${removed.length} file usang dibersihkan · mode API`,
         pill: { t: installErr ? 'ADA ERROR' : 'SUKSES', cls: installErr ? 'warn' : 'ok' },
         head: `<div class="lbl">📦 <span>sync via API</span></div>
 <div class="meta"><span class="hash">${hesc(short)}</span><span>${hesc(trunc(msg, 34))}</span></div>`,
-        meta: [`⏱️ <b>${hesc(fmtDur(Date.now() - t0))}</b>`, `🕒 ${hesc(nowWIB())}`],
-        notes: [
-          { t: '🌐 Server gak punya git — file disamain<br>langsung dari GitHub (tarball mode).' },
-          { t: 'ℹ️ Daftar file berubah gak bisa<br>dideteksi tanpa git.', cls: 'warn' }
+        meta: [`⏱️ <b>${hesc(fmtDur(Date.now() - t0))}</b>`, `🕒 ${hesc(nowWIB())}`, `🌿 ${hesc(BRANCH)}`],
+        chips: [
+          { e: '📦', n: 1, k: 'commit' },
+          { e: '🗑️', n: removed.length, k: 'usang' },
+          { e: '♻️', n: restored.kept, k: 'pulih' },
+          { e: '🕒', n: fmtDur(Date.now() - t0), k: 'durasi' }
+        ],
+        sections: [
+          removed.length ? { icon: '🗑️', label: 'FILE USANG DIHAPUS', items: removed.map((r) => r) } : null,
+          { icon: 'ℹ️', label: 'CATATAN MODE API', items: ['Server gak punya git — sync pakai tarball GitHub', 'Daftar file berubah gak bisa dideteksi tanpa git', 'File usang dibersihkan via .updatesc-manifest.json'] }
         ].filter(Boolean),
+        log,
         stats: [
           { k: '📦 npm install', v: installed ? 'sukses' : installErr ? 'GAGAL' : 'lewati', cls: installed ? 'ok' : installErr ? 'bad' : 'dim' },
-          { k: '🗑️ file usang', v: removed.length ? String(removed.length) : '0', cls: removed.length ? 'ok' : 'dim' }
+          { k: '🗑️ file usang', v: removed.length ? String(removed.length) : '0', cls: removed.length ? 'ok' : 'dim' },
+          rr.stat
         ],
-        buttons: [{ t: '🔁 RESTART di panel', cls: 'blue' }]
+        restore: rr.restore,
+        buttons: actionButtons({ restart: true, restore: restored.lost > 0 || pendingCount(pending) > 0, compareUrl: `https://github.com/${shortRepo()}/commit/${short}` })
       }, [
         '*UPDATE SELESAI* ✅ (API)',
         '',
         `📌 \`${short}\` ${trunc(msg, 30)}`,
         `⏱️ *${fmtDur(Date.now() - t0)}*`,
         '',
+        '🖥️ *CONSOLE LOG*',
+        ...log.map((l) => `${l.pr} ${l.tx}`),
+        '',
+        ...rr.textLines,
+        '',
         '🌐 Server tanpa git — sync via GitHub API',
         'ℹ️ Daftar file gak bisa dideteksi (tanpa git)',
-        installed ? '📦 npm install *sukses*' : installErr ? '⚠️ npm install *gagal* (cek log)' : '📦 npm install *lewati*',
-        removed.length ? `🗑️ ${removed.length} file usang dihapus (${removed.slice(0, 3).join(', ')}${removed.length > 3 ? ', …' : ''})` : '',
-        '',
         '🔁 *RESTART* bot di panel biar kode baru kebaca',
         '',
         `🕒 ${nowWIB()}`
-      ])
-      await sendRestoreCard(ctx)
+      ].filter(Boolean))
     } catch (err) {
+      const restored = await autoRestore()
+      const pending = await pendingNow()
+      const rr = restoreReport(restored, pending)
       await ctx.react('⚠️')
       await replyRich(ctx, {
         icon: '⚠️',
@@ -799,9 +1003,16 @@ async function handler(ctx) {
         head: `<div class="lbl">❌ <span>API error</span></div>
 ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
         meta: [`⏱️ <b>${hesc(fmtDur(Date.now() - t0))}</b>`, `🕒 ${hesc(nowWIB())}`],
+        log: [
+          { pr: '$', tx: 'sync via GitHub API (tarball)', cls: 'cmd' },
+          { pr: '✗', tx: trunc(String(err?.message || err), 62), cls: 'bad' },
+          ...rr.logLines
+        ],
         notes: [
           { t: 'Cek koneksi / rate limit GitHub,<br>lalu coba lagi <b>.updatesc</b>.', cls: 'bad' }
-        ].filter(Boolean)
+        ].filter(Boolean),
+        restore: rr.restore,
+        buttons: actionButtons({ restore: true })
       }, [
         '*UPDATE GAGAL*',
         '',
@@ -811,7 +1022,6 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
         `⏱️ *${fmtDur(Date.now() - t0)}*`,
         `🕒 ${nowWIB()}`
       ])
-      await sendRestoreCard(ctx)
     }
     return
   }
@@ -849,40 +1059,66 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
       return
     }
     const { installed, installErr } = await npmInstallMaybe(ctx, bootstrapped.pkgChanged)
+    const restored = await autoRestore()
+    const pending = await pendingNow()
+    const rr = restoreReport(restored, pending)
     await ctx.react(installErr ? '⚠️' : '✅')
+    const bHash = bootstrapped.head.split(' ')[0]
+    const bMsg = bootstrapped.head.split(' ').slice(1).join(' ')
+    const log = [
+      { pr: '$', tx: 'git init && git fetch origin main', cls: 'cmd' },
+      { pr: '✓', tx: `repo dibuat · HEAD ${bHash}`, cls: 'ok' },
+      { pr: '✓', tx: trunc(bMsg, 46), cls: 'ok' },
+      { pr: '$', tx: 'npm install --omit=dev', cls: 'cmd' },
+      installed
+        ? { pr: '✓', tx: 'dependency terpasang', cls: 'ok' }
+        : installErr
+          ? { pr: '✗', tx: 'npm install gagal — cek log panel', cls: 'bad' }
+          : { pr: '•', tx: 'package.json gak berubah — dilewati', cls: 'dim' },
+      ...rr.logLines
+    ]
     await replyRich(ctx, {
       icon: '⚙️',
       title: 'SETUP REPO SELESAI',
       sub: 'git init otomatis dari GitHub',
       pill: { t: installErr ? 'ADA ERROR' : 'SETUP OK', cls: installErr ? 'warn' : 'ok' },
       head: `<div class="lbl">📥 <span>repo dibuat + sync penuh</span></div>
-<div class="meta"><span class="hash">${hesc(bootstrapped.head.split(' ')[0])}</span><span>${hesc(trunc(bootstrapped.head.split(' ').slice(1).join(' '), 40))}</span></div>`,
-      meta: [`⏱️ <b>${hesc(fmtDur(Date.now() - t0))}</b>`, `🕒 ${hesc(nowWIB())}`],
+<div class="meta"><span class="hash">${hesc(bHash)}</span><span>${hesc(trunc(bMsg, 40))}</span></div>`,
+      meta: [`⏱️ <b>${hesc(fmtDur(Date.now() - t0))}</b>`, `🕒 ${hesc(nowWIB())}`, `🌿 ${hesc(BRANCH)}`],
+      chips: [
+        { e: '📥', n: 1, k: 'repo' },
+        { e: '📦', n: installed ? 'ok' : 'pass', k: 'npm' },
+        { e: '♻️', n: restored.kept, k: 'pulih' },
+        { e: '🕒', n: fmtDur(Date.now() - t0), k: 'durasi' }
+      ],
+      log,
       notes: [
         { t: '💾 Config lama disimpan di<br><b>config.js.pre-git.bak</b>' },
         { t: '⚠️ Abis <b>RESTART</b>, jalur .updatesc<br>berikutnya normal (git pull).', cls: 'warn' }
       ].filter(Boolean),
       stats: [
         { k: '📦 npm install', v: installed ? 'sukses' : installErr ? 'GAGAL' : 'lewati', cls: installed ? 'ok' : installErr ? 'bad' : 'dim' },
-        { k: '📁 session/ & data/', v: 'aman utuh', cls: 'ok' }
+        { k: '📁 session/ & data/', v: 'aman utuh', cls: 'ok' },
+        rr.stat
       ].filter(Boolean),
-      buttons: [{ t: '🔁 RESTART bot di panel', cls: 'blue' }]
+      restore: rr.restore,
+      buttons: actionButtons({ restart: true, restore: restored.lost > 0 || pendingCount(pending) > 0 })
     }, [
       '*SETUP REPO SELESAI* ✅',
       '',
-      `📌 HEAD: \`${bootstrapped.head.split(' ')[0]}\``,
+      `📌 HEAD: \`${bHash}\``,
       `⏱️ *${fmtDur(Date.now() - t0)}*`,
       '',
       '📥 Repo di-init otomatis + sync penuh',
       '💾 config.js lama → `config.js.pre-git.bak`',
       installed ? '📦 npm install *sukses*' : installErr ? '⚠️ npm install *gagal* (cek log)' : '📦 npm install *lewati*',
+      ...rr.textLines,
       '',
       '🔁 *RESTART* bot di panel',
       '⚠️ Abis restart, .updatesc jalan normal (pull)',
       '',
       `🕒 ${nowWIB()}`
     ])
-    await sendRestoreCard(ctx)
     return
   }
 
@@ -962,7 +1198,16 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
   if (behind === '0') {
     const cur = (await git(['log', '-1', '--oneline'])).out
     const [curHash = '', ...curMsg] = cur.split(' ')
+    const restored = await autoRestore()
+    const pending = await pendingNow()
+    const rr = restoreReport(restored, pending)
     await ctx.react('✅')
+    const log = [
+      { pr: '$', tx: `git fetch origin ${BRANCH}`, cls: 'cmd' },
+      { pr: '✓', tx: `origin/${BRANCH} sama dengan HEAD`, cls: 'ok' },
+      { pr: '•', tx: 'tidak ada commit baru di GitHub', cls: 'dim' },
+      ...rr.logLines
+    ]
     await replyRich(ctx, {
       icon: '✅',
       title: 'UDAH TERBARU',
@@ -971,23 +1216,35 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
       head: `<div class="lbl">📌 <span>HEAD sekarang</span></div>
 <div class="meta"><span class="hash">${hesc(curHash)}</span>${curMsg.length ? `<span>${hesc(trunc(curMsg.join(' '), 40))}</span>` : ''}</div>`,
       meta: [`⏱️ <b>${hesc(fmtDur(Date.now() - t0))}</b>`, `🌿 ${hesc(BRANCH)}`, `🕒 ${hesc(nowWIB())}`],
+      chips: [
+        { e: '📌', n: curHash.slice(0, 7), k: 'head' },
+        { e: '🌿', n: BRANCH, k: 'branch' },
+        { e: '♻️', n: restored.kept, k: 'pulih' },
+        { e: '🕒', n: fmtDur(Date.now() - t0), k: 'durasi' }
+      ],
+      log,
       stats: [
         { k: '📡 origin', v: 'tersambung', cls: 'ok' },
-        { k: '🔄 update terakhir', v: 'cek ulang nanti', cls: 'dim' }
-      ]
+        { k: '🔄 status', v: 'sudah paling baru', cls: 'ok' },
+        rr.stat
+      ],
+      restore: rr.restore,
+      buttons: actionButtons({ restart: false, restore: restored.lost > 0 || pendingCount(pending) > 0, compareUrl: `https://github.com/${shortRepo()}/commit/${curHash}` })
     }, [
       '✅ *UDAH TERBARU*',
       '',
       `📌 HEAD: \`${curHash}\``,
       curMsg.length ? `💬 ${trunc(curMsg.join(' '), 36)}` : null,
       '',
+      '🖥️ *CONSOLE LOG*',
+      ...log.map((l) => `${l.pr} ${l.tx}`),
+      '',
+      ...rr.textLines,
+      '',
       'ℹ️ Gak ada commit baru dari GitHub',
       `⏱️ *${fmtDur(Date.now() - t0)}*`,
       `🕒 ${nowWIB()}`
     ].filter(Boolean))
-    // Kalau masih ada backup dari update sebelumnya (mis. run lama yang
-    // belum sempat di-restore), jalankan tahap 2 sekarang.
-    await sendRestoreCard(ctx)
     return
   }
 
@@ -1031,7 +1288,16 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
   // `.restore` manual).
 
   if (pullErr) {
+    const restored = await autoRestore()
+    const pending = await pendingNow()
+    const rr = restoreReport(restored, pending)
     await ctx.react('⚠️')
+    const log = [
+      { pr: '$', tx: `git pull --ff-only origin ${BRANCH}`, cls: 'cmd' },
+      { pr: '✗', tx: 'pull ditolak oleh git', cls: 'bad' },
+      ...gitErrDetail(pullErr).slice(0, 3).map((l) => ({ pr: '•', tx: trunc(l, 56), cls: 'warn' })),
+      ...rr.logLines
+    ]
     await replyRich(ctx, {
       icon: '⚠️',
       title: 'UPDATE GAGAL',
@@ -1040,14 +1306,32 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
       head: `<div class="lbl">❌ <span>pull --ff-only error</span></div>
 ${gitErrDetail(pullErr).map((l) => row(hesc(l))).join('')}`,
       meta: [`⏱️ <b>${hesc(fmtDur(Date.now() - t0))}</b>`, `🕒 ${hesc(nowWIB())}`],
+      chips: [
+        { e: '⚠️', n: 'gagal', k: 'status' },
+        { e: '♻️', n: restored.kept, k: 'pulih' },
+        { e: '🕒', n: fmtDur(Date.now() - t0), k: 'durasi' },
+        { e: '🌿', n: BRANCH, k: 'branch' }
+      ],
+      log,
       notes: [
         { t: '💡 Kemungkinan ada file diedit<br>langsung di panel.', cls: 'warn' },
         { t: 'Paling aman: edit di <b>lokal</b> →<br><b>push</b> → <b>.updatesc</b><br>(atau reset repo di panel).', cls: 'warn' }
-      ].filter(Boolean)
+      ].filter(Boolean),
+      stats: [
+        { k: '🔄 git pull', v: 'GAGAL', cls: 'bad' },
+        rr.stat
+      ],
+      restore: rr.restore,
+      buttons: actionButtons({ restart: false, restore: true })
     }, [
       '*UPDATE GAGAL*',
       '',
       ...gitErrDetail(pullErr),
+      '',
+      '🖥️ *CONSOLE LOG*',
+      ...log.map((l) => `${l.pr} ${l.tx}`),
+      '',
+      ...rr.textLines,
       '',
       '💡 Kemungkinan ada file diedit langsung',
       '   di panel. Paling aman: edit di lokal',
@@ -1056,9 +1340,6 @@ ${gitErrDetail(pullErr).map((l) => row(hesc(l))).join('')}`,
       `⏱️ *${fmtDur(Date.now() - t0)}*`,
       `🕒 ${nowWIB()}`
     ])
-    // Tahap 2: config/thumbnail udah keburu di-reset ke HEAD di atas,
-    // jadi setting user WAJIB dipulihkan balik.
-    await sendRestoreCard(ctx)
     return
   }
 
@@ -1107,6 +1388,31 @@ ${gitErrDetail(pullErr).map((l) => row(hesc(l))).join('')}`,
   const oldShort = oldHead.slice(0, 7)
   const newShort = newHead.slice(0, 7)
 
+  // ── Auto-restore setting user (digabung langsung dalam 1 kartu) ──
+  const restored = await autoRestore()
+  const pending = await pendingNow()
+  const rr = restoreReport(restored, pending)
+
+  const log = [
+    { pr: '$', tx: `git pull --ff-only origin ${BRANCH}`, cls: 'cmd' },
+    { pr: '✓', tx: `${oldShort}..${newShort} (${commits.length} commit)`, cls: 'ok' },
+    files.length
+      ? { pr: '✓', tx: `${files.length} file diperbarui`, cls: 'ok' }
+      : { pr: '•', tx: 'tidak ada file berubah', cls: 'dim' },
+    { pr: '$', tx: 'npm install --omit=dev', cls: 'cmd' },
+    installed
+      ? { pr: '✓', tx: 'dependency terpasang', cls: 'ok' }
+      : installErr
+        ? { pr: '✗', tx: 'npm install gagal — cek log panel', cls: 'bad' }
+        : { pr: '•', tx: 'package.json gak berubah — dilewati', cls: 'dim' },
+    ...rr.logLines,
+    needRestart
+      ? { pr: '!', tx: 'core/lib/handlers berubah → restart panel', cls: 'warn' }
+      : onlyPlugins
+        ? { pr: '⚡', tx: 'cuma plugins/ → hot reload otomatis', cls: 'ok' }
+        : { pr: '✓', tx: 'update selesai tanpa restart', cls: 'ok' }
+  ]
+
   await ctx.react(installErr ? '⚠️' : '✅')
   await replyRich(ctx, {
     icon: installErr ? '⚠️' : '🚀',
@@ -1140,23 +1446,30 @@ ${gitErrDetail(pullErr).map((l) => row(hesc(l))).join('')}`,
           }
         : null
     ].filter(Boolean),
+    log,
     stats: [
       { k: '📦 npm install', v: installed ? 'sukses' : installErr ? 'GAGAL' : 'lewati', cls: installed ? 'ok' : installErr ? 'bad' : 'dim' },
+      rr.stat,
       needRestart
         ? { k: '🔁 aksi', v: 'RESTART di panel', cls: 'bad' }
         : onlyPlugins
-          ? { k: '⚡ aksi', v: 'hot reload · gak perlu restart', cls: 'ok' }
+          ? { k: '⚡ aksi', v: 'hot reload · tanpa restart', cls: 'ok' }
           : { k: '✅ aksi', v: 'selesai', cls: 'ok' }
     ].filter(Boolean),
+    restore: rr.restore,
     notes: [
-      cfgReset ? { t: '⚙️ config.js sempat di-reset ke<br>versi GitHub sebelum update.' } : null,
+      cfgReset ? { t: '⚙️ config.js sempat di-reset ke<br>versi GitHub sebelum pull.' } : null,
       needRestart
         ? { t: '🔁 Ada file <b>core/lib/handlers</b> berubah —<br><b>RESTART bot di panel</b> biar kebaca.', cls: 'warn' }
         : onlyPlugins
           ? { t: '⚡ Cuma <b>plugins/</b> — ke-hot-reload<br>sendiri, gak perlu restart.' }
           : { t: '✅ Update bersih, gak ada<br>perubahan berisiko.' }
     ].filter(Boolean),
-    buttons: [{ t: '🕒 ' + nowWIB(), cls: '' }]
+    buttons: actionButtons({
+      restart: needRestart,
+      restore: restored.lost > 0 || pendingCount(pending) > 0,
+      compareUrl: compareUrl(oldShort, newShort)
+    })
   }, [
     '*UPDATE SELESAI* ✅',
     '',
@@ -1169,6 +1482,11 @@ ${gitErrDetail(pullErr).map((l) => row(hesc(l))).join('')}`,
     ...section('🔧 *FIX*', groups.fix),
     ...section('📝 *LAINNYA*', groups.other),
     ...fileSection(files),
+    '🖥️ *CONSOLE LOG*',
+    ...log.map((l) => `${l.pr} ${l.tx}`),
+    '',
+    ...rr.textLines,
+    '',
     installed ? '📦 npm install *sukses*' : installErr ? '⚠️ npm install *gagal* (cek log)' : '📦 npm install *lewati*',
     needRestart
       ? '🔁 *RESTART* diperlukan (core/lib/handlers)'
@@ -1177,9 +1495,7 @@ ${gitErrDetail(pullErr).map((l) => row(hesc(l))).join('')}`,
         : '✅ Selesai',
     '',
     `🕒 ${nowWIB()}`
-  ])
-  // ── TAHAP 2: pulihin setting user (kartu terpisah) ──
-  await sendRestoreCard(ctx)
+  ].filter(Boolean))
 }
 
 export { pluginConfig as config, handler }
@@ -1192,5 +1508,6 @@ export const _internals = {
   restoredNote,
   pendingCount, pendingStats, pendingNote, pendingLine,
   untgz,
-  MANIFEST_FILE, listRelFiles, readManifest, pruneStale
+  MANIFEST_FILE, listRelFiles, readManifest, pruneStale,
+  buildResultHtml, restoreReport, actionButtons, friendlyKey, friendlyAsset
 }
