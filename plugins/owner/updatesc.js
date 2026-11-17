@@ -389,148 +389,140 @@ const hesc = (s) =>
 
 const CSS = `
 *{margin:0;padding:0;box-sizing:border-box}
-html{background-color:#070b16}
-body{font-family:-apple-system,'Segoe UI',Roboto,sans-serif;color:#eef3ff;padding:14px;position:relative;
+html,body{min-height:100%}
+body{font-family:ui-monospace,'Courier New',monospace;color:#e8f5e9;padding:8px;min-height:100vh;
   background-color:#070b16;
   background-image:
     radial-gradient(560px 300px at 18% -40px,rgba(59,130,246,.38),rgba(59,130,246,0) 70%),
     radial-gradient(520px 300px at 90% 105%,rgba(200,211,232,.22),rgba(200,211,232,0) 70%),
-    radial-gradient(380px 260px at 105% 40%,rgba(96,165,250,.16),rgba(96,165,250,0) 70%),
     linear-gradient(180deg,#0a1122 0%,#0b1428 45%,#070b16 100%)}
-.bgfx{position:absolute;left:0;right:0;top:0;bottom:0;pointer-events:none;z-index:0;
-  background-image:
-    linear-gradient(rgba(59,130,246,.07) 1px,rgba(59,130,246,0) 1px),
-    linear-gradient(90deg,rgba(59,130,246,.07) 1px,rgba(59,130,246,0) 1px),
-    radial-gradient(rgba(148,163,184,.16) 1.2px,rgba(148,163,184,0) 1.6px);
-  background-size:52px 52px,52px 52px,20px 20px}
-.sheen{position:absolute;top:0;left:0;right:0;height:170px;
-  background:
-    linear-gradient(115deg,rgba(255,255,255,0) 30%,rgba(200,211,232,.16) 48%,rgba(255,255,255,.22) 52%,rgba(59,130,246,.14) 60%,rgba(59,130,246,0) 75%),
-    radial-gradient(420px 150px at 50% 0,rgba(59,130,246,.30),rgba(59,130,246,0) 75%)}
-.vig{position:absolute;left:0;right:0;top:0;bottom:0;
-  background:radial-gradient(ellipse 110% 95% at 50% 40%,rgba(0,0,0,0) 55%,rgba(0,0,0,.6) 100%)}
-.wrap{position:relative;z-index:1}
-.chrome{height:3px;border-radius:99px;margin-bottom:12px;
-  background:linear-gradient(90deg,#3b82f6,#c8d3e8 45%,#ffffff 55%,#93a4c7 70%,#3b82f6);
-  box-shadow:0 0 12px rgba(59,130,246,.55)}
-.hd{display:flex;align-items:center;gap:10px;margin-bottom:10px}
-.ic{width:40px;height:40px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:20px;
-  background:linear-gradient(135deg,rgba(59,130,246,.35),rgba(200,211,232,.16));
-  border:1.5px solid rgba(200,211,232,.45);box-shadow:0 0 16px rgba(59,130,246,.35)}
-.t1{font-size:16px;font-weight:800;letter-spacing:1.4px;
-  background:linear-gradient(90deg,#ffffff,#b9c6e8 60%,#7fb0ff);-webkit-background-clip:text;background-clip:text;color:transparent}
-.t2{font-size:10px;color:#8fa3cc;margin-top:1px}
-.pill{margin-left:auto;font-size:10px;font-weight:800;padding:4px 11px;border-radius:99px;letter-spacing:1px}
-.pill.ok{color:#9df0c4;border:1px solid rgba(52,211,153,.5);background:rgba(52,211,153,.12);
-  box-shadow:0 0 14px rgba(52,211,153,.3)}
-.pill.info{color:#9fd0ff;border:1px solid rgba(59,130,246,.5);background:rgba(59,130,246,.12);
-  box-shadow:0 0 14px rgba(59,130,246,.35)}
-.pill.warn{color:#ffd28a;border:1px solid rgba(255,184,77,.5);background:rgba(255,184,77,.12)}
-.pill.bad{color:#ffb3c1;border:1px solid rgba(255,92,122,.5);background:rgba(255,92,122,.12);
-  box-shadow:0 0 14px rgba(255,92,122,.3)}
-.card{background:linear-gradient(160deg,rgba(24,34,60,.97),rgba(11,17,34,.98));
-  border:1px solid rgba(148,163,184,.26);border-radius:13px;padding:11px 13px;margin-bottom:9px;
-  box-shadow:0 1px 0 rgba(255,255,255,.10) inset,0 6px 18px rgba(0,0,0,.35)}
-.lbl{font-size:9px;letter-spacing:1.6px;color:#8fa3cc;text-transform:uppercase;margin-bottom:6px;
-  display:flex;align-items:center;gap:5px}
+.frame{width:100%;max-width:400px;margin:0 auto;max-height:660px;
+  display:flex;flex-direction:column;position:relative;overflow:hidden;
+  background-color:rgba(10,17,34,.96);border:3px solid #000;
+  box-shadow:inset 3px 3px 0 rgba(255,255,255,.15),inset -3px -3px 0 rgba(0,0,0,.65),0 0 0 2px rgba(0,0,0,.8)}
+.hd{flex:none;display:flex;align-items:center;gap:8px;padding:9px 10px;border-bottom:3px solid #000;
+  background:linear-gradient(180deg,rgba(59,130,246,.35),rgba(0,0,0,.35));
+  box-shadow:inset 0 -2px 0 rgba(255,255,255,.08)}
+.ic{width:32px;height:32px;border:2px solid #000;background:linear-gradient(135deg,rgba(59,130,246,.4),rgba(200,211,232,.2));
+  display:flex;align-items:center;justify-content:center;font-size:16px;box-shadow:inset 2px 2px 0 rgba(255,255,255,.3)}
+.t{font:bold 13px monospace;color:#7fb0ff;text-shadow:2px 2px 0 #000;letter-spacing:1.8px}
+.ver{font-size:9px;color:#c8d3e8;text-shadow:1px 1px 0 #000;border:2px solid #000;background:rgba(0,0,0,.5);padding:2px 6px}
+.pill{margin-left:auto;font-size:9px;font-weight:bold;color:#fff;border:2px solid #000;padding:3px 7px;letter-spacing:1px;
+  box-shadow:inset 1px 1px 0 rgba(255,255,255,.4),inset -1px -1px 0 rgba(0,0,0,.35)}
+.pill.ok{background:#27c93f;text-shadow:1px 1px 0 #0b4515}
+.pill.warn{background:#ffbd2e;color:#2e2200;text-shadow:1px 1px 0 rgba(255,255,255,.4)}
+.pill.bad{background:#ff5f56;text-shadow:1px 1px 0 #4a0c08}
+.pill.info{background:#3b82f6;text-shadow:1px 1px 0 #0c2b64}
+.view{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:10px;display:none}
+.view.on{display:block}
+.sec{font:bold 10px monospace;color:#9fd0ff;letter-spacing:1.8px;text-shadow:1px 1px 0 #000;margin:10px 0 6px}
+.cell{background:rgba(0,0,0,.45);border:2px solid #000;padding:8px 9px;margin-bottom:8px;
+  box-shadow:inset 2px 2px 0 rgba(255,255,255,.09),inset -2px -2px 0 rgba(0,0,0,.45)}
+.k{font-size:8px;letter-spacing:1.5px;color:#8fa3cc;text-shadow:1px 1px 0 #000;text-transform:uppercase}
+.k.mt{margin-top:5px}
+.v{font:bold 14px monospace;color:#fff;text-shadow:2px 2px 0 #000;margin-top:2px}
+.v.ok{color:#9df0c4}.v.bad{color:#ffb3c1}.v.dim{color:#8fa3cc}
 .hash{font-family:ui-monospace,SFMono-Regular,monospace;font-size:11px;font-weight:700;color:#0a1122;
-  background:linear-gradient(135deg,#e7edf9,#a8b6d8);padding:2px 9px;border-radius:7px;display:inline-block;
-  box-shadow:0 1px 0 #fff inset}
-.arrow{color:#7fb0ff;font-weight:800;font-size:13px;padding:0 3px}
-.meta{display:flex;flex-wrap:wrap;gap:7px;align-items:center;font-size:11px;color:#a9b8d8}
-.chips{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-bottom:9px}
-.chip{background:linear-gradient(160deg,rgba(24,34,60,.97),rgba(11,17,34,.98));
-  border:1px solid rgba(148,163,184,.24);border-radius:11px;padding:8px 5px;text-align:center;
-  box-shadow:0 1px 0 rgba(255,255,255,.10) inset}
-.chip .n{font-size:20px;font-weight:800;line-height:1.15;
-  background:linear-gradient(90deg,#ffffff,#9fd0ff);-webkit-background-clip:text;background-clip:text;color:transparent}
-.chip .e{font-size:13px}
-.chip .k{font-size:8px;letter-spacing:1.1px;color:#8fa3cc;text-transform:uppercase;margin-top:1px}
-.sec{margin-bottom:8px}
-.sech{font-size:10px;font-weight:800;letter-spacing:1.2px;color:#9fd0ff;text-transform:uppercase;
-  display:flex;align-items:center;gap:6px;margin-bottom:5px}
-.sech .cnt{color:#61739c;font-weight:700}
-.secb{background:rgba(11,17,34,.72);border:1px solid rgba(148,163,184,.18);border-radius:10px;padding:7px 10px}
-.row{font-size:12px;color:#dfe8fb;padding:3px 0;line-height:1.45}
+  background:linear-gradient(135deg,#e7edf9,#a8b6d8);padding:2px 7px;border-radius:4px;display:inline-block}
+.arrow{color:#7fb0ff;font-weight:800;padding:0 2px}
+.meta{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:11px;color:#c7d3ea;margin-top:4px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px}
+.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-bottom:8px}
+.chip{background:rgba(0,0,0,.5);border:2px solid #000;padding:6px 2px;text-align:center;
+  box-shadow:inset 1px 1px 0 rgba(255,255,255,.08)}
+.chip .n{font:bold 14px monospace;color:#9fd0ff;text-shadow:1px 1px 0 #000}
+.chip .k{font-size:7.5px;color:#8fa3cc;letter-spacing:1px;margin-top:1px}
+.row{display:flex;justify-content:space-between;align-items:center;gap:6px;font-size:10.5px;
+  padding:5px 7px;margin-bottom:4px;background:rgba(0,0,0,.4);border:2px solid #000;
+  box-shadow:inset 1px 1px 0 rgba(255,255,255,.08);text-shadow:1px 1px 0 #000;word-break:break-word}
 .row .dot{color:#7fb0ff}
-.row .cnt{color:#9fd0ff;font-weight:700}
-.row.dim{color:#8fa3cc;font-size:11px}
-.note{font-size:11px;color:#a9b8d8;background:rgba(59,130,246,.10);border:1px solid rgba(59,130,246,.30);
-  border-radius:10px;padding:8px 11px;margin-bottom:9px;line-height:1.55}
-.note b{color:#9fd0ff}
-.note.warn{background:rgba(255,184,77,.09);border-color:rgba(255,184,77,.35)}
-.note.warn b{color:#ffd28a}
-.note.bad{background:rgba(255,92,122,.09);border-color:rgba(255,92,122,.35)}
-.note.bad b{color:#ffb3c1}
-.stat{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;
-  background:rgba(11,17,34,.72);border:1px solid rgba(148,163,184,.18);border-radius:10px;
-  padding:7px 11px;margin-bottom:6px}
-.stat .v{font-weight:700;color:#9fd0ff;text-align:right}
-.stat .v.ok{color:#9df0c4}
-.stat .v.bad{color:#ffb3c1}
-.stat .v.dim{color:#8fa3cc;font-weight:600}
-.ft{margin-top:4px;font-size:9.5px;color:#61739c;text-align:center;line-height:1.6}
-.ft b{color:#9fd0ff}
-.btnline{display:flex;gap:7px;justify-content:center;margin-top:8px;flex-wrap:wrap}
-.btn{display:inline-block;text-decoration:none;font-size:10px;font-weight:700;color:#0a1122;
-  background:linear-gradient(135deg,#e7edf9,#a8b6d8);
-  padding:6px 14px;border-radius:99px;box-shadow:0 1px 0 #fff inset,0 4px 12px rgba(0,0,0,.35)}
-.btn.blue{color:#fff;background:linear-gradient(135deg,#3b82f6,#1d4ed8);
-  box-shadow:0 1px 0 rgba(255,255,255,.25) inset,0 4px 14px rgba(59,130,246,.45)}
-.btn.green{color:#052e1c;background:linear-gradient(135deg,#9df0c4,#34d399);
-  box-shadow:0 1px 0 rgba(255,255,255,.45) inset,0 4px 14px rgba(52,211,153,.35)}
-.term{background:linear-gradient(180deg,#05090f,#070d1a);border:1px solid rgba(148,163,184,.24);
-  border-radius:10px;padding:9px 11px;margin-bottom:9px;
-  box-shadow:0 1px 0 rgba(255,255,255,.06) inset,0 8px 20px rgba(0,0,0,.45)}
-.term .bar{display:flex;align-items:center;gap:5px;margin-bottom:7px;padding-bottom:6px;
-  border-bottom:1px solid rgba(148,163,184,.16)}
-.term .dot{width:7px;height:7px;border-radius:99px;display:inline-block}
+.row.dim{color:#8fa3cc;font-size:9.5px}
+.term{background:rgba(0,0,0,.7);border:2px solid #000;padding:8px 9px;margin-bottom:8px;
+  box-shadow:inset 2px 2px 0 rgba(255,255,255,.06),inset -2px -2px 0 rgba(0,0,0,.5)}
+.term .bar{display:flex;align-items:center;gap:5px;margin-bottom:6px;padding-bottom:4px;
+  border-bottom:1px solid rgba(148,163,184,.2)}
+.term .dot{width:6px;height:6px;border-radius:99px;display:inline-block}
 .term .dot.r{background:#ff5f56}.term .dot.y{background:#ffbd2e}.term .dot.g{background:#27c93f}
-.term .tt{font-size:8.5px;letter-spacing:1.3px;color:#61739c;margin-left:auto;text-transform:uppercase}
-.ln{font-family:ui-monospace,SFMono-Regular,monospace;font-size:10.5px;line-height:1.62;
-  color:#c7d3ea;display:flex;gap:6px;word-break:break-word}
-.ln .pr{flex-shrink:0;width:10px;text-align:center;color:#4b5f8a}
+.term .tt{font-size:8px;letter-spacing:1.3px;color:#8fa3cc;margin-left:auto;text-transform:uppercase}
+.ln{font-family:ui-monospace,SFMono-Regular,monospace;font-size:10px;line-height:1.55;
+  color:#c7d3ea;display:flex;gap:5px;word-break:break-word}
+.ln .pr{flex-shrink:0;width:12px;text-align:center;color:#4b5f8a}
 .ln.cmd .pr,.ln.cmd .tx{color:#9fd0ff}
-.ln.ok .pr{color:#34d399}.ln.ok .tx{color:#b6f2d2}
-.ln.warn .pr{color:#ffbd2e}.ln.warn .tx{color:#ffe0a8}
-.ln.bad .pr{color:#ff5c7a}.ln.bad .tx{color:#ffc1cc}
+.ln.ok .pr{color:#27c93f}.ln.ok .tx{color:#9df0c4}
+.ln.warn .pr{color:#ffbd2e}.ln.warn .tx{color:#ffd28a}
+.ln.bad .pr{color:#ff5f56}.ln.bad .tx{color:#ffb3c1}
 .ln.dim .tx{color:#8fa3cc}
-.rshead{font-size:9px;letter-spacing:1.4px;color:#8fa3cc;text-transform:uppercase;margin-bottom:6px;
-  display:flex;align-items:center;gap:5px}
-.rsrow{display:flex;align-items:center;gap:7px;font-size:11.5px;color:#dfe8fb;padding:3px 0}
+.note{font-size:10px;color:#c7d3ea;background:rgba(59,130,246,.12);border:2px solid #000;
+  padding:7px 9px;margin-bottom:8px;line-height:1.45;box-shadow:inset 1px 1px 0 rgba(255,255,255,.08)}
+.note.warn{background:rgba(255,184,77,.12);color:#ffd28a}
+.note.bad{background:rgba(255,92,122,.12);color:#ffb3c1}
+.rsrow{display:flex;align-items:center;gap:6px;font-size:10.5px;padding:4px 0}
 .rsrow .st{font-size:11px;flex-shrink:0}
-.rsrow .nm{color:#c7d3ea;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.rsrow .tag{margin-left:auto;font-size:9px;font-weight:800;letter-spacing:.6px;padding:2px 8px;border-radius:99px;flex-shrink:0}
-.rsrow .tag.ok{color:#9df0c4;background:rgba(52,211,153,.14);border:1px solid rgba(52,211,153,.4)}
-.rsrow .tag.bad{color:#ffb3c1;background:rgba(255,92,122,.14);border:1px solid rgba(255,92,122,.4)}
-.rsrow .tag.warn{color:#ffd28a;background:rgba(255,184,77,.14);border:1px solid rgba(255,184,77,.4)}
-.rsrow .tag.dim{color:#8fa3cc;background:rgba(148,163,184,.12);border:1px solid rgba(148,163,184,.3)}
+.rsrow .nm{color:#dfe8fb;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rsrow .tag{margin-left:auto;font-size:8.5px;font-weight:bold;padding:1px 6px;border:1px solid #000;border-radius:3px;flex-shrink:0}
+.rsrow .tag.ok{color:#9df0c4;background:rgba(39,201,63,.2)}
+.rsrow .tag.bad{color:#ffb3c1;background:rgba(255,95,86,.2)}
+.rsrow .tag.warn{color:#ffd28a;background:rgba(255,189,46,.2)}
+.nav{flex:none;display:flex;gap:4px;padding:8px;border-top:3px solid #000;background:rgba(0,0,0,.5)}
+.btn{flex:1;font:bold 9px monospace;letter-spacing:.6px;color:#fff;text-shadow:2px 2px 0 #1b263b;
+  background:#2b3a58;padding:9px 2px;border:0;cursor:pointer;text-align:center;text-decoration:none;display:inline-block;
+  box-shadow:inset 2px 2px 0 #4a5d85,inset -2px -2px 0 #141c2c}
+.btn.sbtn{flex:0 0 auto;min-width:28px;padding:9px 4px;letter-spacing:0}
+.btn.on{background:#3b82f6;text-shadow:2px 2px 0 #0d2b6b;
+  box-shadow:inset 2px 2px 0 #60a5fa,inset -2px -2px 0 #1d4ed8}
+.btn:active{box-shadow:inset 2px 2px 0 #141c2c,inset -2px -2px 0 #4a5d85}
+.ft{flex:none;padding:5px 10px;font-size:8px;color:#8fa3cc;letter-spacing:1.2px;text-align:center;
+  border-top:2px solid #000;text-shadow:1px 1px 0 #000}
 `
 
 function wrapHtml(inner, title) {
-  return `<!DOCTYPE html><html><head><meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>${hesc(title)}</title>
+  return `<!DOCTYPE html>
+<html lang="id"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,viewport-fit=cover">
+<title>${hesc(title)}</title>
 <style>${CSS}</style></head><body>
-<div class="bgfx"><div class="sheen"></div><div class="vig"></div></div>
-<div class="wrap"><div class="chrome"></div>${inner}
-<div class="ft">⚡ <b>skyline-JXRA</b> · updater · jangan edit file langsung di panel<br>edit di lokal → push → <b>.updatesc</b></div>
-</div></body></html>`
+<div class="frame">
+${inner}
+</div>
+<script>
+var VL=['rekap','log','restore'];
+function sv(n){
+  for(var i=0;i<VL.length;i++){
+    var v=document.getElementById('v_'+VL[i]);
+    if(v) v.className='view'+(VL[i]===n?' on':'');
+    var b=document.getElementById('b_'+VL[i]);
+    if(b) b.className='btn'+(VL[i]===n?' on':'');
+  }
+  var cv=document.getElementById('v_'+n);
+  if(cv) cv.scrollTop=0;
+}
+function sc(d){
+  var v=document.querySelector('.view.on');
+  if(!v) return;
+  var t=Math.max(0, v.scrollTop + d*180);
+  if(v.scrollTo){ try{ v.scrollTo({top:t,behavior:'smooth'}); return; }catch(e){} }
+  v.scrollTop=t;
+}
+</script>
+</body></html>`
 }
 
 function hd(icon, title, sub, pillText, pillCls) {
-  return `<div class="hd"><div class="ic">${icon}</div>
-<div><div class="t1">${hesc(title)}</div><div class="t2">${hesc(sub)}</div></div>
-<div class="pill ${pillCls}">${hesc(pillText)}</div></div>`
+  return `  <div class="hd">
+    <div class="ic">${icon}</div>
+    <div><div class="t">${hesc(title)}</div><div class="ver">${hesc(sub)}</div></div>
+    <div class="pill ${pillCls}">${hesc(pillText)}</div>
+  </div>`
 }
 
-const row = (text) => `<div class="row"><span class="dot">▸</span> ${text}</div>`
+const row = (text) => `<div class="row"><span><span class="dot">▸</span> ${text}</span></div>`
 
 function sectionBlock(icon, label, items) {
   if (!items.length) return ''
-  const rows = items.slice(0, 6).map((it) => row(hesc(trunc(it, 58))))
-  if (items.length > 6) rows.push(`<div class="row dim">… +${items.length - 6} lainnya</div>`)
-  return `<div class="sec"><div class="sech">${icon} ${hesc(label)} <span class="cnt">(${items.length})</span></div>
-<div class="secb">${rows.join('')}</div></div>`
+  const rows = items.slice(0, 8).map((it) => `<div class="row"><span><span class="dot">▸</span> ${hesc(trunc(it, 50))}</span></div>`)
+  if (items.length > 8) rows.push(`<div class="row dim">… +${items.length - 8} lainnya</div>`)
+  return `<div class="sec">▸ ${icon} ${hesc(label)} (${items.length})</div>
+${rows.join('')}`
 }
 
 function buildResultHtml(d) {
@@ -539,35 +531,74 @@ function buildResultHtml(d) {
   //      log:[{pr,tx,cls}], restore:{items:[{nm,tag,tagCls,st}], notes:[]},
   //      buttons:[{t,cls,href}] }
   const chips = d.chips?.length
-    ? `<div class="chips">${d.chips.map((c) => `<div class="chip"><div class="e">${c.e}</div><div class="n">${hesc(String(c.n))}</div><div class="k">${hesc(c.k)}</div></div>`).join('')}</div>`
+    ? `<div class="grid4">${d.chips.map((c) => `<div class="chip"><div class="n">${hesc(String(c.n))}</div><div class="k">${hesc(c.k)}</div></div>`).join('')}</div>`
     : ''
   const meta = d.meta?.length
-    ? `<div class="card"><div class="lbl">📌 <span>commit</span></div><div class="meta">${d.meta.map((m) => `<span>${m}</span>`).join('<span class="arrow">·</span>')}</div></div>`
+    ? `<div class="cell"><div class="k">COMMIT &amp; WAKTU</div><div class="meta">${d.meta.map((m) => `<span>${m}</span>`).join('<span class="arrow">·</span>')}</div></div>`
     : ''
   const notes = (d.notes || [])
     .map((n) => `<div class="note ${n.cls || ''}">${n.t}</div>`)
     .join('')
   const stats = (d.stats || [])
-    .map((s) => `<div class="stat"><span>${s.k}</span><span class="v ${s.cls || ''}">${s.v}</span></div>`)
+    .map((s) => `<div class="row"><span>${s.k}</span><span class="v ${s.cls || ''}" style="font-size:11px">${s.v}</span></div>`)
     .join('')
   const sections = (d.sections || []).map((s) => sectionBlock(s.icon, s.label, s.items)).join('')
-  const log = d.log?.length
-    ? `<div class="term"><div class="bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="tt">console · updatesc</span></div>${d.log.map((l) => `<div class="ln ${l.cls || 'dim'}"><span class="pr">${hesc(l.pr)}</span><span class="tx">${hesc(l.tx)}</span></div>`).join('')}</div>`
-    : ''
-  const restore = d.restore?.items?.length
-    ? `<div class="card"><div class="rshead">♻️ <span>pemulihan setting</span></div>${d.restore.items.map((r) => `<div class="rsrow"><span class="st">${r.st}</span><span class="nm">${hesc(r.nm)}</span><span class="tag ${r.tagCls}">${hesc(r.tag)}</span></div>`).join('')}</div>`
-    : ''
+
+  // View 1: Rekap utama (Apa yang baru, file, status)
+  const vRekap = `
+    <div class="cell"><div class="k">STATUS PEMBARUAN</div>${d.head}</div>
+    ${meta}
+    ${chips}
+    ${notes}
+    ${sections}
+    <div class="sec">▸ DETAIL STATUS</div>
+    ${stats}
+  `
+
+  // View 2: Console log interaktif
+  const logRows = (d.log || []).map((l) => `<div class="ln ${l.cls || 'dim'}"><span class="pr">${hesc(l.pr)}</span><span class="tx">${hesc(l.tx)}</span></div>`).join('')
+  const vLog = `
+    <div class="term">
+      <div class="bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="tt">console log · updatesc</span></div>
+      ${logRows || '<div class="ln dim"><span class="tx">tidak ada log</span></div>'}
+    </div>
+    <div class="note">Jejak eksekusi live dari runtime git, npm, &amp; pemulihan file.</div>
+  `
+
+  // View 3: Status pemulihan API / Thumb
+  const restoreRows = (d.restore?.items || []).map((r) => `<div class="rsrow"><span class="st">${r.st}</span><span class="nm">${hesc(r.nm)}</span><span class="tag ${r.tagCls}">${hesc(r.tag)}</span></div>`).join('')
   const restoreNotes = (d.restore?.notes || []).map((n) => `<div class="note ${n.cls || ''}">${n.t}</div>`).join('')
-  const buttons = d.buttons?.length
-    ? `<div class="btnline">${d.buttons.map((b) => b.href
-      ? `<a class="btn ${b.cls || ''}" href="${hesc(b.href)}">${hesc(b.t)}</a>`
-      : `<span class="btn ${b.cls || ''}">${hesc(b.t)}</span>`).join('')}</div>`
-    : ''
-  return wrapHtml(
-    hd(d.icon, d.title, d.sub, d.pill.t, d.pill.cls) +
-      `<div class="card">${d.head}</div>` + meta + chips + notes + log + stats + sections + restore + restoreNotes + buttons,
-    d.title
-  )
+  const vRestore = `
+    <div class="cell">
+      <div class="k">PEMULIHAN PENGATURAN USER</div>
+      ${restoreRows || '<div class="row dim">Tidak ada pengaturan lokal yang perlu dipulihkan.</div>'}
+    </div>
+    ${restoreNotes}
+    <div class="note">Pengaturan lokal (API key &amp; thumbnail) otomatis dipulihkan di atas kode update baru.</div>
+  `
+
+  const nav = `
+  <div class="nav">
+    <button class="btn sbtn" title="Atas" onclick="sc(-1)">▲</button>
+    <button class="btn on" id="b_rekap" onclick="sv('rekap')">📦 REKAP</button>
+    <button class="btn" id="b_log" onclick="sv('log')">🖥️ LOG</button>
+    <button class="btn" id="b_restore" onclick="sv('restore')">♻️ RESTORE</button>
+    <button class="btn sbtn" title="Bawah" onclick="sc(1)">▼</button>
+  </div>
+  `
+
+  const footer = `  <div class="ft">⚡ skyline-JXRA • UPDATER • SISTEM TERBARU</div>`
+
+  const body = `
+  ${hd(d.icon, d.title, d.sub, d.pill.t, d.pill.cls)}
+  <div class="view on" id="v_rekap">${vRekap}</div>
+  <div class="view" id="v_log">${vLog}</div>
+  <div class="view" id="v_restore">${vRestore}</div>
+  ${nav}
+  ${footer}
+  `
+
+  return wrapHtml(body, d.title)
 }
 
 // Kirim kartu HTML native (FOAHtmlPrimitiveDemoDONOTUSE — pola ping2/snake).
