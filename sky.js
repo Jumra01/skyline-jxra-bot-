@@ -170,6 +170,10 @@ const client = new WaClient(
     sessionId: 'default',
     connectTimeoutMs: 15_000,
     nodeQueryTimeoutMs: 30_000,
+    // WA nolak handshake kalau versi client bawaan zapo ketinggalan
+    // (failure_client_too_old) → tanpa ini bot nggak pernah dapet QR.
+    // Sekali kena 405, zapo ambil versi terbaru lalu reconnect.
+    recoverFromClientTooOld: true,
     history: { enabled: true, requireFullSync: true },
     media: {
       processor: createMediaProcessor(),
