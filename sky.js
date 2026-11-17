@@ -6,7 +6,7 @@
  * Jantung bot! Hati2 dlm mengubah file ini!
  */
 
-import { createStore, WaClient } from 'zapo-js'
+import { createStore, WaClient, fetchLatestWaWebVersion } from 'zapo-js'
 import { createSqliteStore } from '@zapo-js/store-sqlite'
 import { createMediaProcessor } from '@zapo-js/media-utils'
 import { voipPlugin } from '@zapo-js/voip' // VOIP (panggilan WA) — dipakai plugin owner `.voip`
@@ -191,6 +191,28 @@ const client = new WaClient(
   clientLogger
 )
 
+/**
+ * Ambil versi WA Web terbaru sebelum connect.
+ *
+ * Versi client bawaan zapo-js bisa ketinggalan dari server WhatsApp; kalau
+ * ketinggalan, connect pertama ditolak dengan `failure_client_too_old`, bot
+ * kelihatan "sempat terputus" dulu baru reconnect pakai versi baru. Dengan
+ * di-prime di awal, connect pertama langsung pakai versi terbaru.
+ *
+ * Gagal fetch (jaringan/upstream down) bukan error fatal: pakai versi bawaan,
+ * dan `recoverFromClientTooOld` tetap jadi jaring pengaman.
+ */
+async function primeWaVersion() {
+  try {
+    const latest = await fetchLatestWaWebVersion()
+    if (!latest?.version) throw new Error('versi kosong')
+    client.auth.setNextConnectVersion(latest.version)
+    logger.info(`🔧 Versi WA Web: ${latest.version}`)
+  } catch (err) {
+    logger.warn({ err: err?.message }, 'Gagal ambil versi WA terbaru — pakai versi bawaan zapo')
+  }
+}
+
 async function main() {
   // Banner console (ASCII art + kotak info) saat bot start.
   printBanner()
@@ -199,6 +221,8 @@ async function main() {
   setupErrorHandler()
   const loadResult = await loadFeatures()
   printInfo(loadResult)
+
+  await primeWaVersion()
 
   setupHotReload(client)
   setupConnection(client)
