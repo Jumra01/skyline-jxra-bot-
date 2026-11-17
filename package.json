@@ -6,7 +6,8 @@
   "main": "sky.js",
   "scripts": {
     "start": "node sky.js",
-    "dev": "node --watch sky.js"
+    "dev": "node --watch sky.js",
+    "postinstall": "node scripts/panelBoot.cjs"
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.9",
