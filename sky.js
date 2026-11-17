@@ -153,6 +153,40 @@ async function chooseAuth() {
 const sessionDir = './session'
 if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true })
 
+/* ══════════ instance lock ══════════
+ * Satu nomor = satu instance. Dua bot pakai session yang sama bikin WhatsApp
+ * saling tendang (`stream_error_replaced`) → kelihatan "putus-nyambung terus".
+ * Lock ini bikin instance kedua nolak nyala, bukan diam-diam bikin loop. */
+const LOCK_FILE = `${sessionDir}/bot.lock`
+
+function pidAlive(pid) {
+  try { process.kill(pid, 0); return true } catch (err) { return err.code === 'EPERM' }
+}
+
+function acquireInstanceLock() {
+  try {
+    const pid = Number(String(fs.readFileSync(LOCK_FILE, 'utf8')).trim().split(/\s+/)[0])
+    if (pid && pid !== process.pid && pidAlive(pid)) {
+      logger.error(
+        `❌ Instance lain masih jalan (PID ${pid}) — session ini udah dipakai.\n` +
+        `   Matiin dulu proses itu (satu nomor = satu instance), baru nyalain ini lagi.`
+      )
+      process.exit(1)
+    }
+  } catch { /* belum ada lock / lock rusak → lanjut */ }
+  try { fs.writeFileSync(LOCK_FILE, `${process.pid} ${new Date().toISOString()}`) } catch {}
+}
+
+function releaseInstanceLock() {
+  try {
+    const pid = Number(String(fs.readFileSync(LOCK_FILE, 'utf8')).trim().split(/\s+/)[0])
+    if (pid === process.pid) fs.unlinkSync(LOCK_FILE)
+  } catch { /* udah hilang */ }
+}
+
+acquireInstanceLock()
+process.on('exit', releaseInstanceLock)
+
 const store = createStore({
   backends: {
     sqlite: createSqliteStore({ path: `${sessionDir}/state.sqlite`, driver: 'auto' })
@@ -281,11 +315,18 @@ main().catch((err) => {
   process.exit(1)
 })
 
-process.on('SIGINT', async () => {
-  logger.info('🛑 Mematikan bot...')
+async function shutdownBot(signal) {
+  logger.info(`🛑 Mematikan bot (${signal})...`)
   markShutdown()
+  releaseInstanceLock()
   try { clientLogger.level = 'error' } catch {}
   await stopHotReload().catch(() => {})
   await client.disconnect().catch(() => {})
   process.exit(0)
-})
+}
+
+// SIGTERM juga penting: panel (docker stop) & supervisor ngirim SIGTERM,
+// bukan SIGINT. Tanpa ini WA gak di-disconnect rapi dan lock bisa nyangkut.
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => { void shutdownBot(signal) })
+}

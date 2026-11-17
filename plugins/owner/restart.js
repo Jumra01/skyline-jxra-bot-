@@ -57,6 +57,18 @@ function underPm2() {
   )
 }
 
+/* Panel Pterodactyl: proses diawasi Docker, BUKAN pm2. Spawn detached di sini
+ * bikin instance lepas dari supervisor → bisa dobel sama yang dinyalain panel
+ * setelah container restart (session saling tendang = putus-nyambung terus).
+ * Jadi di panel: shutdown rapi, biar container yang nyalain ulang. */
+function underPanel() {
+  return (
+    process.env.P_SERVER_UUID !== undefined ||
+    process.env.P_SERVER_LOCATION !== undefined ||
+    process.cwd() === '/home/container'
+  )
+}
+
 const SHELL_RE = /(^|\/)(bash|zsh|sh|dash|fish|tmux|screen|login|su)$/
 
 function readProc(pid) {
@@ -158,18 +170,18 @@ const t0 = Date.now();
 }
 
 /** Shutdown: SIGINT → handler sky.js (disconnect rapi) → exit(0). */
-function shutdown(reason) {
+function shutdown(reason, code = 0) {
   logger.warn(reason)
   try {
     process.kill(process.pid, 'SIGINT')
   } catch {
-    process.exit(0)
+    process.exit(code)
   }
   // Jaring pengaman sengaja REF'd (bukan .unref): selain maksa exit kalau
   // handler macet, dia juga MENJAGA event loop tetap hidup — tanpa ini loop
   // bisa keburu kosong & Node exit(0) sebelum sinyal SIGINT sempat diproses,
   // sehingga shutdown rapi (disconnect WA + stopHotReload) gak pernah jalan.
-  setTimeout(() => process.exit(0), 8000)
+  setTimeout(() => process.exit(code), 8000)
 }
 
 async function handler(ctx) {
@@ -180,7 +192,7 @@ async function handler(ctx) {
     '🔄 *ʀᴇsᴛᴀʀᴛɪɴɢ ʙᴏᴛ...*\n\n' +
       `╭┈┈⬡「 📊 *ɪɴꜰᴏ* 」\n` +
       `┃ ⏰ Time: ${new Date().toLocaleTimeString('id-ID')}\n` +
-      `┃ 🔧 Method: ${isPm2 ? 'PM2 Autorestart' : 'Process Spawn'}\n` +
+      `┃ 🔧 Method: ${isPm2 ? 'PM2 Autorestart' : underPanel() ? 'Panel Supervisor' : 'Process Spawn'}\n` +
       `┃ 📦 PID: ${process.pid}\n` +
       `╰┈┈⬡\n\n` +
       `> Bot akan restart dalam 2 detik...\n` +
@@ -192,6 +204,12 @@ async function handler(ctx) {
 
   // Jalur PM2: keluar rapi, PM2 yang nyalain lagi. Gak usah spawn (nanti dobel).
   if (isPm2) return shutdown('[Restart] PM2 → SIGINT, serahin ke PM2 autorestart')
+
+  // Jalur panel: sama — keluar rapi, container yang restart. Spawn detached
+  // di sini bikin instance lepas supervisor & rebutan session.
+  if (underPanel()) {
+    return shutdown('[Restart] panel → SIGINT, serahin ke supervisor container', 1)
+  }
 
   // Cek dulu SEBELUM matiin diri — spawn gagal = bot jangan sampai mati permanen.
   if (!existsSync(ENTRY)) {
@@ -214,4 +232,4 @@ async function handler(ctx) {
 export { pluginConfig as config, handler }
 
 // buat pengujian (gak dipakai loader — loader cuma baca `config` + `handler`)
-export const _internals = { underPm2, findWatchPid, readProc, scheduleRespawn, ROOT, ENTRY }
+export const _internals = { underPm2, underPanel, findWatchPid, readProc, scheduleRespawn, ROOT, ENTRY }
