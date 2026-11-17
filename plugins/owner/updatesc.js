@@ -562,10 +562,56 @@ async function ghJson(url) {
   return res.json()
 }
 
+const MANIFEST_FILE = '.updatesc-manifest.json'
+
+/* Daftar file relatif (forward slash) di dalam `dir`. */
+async function listRelFiles(dir, base = dir) {
+  const out = []
+  const walk = async (d) => {
+    const entries = await fs.readdir(d, { withFileTypes: true })
+    for (const entry of entries) {
+      const full = path.join(d, entry.name)
+      if (entry.isDirectory()) await walk(full)
+      else if (entry.isFile()) out.push(path.relative(base, full).split(path.sep).join('/'))
+    }
+  }
+  await walk(dir)
+  return out.sort()
+}
+
+async function readManifest(file) {
+  try {
+    const raw = JSON.parse(await fs.readFile(file, 'utf8'))
+    return { files: Array.isArray(raw.files) ? raw.files : [], removed: Array.isArray(raw.removed) ? raw.removed : [] }
+  } catch {
+    return null
+  }
+}
+
+/* File yang sudah TIDAK ada di repo tapi masih nyangkut di folder kerja.
+ * fs.cp cuma nimpa/nambah, jadi tanpa ini file yang dihapus upstream
+ * (mis. plugin yang di-`git rm`) tetap ada dan tetap ke-load. */
+async function pruneStale(oldManifest, newManifest, newFiles) {
+  const next = new Set(newFiles)
+  const stale = new Set([...(oldManifest?.removed ?? []), ...(newManifest?.removed ?? [])])
+  for (const rel of oldManifest?.files ?? []) {
+    if (!next.has(rel)) stale.add(rel)
+  }
+  const removed = []
+  for (const rel of stale) {
+    if (!rel || rel.startsWith('/') || rel.includes('..')) continue
+    try {
+      await fs.rm(rel, { force: true })
+      removed.push(rel)
+    } catch {}
+  }
+  return removed
+}
+
 // Fallback tanpa git: unduh tarball branch dari codeload → extract murni Node
 // (untgz) → timpa isi folder kerja (fs.cp). Gak butuh binary git/tar/cp —
-// aman di container minimal. Gak bisa deteksi file berubah — package.json
-// dicek manual (bandingin sebelum/sesudah copy).
+// aman di container minimal. File yang dibuang upstream dihapus lewat
+// `.updatesc-manifest.json` (dibandingin sebelum/sesudah copy).
 async function apiSync() {
   const gh = parseGitHubRepo(REPO_URL)
   if (!gh) throw new Error('URL repo bukan GitHub — fallback API gak bisa dipakai')
@@ -614,7 +660,13 @@ async function apiSync() {
         }
       }
     })
+    const oldManifest = await readManifest(path.join(process.cwd(), MANIFEST_FILE))
     await fs.cp(src, process.cwd(), { recursive: true, force: true })
+
+    // Setelah copy: manifest versi baru ikut ketimpa dari tarball.
+    const newFiles = await listRelFiles(src)
+    const newManifest = await readManifest(path.join(process.cwd(), MANIFEST_FILE))
+    const removed = await pruneStale(oldManifest, newManifest, newFiles)
 
     let pkgChanged = false
     try {
@@ -622,7 +674,7 @@ async function apiSync() {
       pkgChanged = !!pkgBefore && !pkgBefore.equals(pkgAfter)
     } catch {}
 
-    return { short, msg, pkgChanged }
+    return { short, msg, pkgChanged, removed }
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
   }
@@ -701,7 +753,7 @@ async function handler(ctx) {
       `🕒 ${nowWIB()}`
     ]))
     try {
-      const { short, msg, pkgChanged } = await apiSync()
+      const { short, msg, pkgChanged, removed } = await apiSync()
       const { installed, installErr } = await npmInstallMaybe(ctx, pkgChanged)
       await ctx.react(installErr ? '⚠️' : '✅')
       await replyRich(ctx, {
@@ -717,7 +769,8 @@ async function handler(ctx) {
           { t: 'ℹ️ Daftar file berubah gak bisa<br>dideteksi tanpa git.', cls: 'warn' }
         ].filter(Boolean),
         stats: [
-          { k: '📦 npm install', v: installed ? 'sukses' : installErr ? 'GAGAL' : 'lewati', cls: installed ? 'ok' : installErr ? 'bad' : 'dim' }
+          { k: '📦 npm install', v: installed ? 'sukses' : installErr ? 'GAGAL' : 'lewati', cls: installed ? 'ok' : installErr ? 'bad' : 'dim' },
+          { k: '🗑️ file usang', v: removed.length ? String(removed.length) : '0', cls: removed.length ? 'ok' : 'dim' }
         ],
         buttons: [{ t: '🔁 RESTART di panel', cls: 'blue' }]
       }, [
@@ -729,6 +782,7 @@ async function handler(ctx) {
         '🌐 Server tanpa git — sync via GitHub API',
         'ℹ️ Daftar file gak bisa dideteksi (tanpa git)',
         installed ? '📦 npm install *sukses*' : installErr ? '⚠️ npm install *gagal* (cek log)' : '📦 npm install *lewati*',
+        removed.length ? `🗑️ ${removed.length} file usang dihapus (${removed.slice(0, 3).join(', ')}${removed.length > 3 ? ', …' : ''})` : '',
         '',
         '🔁 *RESTART* bot di panel biar kode baru kebaca',
         '',
@@ -1137,5 +1191,6 @@ export const _internals = {
   autoRestore, pendingNow, sendRestoreCard,
   restoredNote,
   pendingCount, pendingStats, pendingNote, pendingLine,
-  untgz
+  untgz,
+  MANIFEST_FILE, listRelFiles, readManifest, pruneStale
 }
