@@ -32,5 +32,9 @@
   },
   "engines": {
     "node": ">=20.9.0"
+  },
+  "allowScripts": {
+    "better-sqlite3": true,
+    "zapo-js": true
   }
 }
