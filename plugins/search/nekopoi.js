@@ -5,18 +5,14 @@
  *
  * nekopoi.js — Client NekoPoi via API Skyline (https://skyline.web.id/api/nekopoi).
  * Kuota & rate limit tetap terhitung di sisi web Skyline.
- * Tampilan full interactive message:
- *   - Thumbnail (header image via DoH resolver anti-DNS-hijack ISP)
- *   - Tombol single_select buat list hasil / episode / genre
- *   - Quick reply buat navigasi (random, jadwal, beranda, balik)
- *   - CTA copy buat salin link download langsung
+ * Tampilan gambar + caption kompatibel penuh di semua WhatsApp client (Android, iOS, Web).
  */
 
 import axios from 'axios'
+import http from 'node:http'
 import https from 'node:https'
 import config from '../../config.js'
 import { skylineCreds } from '../../scraper/SKYLINE.js'
-import { onRichReply } from '../../handlers/messageHandler.js'
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
@@ -83,10 +79,12 @@ async function resolveIPs(host) {
 
 function fetchWithSNI(u, ip) {
   return new Promise((resolve, reject) => {
-    const req = https.get(
+    const isHttps = u.protocol === 'https:'
+    const mod = isHttps ? https : http
+    const req = mod.get(
       {
         host: ip,
-        port: 443,
+        port: u.port || (isHttps ? 443 : 80),
         path: u.pathname + u.search,
         servername: u.hostname,
         rejectUnauthorized: false,
@@ -116,7 +114,7 @@ function fetchWithSNI(u, ip) {
       }
     )
     req.on('error', reject)
-    req.setTimeout(15000, () => req.destroy(new Error('timeout')))
+    req.setTimeout(10000, () => req.destroy(new Error('timeout')))
   })
 }
 
@@ -135,27 +133,31 @@ async function fetchThumbBuffer(url) {
   return null
 }
 
-async function uploadHeader(client, thumbUrl) {
-  if (!thumbUrl || typeof client?.message?.upload !== 'function') return null
-  try {
-    const buf = await fetchThumbBuffer(thumbUrl)
-    if (!buf) return null
-    const media = await client.message.upload(buf, { type: 'image', mimetype: 'image/jpeg' })
-    return {
-      kind: 'imageMessage',
-      url: media?.url,
-      directPath: media?.directPath,
-      mediaKey: media?.mediaKey,
-      fileSha256: media?.fileSha256,
-      fileEncSha256: media?.fileEncSha256,
-      fileLength: media?.fileLength,
-      mediaKeyTimestamp: media?.mediaKeyTimestamp,
-      mimetype: 'image/jpeg'
-    }
-  } catch {
-    return null
+/* ── Helper Pengiriman Gambar / Teks Universal ── */
+async function sendCard(ctx, { text, thumbUrl, footer }) {
+  const fullText = text + (footer ? `\n\n_${footer}_` : '')
+  let buf = null
+  if (thumbUrl) {
+    try {
+      buf = await fetchThumbBuffer(thumbUrl)
+    } catch {}
   }
+
+  if (buf && ctx.client?.message?.send) {
+    try {
+      return await ctx.client.message.send(ctx.chat, {
+        type: 'image',
+        media: buf,
+        mimetype: 'image/jpeg',
+        caption: fullText
+      })
+    } catch {}
+  }
+  return ctx.reply(fullText)
 }
+
+/* ── Sesi Pengguna untuk Navigasi Cepat Nomor ── */
+const USER_SESSIONS = new Map() // sender -> { type, series, episodes, updatedAt }
 
 /* ── API Skyline Caller ── */
 async function callApi(action, params = {}) {
@@ -190,7 +192,7 @@ function errorText(e) {
     case 'invalid_query':
       return '🔍 Kata kunci minimal 2 karakter.'
     case 'invalid_slug':
-      return '🔗 Slug tidak valid. Gunakan tombol navigasi atau ketik ulang judulnya.'
+      return '🔗 Slug tidak valid. Gunakan format slug yang benar.'
     case 'not_found':
       return '🔍 Data tidak ditemukan di NekoPoi.'
     case 'nekopoi_unavailable':
@@ -200,78 +202,52 @@ function errorText(e) {
   }
 }
 
-/* ── Helpers ID Rich Reply ── */
-const SESS_MAP = new Map() // id -> fn(ctx)
-
-function regAction(id, fn) {
-  SESS_MAP.set(id, fn)
-  onRichReply(id, async (ctx) => {
-    const handler = SESS_MAP.get(id)
-    if (handler) await handler(ctx)
-  })
-}
-
 /* ── View Renderers ── */
 
 async function showLatest(ctx) {
+  const p = ctx.prefix || '.'
   const d = await callApi('latest')
   const series = (d.series || []).slice(0, 8)
   const eps = (d.episodes || []).slice(0, 5)
 
+  USER_SESSIONS.set(ctx.sender, {
+    type: 'latest',
+    series,
+    episodes: eps,
+    updatedAt: Date.now()
+  })
+
   let text = `🔥 *ɴᴇᴋᴏᴘᴏɪ · ʀɪʟɪs ᴛᴇʀʙᴀʀᴜ*\n\n`
   text += `📺 *Seri Terkini*\n`
-  text += series.length
-    ? series.map((s, i) => `${i + 1}. ${cut(s.title, 55)}`).join('\n')
-    : '—'
+  if (series.length) {
+    text += series
+      .map((s, i) => `${i + 1}. *${cut(s.title, 50)}*\n   ↳ \`${p}nekopoi detail ${i + 1}\``)
+      .join('\n')
+  } else {
+    text += '—'
+  }
 
   if (eps.length) {
     text += `\n\n🎬 *Episode Baru*\n`
-    text += eps.map((e) => `• ${cut(e.title, 50)}\n   _${cut(e.date, 25)}_`).join('\n')
+    text += eps
+      .map(
+        (e) =>
+          `• *${cut(e.title, 45)}*\n   ↳ \`${p}nekopoi ep ${e.slug}\`\n   _${cut(e.date, 25)}_`
+      )
+      .join('\n')
   }
-  text += `\n\n_Pilih seri di tombol bawah untuk melihat episode._`
 
-  const sessPrefix = `nk:${ctx.sender}:${Date.now().toString(36)}`
-  const rows = series.map((s, i) => {
-    const rId = `${sessPrefix}:d:${i}`
-    regAction(rId, (c2) => showDetail(c2, s.slug))
-    return {
-      id: rId,
-      title: `${i + 1}. ${cut(s.title, 22)}`,
-      description: cut(s.title, 60)
-    }
-  })
+  text += `\n\n💡 *Navigasi Cepat:*\n`
+  text += `• Ketik \`${p}nekopoi detail <nomor/slug>\` untuk info seri\n`
+  text += `• Ketik \`${p}nekopoi cari <judul>\` untuk cari seri\n`
+  text += `• Ketik \`${p}nekopoi jadwal\` atau \`${p}nekopoi random\``
 
-  const randId = `${sessPrefix}:rand`
-  const schedId = `${sessPrefix}:sched`
-  regAction(randId, (c2) => doRandom(c2))
-  regAction(schedId, (c2) => showSchedule(c2))
-
-  const headerImage = await uploadHeader(ctx.client, series[0]?.thumb)
   const footer = `Hal ${d.page || 1}/${d.total_pages || 1} • ${config.botName}`
-
-  if (rows.length) {
-    await ctx.replyList({
-      text,
-      footer,
-      title: 'Pilih Seri',
-      buttonText: '📚 Daftar Seri',
-      sections: [{ title: 'Seri Terbaru', rows }],
-      headerImage
-    })
-  } else {
-    await ctx.replyButtons({
-      text,
-      footer,
-      buttons: [
-        { text: '🎲 Random', id: randId },
-        { text: '📅 Jadwal', id: schedId }
-      ],
-      headerImage
-    })
-  }
+  await sendCard(ctx, { text, thumbUrl: series[0]?.thumb, footer })
 }
 
 async function showSearch(ctx, query) {
+  const p = ctx.prefix || '.'
   const d = await callApi('search', { q: query })
   const results = (d.results || []).slice(0, 10)
   if (!results.length) {
@@ -279,44 +255,58 @@ async function showSearch(ctx, query) {
     return
   }
 
+  USER_SESSIONS.set(ctx.sender, {
+    type: 'search',
+    series: results,
+    updatedAt: Date.now()
+  })
+
   let text = `🔍 *ʜᴀsɪʟ ᴘᴇɴᴄᴀʀɪᴀɴ*\n\n`
   text += `Query: *${cut(query, 40)}*\n`
   text += `Ditemukan: ${d.results.length} hasil${d.total_pages > 1 ? ` (${d.total_pages} hal)` : ''}\n\n`
-  text += results.map((r, i) => `${i + 1}. ${cut(r.title, 55)}`).join('\n')
-  text += `\n\n_Pilih judul dari menu di bawah._`
+  text += results
+    .map(
+      (r, i) =>
+        `${i + 1}. *${cut(r.title, 50)}*\n   ${r.genres ? `_${cut(r.genres, 40)}_\n   ` : ''}↳ \`${p}nekopoi detail ${i + 1}\``
+    )
+    .join('\n')
 
-  const sessPrefix = `nk:${ctx.sender}:${Date.now().toString(36)}`
-  const rows = results.map((r, i) => {
-    const rId = `${sessPrefix}:r:${i}`
-    regAction(rId, (c2) => showDetail(c2, r.slug))
-    return {
-      id: rId,
-      title: `${i + 1}. ${cut(r.title, 22)}`,
-      description: cut(r.genres || r.desc || 'Buka detail', 60)
-    }
-  })
-
-  const headerImage = await uploadHeader(ctx.client, results[0]?.thumb)
-
-  await ctx.replyList({
-    text,
-    footer: `${config.botName} • NekoPoi Search`,
-    title: 'Hasil Pencarian',
-    buttonText: '📚 Buka Hasil',
-    sections: [{ title: 'Daftar Judul', rows }],
-    headerImage
-  })
+  text += `\n\n💡 Ketik \`${p}nekopoi detail <nomor>\` untuk buka seri.`
+  const footer = `${config.botName} • NekoPoi Search`
+  await sendCard(ctx, { text, thumbUrl: results[0]?.thumb, footer })
 }
 
-async function showDetail(ctx, slug) {
+async function showDetail(ctx, slugOrIndex) {
+  const p = ctx.prefix || '.'
+  let slug = slugOrIndex
+
+  const num = parseInt(slugOrIndex, 10)
+  if (!isNaN(num)) {
+    const sess = USER_SESSIONS.get(ctx.sender)
+    if (sess?.series && sess.series[num - 1]) {
+      slug = sess.series[num - 1].slug
+    }
+  }
+
+  if (!slug || !slug.startsWith('/')) {
+    if (slug && !slug.includes('/')) slug = `/hentai/${slug}`
+  }
+
   const d = await callApi('detail', { slug })
   const info = d.detail || {}
-  const eps = (info.episodes || []).slice(0, 10)
+  const eps = (info.episodes || []).slice(0, 15)
 
   if (!info.title) {
-    await ctx.reply('🔍 Detail seri kosong.')
+    await ctx.reply('🔍 Detail seri tidak ditemukan atau format slug salah.')
     return
   }
+
+  USER_SESSIONS.set(ctx.sender, {
+    type: 'detail',
+    seriesSlug: slug,
+    episodes: eps,
+    updatedAt: Date.now()
+  })
 
   let text = `🎴 *${cut(info.title, 80)}*\n\n`
   const meta = []
@@ -329,105 +319,80 @@ async function showDetail(ctx, slug) {
   if (info.produser) meta.push(`• Produser: *${cut(info.produser, 30)}*`)
   if (meta.length) text += meta.join('\n') + '\n'
   if (info.genres?.length) text += `\n🏷️ ${info.genres.slice(0, 8).map((g) => g.name).join(', ')}\n`
-  if (info.synopsis) text += `\n📖 _${cut(info.synopsis, 450)}_\n`
+  if (info.synopsis) text += `\n📖 _${cut(info.synopsis, 400)}_\n`
 
   if (eps.length) {
-    text += `\n🎬 *Daftar Episode*\n`
-    text += eps.map((e) => `• ${cut(e.episode || e.title, 40)} — ${cut(e.date, 18)}`).join('\n')
-  }
-
-  const sessPrefix = `nk:${ctx.sender}:${Date.now().toString(36)}`
-  const headerImage = await uploadHeader(ctx.client, info.poster)
-
-  if (eps.length) {
-    const rows = eps.map((e, i) => {
-      const eId = `${sessPrefix}:ep:${i}`
-      regAction(eId, (c2) => showEpisode(c2, e.slug))
-      return {
-        id: eId,
-        title: cut(e.episode || `Ep ${i + 1}`, 22),
-        description: cut(e.title, 60)
-      }
-    })
-
-    await ctx.replyList({
-      text,
-      footer: `${config.botName} • NekoPoi Detail`,
-      title: 'Pilih Episode',
-      buttonText: '🎬 Daftar Episode',
-      sections: [{ title: 'Episode Tersedia', rows }],
-      headerImage
-    })
+    text += `\n🎬 *Daftar Episode:*\n`
+    text += eps
+      .map(
+        (e, i) =>
+          `${i + 1}. *${cut(e.episode || e.title, 40)}* (${cut(e.date, 15)})\n   ↳ \`${p}nekopoi ep ${i + 1}\``
+      )
+      .join('\n')
+    text += `\n\n💡 Ketik \`${p}nekopoi ep <nomor>\` untuk link unduh/stream.`
   } else {
-    const epId = `${sessPrefix}:epdirect`
-    regAction(epId, (c2) => showEpisode(c2, slug))
-    await ctx.replyButtons({
-      text,
-      footer: `${config.botName} • NekoPoi Detail`,
-      buttons: [
-        { text: '⬇️ Stream & Download', id: epId },
-        { text: '🎲 Random', id: `${sessPrefix}:rand` }
-      ],
-      headerImage
-    })
+    text += `\n⬇️ *Stream & Unduh*: \`${p}nekopoi ep ${slug}\``
   }
+
+  const footer = `${config.botName} • NekoPoi Detail`
+  await sendCard(ctx, { text, thumbUrl: info.poster, footer })
 }
 
-async function showEpisode(ctx, slug) {
+async function showEpisode(ctx, slugOrIndex) {
+  const p = ctx.prefix || '.'
+  let slug = slugOrIndex
+
+  const num = parseInt(slugOrIndex, 10)
+  if (!isNaN(num)) {
+    const sess = USER_SESSIONS.get(ctx.sender)
+    if (sess?.episodes && sess.episodes[num - 1]) {
+      slug = sess.episodes[num - 1].slug
+    }
+  }
+
+  if (!slug) {
+    await ctx.reply('Contoh: *.nekopoi episode /so_low-episode-4-subtitle-indonesia*')
+    return
+  }
+
   const d = await callApi('episode', { slug })
 
   let text = `🎬 *${cut(d.title, 80)}*\n\n`
-  text += `📡 *Server Stream* (${d.streams?.length || 0})\n`
-  text += (d.streams || []).length
-    ? d.streams.map((s, i) => `${i + 1}. ${cut(s.server, 25)}`).join('\n')
-    : '—'
+
+  if (d.seriesTitle) {
+    text += `📺 Seri: *${cut(d.seriesTitle, 50)}*\n`
+    if (d.seriesLink) {
+      text += `↳ \`${p}nekopoi detail ${d.seriesLink}\`\n\n`
+    } else {
+      text += `\n`
+    }
+  }
+
+  const streams = d.streams || []
+  if (streams.length) {
+    text += `📡 *Server Stream:*\n`
+    text += streams.map((s, i) => `${i + 1}. ${cut(s.server, 25)}`).join('\n') + `\n\n`
+  }
 
   const dl = d.downloads || []
   if (dl.length) {
-    text += `\n\n⬇️ *Pilihan Unduh*\n`
+    text += `⬇️ *Pilihan Unduh:*\n`
     text += dl
-      .slice(0, 5)
       .map((q) => {
-        const label = cut(q.quality.replace(/\s*\[[^\]]+\]\s*$/, ''), 35)
-        const q2 = (q.quality.match(/\[([^\]]+)\]/) || [])[1] || ''
-        return `• ${label}${q2 ? ` _[${q2}]_` : ''}\n   ${q.links.map((l) => l.label).join(' · ')}`
+        const links = q.links.map((l) => `• ${l.label}: ${l.url}`).join('\n')
+        return `*${cut(q.quality, 40)}*\n${links}`
       })
-      .join('\n')
-  }
-
-  const buttons = []
-  // Pasang CTA copy untuk tautan download
-  for (const q of dl) {
-    const qTag = (q.quality.match(/\[([^\]]+)\]/) || [])[1] || cut(q.quality, 8)
-    const link =
-      q.links.find((l) => /mp4|pixel|acefile|kraken|gdrive|mega/i.test(l.label)) || q.links[0]
-    if (!link) continue
-    buttons.push({ text: `⬇️ ${qTag} · ${cut(link.label, 10)}`, copy: link.url })
-    if (buttons.length >= 2) break
-  }
-
-  const sessPrefix = `nk:${ctx.sender}:${Date.now().toString(36)}`
-  if (d.seriesLink) {
-    const backId = `${sessPrefix}:back`
-    regAction(backId, (c2) => showDetail(c2, d.seriesLink))
-    buttons.push({ text: '🎴 Balik ke Seri', id: backId })
+      .join('\n\n')
   } else {
-    const homeId = `${sessPrefix}:home`
-    regAction(homeId, (c2) => showLatest(c2))
-    buttons.push({ text: '🏠 Beranda', id: homeId })
+    text += `_Link unduh belum tersedia untuk episode ini._`
   }
 
-  const headerImage = await uploadHeader(ctx.client, d.poster)
-
-  await ctx.replyButtons({
-    text,
-    footer: d.seriesTitle ? cut(d.seriesTitle, 40) : `${config.botName} • Stream & DL`,
-    buttons,
-    headerImage
-  })
+  const footer = d.seriesTitle ? cut(d.seriesTitle, 40) : `${config.botName} • Stream & DL`
+  await sendCard(ctx, { text, thumbUrl: d.poster, footer })
 }
 
 async function showGenres(ctx) {
+  const p = ctx.prefix || '.'
   const d = await callApi('genres')
   const genres = d.genres || []
   if (!genres.length) {
@@ -435,33 +400,18 @@ async function showGenres(ctx) {
     return
   }
 
-  const sessPrefix = `nk:${ctx.sender}:${Date.now().toString(36)}`
-  const top = genres.slice(0, 24)
-  const rows = top.map((g, i) => {
-    const gId = `${sessPrefix}:g:${i}`
-    regAction(gId, (c2) => showBrowse(c2, g.slug, 'genre'))
-    return {
-      id: gId,
-      title: cut(g.name, 24),
-      description: `Lihat seri genre ${g.name}`
-    }
-  })
+  const top = genres.slice(0, 30)
+  let text = `🏷️ *ᴅᴀғᴛᴀʀ ɢᴇɴʀᴇ ɴᴇᴋᴏᴘᴏɪ*\n\n`
+  text += `Total: *${d.count || genres.length}* genre.\n\n`
+  text += top.map((g, i) => `${i + 1}. *${g.name}* (↳ \`${p}nekopoi genre ${g.slug}\`)`).join('\n')
+  text += `\n\n💡 Ketik \`${p}nekopoi genre <slug>\` untuk melihat seri berdasarkan genre.`
 
-  const text =
-    `🏷️ *ᴅᴀғᴛᴀʀ ɢᴇɴʀᴇ ɴᴇᴋᴏᴘᴏɪ*\n\n` +
-    `Total: *${d.count || genres.length}* genre.\n` +
-    `Silakan pilih genre dari menu di bawah:`
-
-  await ctx.replyList({
-    text,
-    footer: `${config.botName} • Genres`,
-    title: 'Pilih Genre',
-    buttonText: '🏷️ Buka Genre',
-    sections: [{ title: 'Daftar Genre', rows }]
-  })
+  const footer = `${config.botName} • Genres`
+  await sendCard(ctx, { text, footer })
 }
 
 async function showBrowse(ctx, slug, type = 'genre') {
+  const p = ctx.prefix || '.'
   const d = await callApi('browse', { type, slug })
   const results = (d.results || []).slice(0, 10)
   if (!results.length) {
@@ -469,34 +419,27 @@ async function showBrowse(ctx, slug, type = 'genre') {
     return
   }
 
+  USER_SESSIONS.set(ctx.sender, {
+    type: 'browse',
+    series: results,
+    updatedAt: Date.now()
+  })
+
   let text = `📚 *Katalog ${type === 'category' ? 'Kategori' : 'Genre'}: ${cut(slug, 30)}*\n\n`
-  text += results.map((r, i) => `${i + 1}. ${cut(r.title, 55)}`).join('\n')
-  text += `\n\n_Total ${d.total_pages || 1} halaman. Pilih judul di bawah._`
+  text += results
+    .map(
+      (r, i) =>
+        `${i + 1}. *${cut(r.title, 50)}*\n   ${r.genres ? `_${cut(r.genres, 40)}_\n   ` : ''}↳ \`${p}nekopoi detail ${i + 1}\``
+    )
+    .join('\n')
+  text += `\n\n_Total ${d.total_pages || 1} halaman._\n💡 Ketik \`${p}nekopoi detail <nomor>\` untuk info seri.`
 
-  const sessPrefix = `nk:${ctx.sender}:${Date.now().toString(36)}`
-  const rows = results.map((r, i) => {
-    const rId = `${sessPrefix}:b:${i}`
-    regAction(rId, (c2) => showDetail(c2, r.slug))
-    return {
-      id: rId,
-      title: `${i + 1}. ${cut(r.title, 22)}`,
-      description: cut(r.genres || 'Buka detail', 60)
-    }
-  })
-
-  const headerImage = await uploadHeader(ctx.client, results[0]?.thumb)
-
-  await ctx.replyList({
-    text,
-    footer: `${config.botName} • Katalog`,
-    title: 'Pilih Seri',
-    buttonText: '📚 Daftar Seri',
-    sections: [{ title: 'Hasil', rows }],
-    headerImage
-  })
+  const footer = `${config.botName} • Katalog`
+  await sendCard(ctx, { text, thumbUrl: results[0]?.thumb, footer })
 }
 
 async function showSchedule(ctx) {
+  const p = ctx.prefix || '.'
   const d = await callApi('schedule')
   const items = (d.results || []).slice(0, 10)
   if (!items.length) {
@@ -508,28 +451,14 @@ async function showSchedule(ctx) {
   text += items
     .map(
       (s, i) =>
-        `${i + 1}. ${cut(s.title, 45)}\n   _${cut(s.episode || '-', 16)} · ${cut(s.release_date, 18)}_`
+        `${i + 1}. *${cut(s.title, 45)}*\n   _${cut(s.episode || '-', 16)} · ${cut(s.release_date, 18)}_`
     )
-    .join('\n')
-  text += `\n\n_Total ${d.count || items.length} judul dipantau._`
+    .join('\n\n')
+  text += `\n\n_Total ${d.count || items.length} judul dipantau._\n`
+  text += `💡 Ketik \`${p}nekopoi cari <judul>\` untuk mencari seri.`
 
-  const sessPrefix = `nk:${ctx.sender}:${Date.now().toString(36)}`
-  const homeId = `${sessPrefix}:home`
-  const randId = `${sessPrefix}:rand`
-  regAction(homeId, (c2) => showLatest(c2))
-  regAction(randId, (c2) => doRandom(c2))
-
-  const headerImage = await uploadHeader(ctx.client, items[0]?.thumb)
-
-  await ctx.replyButtons({
-    text,
-    footer: `${config.botName} • Jadwal Rilis`,
-    buttons: [
-      { text: '🏠 Beranda', id: homeId },
-      { text: '🎲 Random', id: randId }
-    ],
-    headerImage
-  })
+  const footer = `${config.botName} • Jadwal Rilis`
+  await sendCard(ctx, { text, thumbUrl: items[0]?.thumb, footer })
 }
 
 async function doRandom(ctx) {
@@ -547,8 +476,8 @@ async function showHelp(ctx) {
     `🎴 *ɴᴇᴋᴏᴘᴏɪ (sᴋʏʟɪɴᴇ ᴀᴘɪ)*\n\n` +
     `• *${p}nekopoi* — rilis terbaru\n` +
     `• *${p}nekopoi cari <judul>* — cari seri\n` +
-    `• *${p}nekopoi detail <slug>* — info & episode\n` +
-    `• *${p}nekopoi episode <slug>* — stream & unduh\n` +
+    `• *${p}nekopoi detail <nomor/slug>* — info & episode\n` +
+    `• *${p}nekopoi ep <nomor/slug>* — stream & unduh\n` +
     `• *${p}nekopoi genre* — daftar genre\n` +
     `• *${p}nekopoi genre <slug>* — seri per genre\n` +
     `• *${p}nekopoi jadwal* — jadwal rilis baru\n` +
@@ -606,6 +535,9 @@ async function handler(ctx) {
     const first = (raw.split(/\s+/)[0] || '').toLowerCase()
     if (!raw) {
       action = 'latest'
+    } else if (/^\d+$/.test(raw)) {
+      action = 'detail'
+      arg = raw
     } else if (SUB_ACTION[first]) {
       action = SUB_ACTION[first]
       arg = raw.slice(first.length).trim()
@@ -633,14 +565,14 @@ async function handler(ctx) {
         break
       case 'detail':
         if (!arg) {
-          await ctx.reply('Contoh: *.nekopoi detail /hentai/so_low*')
+          await ctx.reply('Contoh: *.nekopoi detail 1* atau *.nekopoi detail /hentai/so_low*')
           return
         }
         await showDetail(ctx, arg)
         break
       case 'episode':
         if (!arg) {
-          await ctx.reply('Contoh: *.nekopoi episode /so_low-episode-4-subtitle-indonesia*')
+          await ctx.reply('Contoh: *.nekopoi ep 1* atau *.nekopoi ep /so_low-episode-4-subtitle-indonesia*')
           return
         }
         await showEpisode(ctx, arg)
