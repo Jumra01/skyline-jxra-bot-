@@ -503,6 +503,32 @@ export async function ytInfo(url) {
   };
 }
 
+/* ══════════════ Preset Finder ══════════════ */
+export const PRESET_FINDER_PATH = '/api/tools/preset-finder';
+
+/**
+ * Cari preset (Alight Motion / CapCut / XML / JSON) dari link TikTok/IG/YT.
+ * Upstream nyisir komentar + reply, jadi bisa 20-40 detik — timeout dibesarkan.
+ * @returns {Promise<{platform:string,videoInfo:object|null,effects:Array,presets:Array,partial:boolean}>}
+ */
+export async function presetFinder(url, { timeout = 75000, retries = 1 } = {}) {
+  const target = String(url || '').trim();
+  if (!/^https?:\/\//i.test(target)) {
+    throw new SkylineApiError('Link-nya harus diawali http:// atau https://');
+  }
+
+  const { json } = await request('preset', PRESET_FINDER_PATH, { url: target }, { timeout, retries });
+  const data = json?.data || json?.result || json || {};
+
+  return {
+    platform: data.platform || '',
+    videoInfo: data.video_info || null,
+    effects: Array.isArray(data.effects) ? data.effects : [],
+    presets: Array.isArray(data.presets) ? data.presets : [],
+    partial: !!data.partial
+  };
+}
+
 /* ══════════════ ambil file ══════════════ */
 /** Unduh audio (MP3) — info boleh dipakai ulang biar gak request 2×. */
 export async function downloadAudio(url, { info, timeout = 180000, maxBytes = MAX_AUDIO_BYTES } = {}) {
@@ -1122,6 +1148,7 @@ export default {
   keySource,
   ytSearch,
   ytInfo,
+  presetFinder,
   downloadAudio,
   downloadVideo,
   aiChatSkyline,
