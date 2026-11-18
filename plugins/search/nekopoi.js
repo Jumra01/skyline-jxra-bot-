@@ -56,6 +56,14 @@ const cut = (s, n) => {
   return t.length > n ? t.slice(0, n - 1).trimEnd() + '…' : t
 }
 
+function fixStreamUrl(url) {
+  if (!url) return ''
+  return String(url)
+    .trim()
+    .replace(/^(https?:\/\/)(?:www\.)?plamogo\.com\//i, '$1playmogo.com/')
+    .replace(/^(https?:\/\/)(?:www\.)?stmpoi\.com\//i, '$1streampoi.com/')
+}
+
 /* ── Sesi Pengguna untuk Navigasi Cepat Nomor ── */
 const USER_SESSIONS = new Map() // sender -> { type, series, episodes, updatedAt }
 
@@ -424,7 +432,10 @@ async function showEpisode(ctx, slugOrIndex) {
     }
   }
 
-  const streams = d.streams || []
+  const streams = (d.streams || []).map((s) => ({
+    ...s,
+    url: fixStreamUrl(s.url)
+  }))
   if (streams.length) {
     text += `📡 *Server Stream Langsung (Nonton di Browser):*\n`
     text += streams.map((s, i) => `• *${s.server}*: ${s.url}`).join('\n') + `\n\n`
@@ -518,7 +529,10 @@ async function showDownload(ctx, slugOrIndex) {
 
   const d = await callApi('episode', { slug })
   const dl = d.downloads || []
-  const streams = d.streams || []
+  const streams = (d.streams || []).map((s) => ({
+    ...s,
+    url: fixStreamUrl(s.url)
+  }))
 
   if (!dl.length && !streams.length) {
     await ctx.reply('📭 Daftar unduhan / stream tidak tersedia untuk episode ini.')
