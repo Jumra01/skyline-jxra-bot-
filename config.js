@@ -61,7 +61,7 @@ export default {
   api: {
     skyline: {
       website: 'https://skyline.web.id',
-      apikey: '',
+      apikey: 'sky_ol19bo20zfy0w040h49of1rl',
     },
     spotify: {
       clientId: '',
