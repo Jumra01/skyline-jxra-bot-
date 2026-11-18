@@ -426,8 +426,8 @@ async function showEpisode(ctx, slugOrIndex) {
 
   const streams = d.streams || []
   if (streams.length) {
-    text += `📡 *Server Stream:*\\n`
-    text += streams.map((s, i) => `• ${s.server}: ${s.url}`).join('\n') + `\n\n`
+    text += `📡 *Server Stream Langsung (Nonton di Browser):*\n`
+    text += streams.map((s, i) => `• *${s.server}*: ${s.url}`).join('\n') + `\n\n`
   }
 
   const dl = d.downloads || []
@@ -441,7 +441,7 @@ async function showEpisode(ctx, slugOrIndex) {
       text += `│\n`
     }
     text += `└────────────────\n\n`
-    text += `💡 *Unduh Direct:* Pilih tombol *Unduh Video* di bawah atau ketik \`${p}nekopoi dl ${num || slug}\` untuk bypass safelink otomatis.`
+    text += `💡 *Nonton / Unduh:* Klik tombol *Tonton Stream* untuk streaming langsung di browser, atau pilih *Pilihan Link Unduh* di menu list.`
   } else {
     text += `_Link unduh belum tersedia untuk episode ini._`
   }
@@ -453,8 +453,8 @@ async function showEpisode(ctx, slugOrIndex) {
       await showDownload(c2, slug)
     })
     rows.push({
-      title: '⬇️ Unduh Video (Auto-Bypass)',
-      description: 'Dapatkan tautan direct filehost tanpa safelink',
+      title: '⬇️ Pilihan Link Unduh',
+      description: 'Dapatkan tautan filehost & info unduhan',
       id: dlId
     })
   }
@@ -481,6 +481,11 @@ async function showEpisode(ctx, slugOrIndex) {
     id: homeId
   })
 
+  const extraButtons = []
+  if (streams.length && streams[0]?.url) {
+    extraButtons.push({ text: `▶️ Tonton Stream (${streams[0].server || 'Server 1'})`, url: streams[0].url })
+  }
+
   const headerImage = await uploadHeaderThumb(ctx.client, d.poster)
 
   return ctx.replyList({
@@ -488,6 +493,7 @@ async function showEpisode(ctx, slugOrIndex) {
     title: '🔗 Navigasi NekoPoi',
     buttonText: 'Menu Navigasi',
     sections: [{ title: 'Pilihan Menu', rows }],
+    extraButtons,
     footer: d.seriesTitle ? cut(d.seriesTitle, 40) : `${config.botName} • Stream & DL`,
     headerImage
   })
@@ -512,34 +518,47 @@ async function showDownload(ctx, slugOrIndex) {
 
   const d = await callApi('episode', { slug })
   const dl = d.downloads || []
+  const streams = d.streams || []
 
-  if (!dl.length) {
-    await ctx.reply('📭 Daftar unduhan tidak tersedia untuk episode ini.')
+  if (!dl.length && !streams.length) {
+    await ctx.reply('📭 Daftar unduhan / stream tidak tersedia untuk episode ini.')
     return
   }
 
-  let text = `⬇️ *ɴᴇᴋᴏᴘᴏɪ · ᴜɴᴅᴜʜ ᴠɪᴅᴇᴏ*\n\n`
+  let text = `⬇️ *ɴᴇᴋᴏᴘᴏɪ · sᴛʀᴇᴀᴍ & ᴜɴᴅᴜʜ*\n\n`
   text += `🎬 *${cut(d.title, 80)}*\n\n`
-  text += `┌─── 📦 *LINK UNDUHAN DIRECT*\n`
 
-  for (const q of dl.slice(0, 4)) {
-    const qTag = (q.quality.match(/\[([^\]]+)\]/) || [])[1] || cut(q.quality, 20)
-    text += `│ *Kualitas ${qTag}*\n`
-    for (const l of (q.links || []).slice(0, 5)) {
-      let finalUrl = l.url
-      if (isSafelink(l.url) || /sfl\.gl|linku|safelink|tutwuri|ouo/i.test(l.url)) {
-        try {
-          const res = await bypassSafelink(l.url)
-          if (res?.url) finalUrl = res.url
-          else if (typeof res === 'string') finalUrl = res
-        } catch {}
-      }
-      text += `│ • ${l.label}: ${finalUrl}\n`
+  if (streams.length) {
+    text += `📡 *LINK STREAMING LANGSUNG:*\n`
+    for (const s of streams) {
+      text += `• *${s.server}*: ${s.url}\n`
     }
-    text += `│\n`
+    text += `↳ _Bisa langsung ditonton di browser tanpa unduh file._\n\n`
   }
-  text += `└────────────────\n\n`
-  text += `💡 _Tautan di atas sudah diproses bypass safelink. Salin tautan untuk mengunduh lewat browser/download manager._`
+
+  if (dl.length) {
+    text += `┌─── 📦 *LINK UNDUHAN (FILEHOST)*\n`
+    for (const q of dl.slice(0, 4)) {
+      const qTag = (q.quality.match(/\[([^\]]+)\]/) || [])[1] || cut(q.quality, 20)
+      text += `│ *Kualitas ${qTag}*\n`
+      for (const l of (q.links || []).slice(0, 5)) {
+        let finalUrl = l.url
+        if (isSafelink(l.url) || /sfl\.gl|linku|safelink|tutwuri/i.test(l.url)) {
+          try {
+            const res = await bypassSafelink(l.url)
+            if (res?.url) finalUrl = res.url
+            else if (typeof res === 'string') finalUrl = res
+          } catch {}
+        }
+        text += `│ • ${l.label}: ${finalUrl}\n`
+      }
+      text += `│\n`
+    }
+    text += `└────────────────\n\n`
+  }
+
+  text += `⚠️ *Catatan Media WhatsApp:*\n`
+  text += `_File anime berukuran 80–350MB, melampaui batas transmisi media langsung bot. Gunakan tombol stream untuk menonton online atau klik link filehost di atas untuk mengunduh._`
 
   const rows = []
   if (d.seriesLink) {
@@ -564,14 +583,20 @@ async function showDownload(ctx, slugOrIndex) {
     id: homeId
   })
 
+  const extraButtons = []
+  if (streams.length && streams[0]?.url) {
+    extraButtons.push({ text: `▶️ Tonton Stream (${streams[0].server || 'Server 1'})`, url: streams[0].url })
+  }
+
   const headerImage = await uploadHeaderThumb(ctx.client, d.poster)
 
   return ctx.replyList({
     text,
-    title: '⬇️ Unduh Video',
+    title: '⬇️ Unduh & Stream',
     buttonText: 'Pilihan Menu',
     sections: [{ title: 'Menu Navigasi', rows }],
-    footer: `${config.botName} • Direct Download`,
+    extraButtons,
+    footer: `${config.botName} • Stream & Direct Download`,
     headerImage
   })
 }

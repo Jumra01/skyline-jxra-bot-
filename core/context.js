@@ -270,11 +270,11 @@ export function buildContext(client, event) {
       )
     },
 
-    async replyList({ text, footer, title, buttonText, sections, adReply, headerImage }) {
+    async replyList({ text, footer, title, buttonText, sections, extraButtons = [], adReply, headerImage }) {
       if (isUnsendableChat(ctx.chat)) return null
       return client.message.send(
         ctx.chat,
-        richList({ text, footer, title, buttonText, sections, adReply, headerImage }),
+        richList({ text, footer, title, buttonText, sections, extraButtons, adReply, headerImage }),
         interactiveSendOptions(ctx.chat)
       )
     }
