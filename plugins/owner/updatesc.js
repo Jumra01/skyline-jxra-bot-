@@ -30,7 +30,7 @@
  *
  * node_modules TIDAK diambil dari git (gitignore) — install cuma jalan
  * kalau dependency berubah. session/ & data/ gak tersentuh (gitignore).
- * File core/ lib/ handlers/ sky.js config/ berubah → butuh Restart manual
+ * File core/ lib/ handlers/ scraper/ sky.js config/ berubah → butuh Restart manual
  * di panel; plugins/ → ke-hot-reload sendiri.
  *
  * Env (opsional, buat fork/testing):
@@ -379,7 +379,11 @@ function nowWIB() {
   }
 }
 
-const NEED_RESTART_RE = /^(core|lib|handlers|auth|src)\//
+/* Folder yang DI-LOAD SEKALI saat start → wajib restart manual.
+ * `scraper/` dulu lupa dimasukin: update yang cuma nyentuh scraper/ dikasih
+ * info "tanpa restart" padahal plugin baru yang nge-import module itu bakal
+ * gagal load ("does not provide an export named …") sampai bot di-restart. */
+const NEED_RESTART_RE = /^(core|lib|handlers|auth|src|scraper)\//
 
 // ── Kartu HTML native (FOAHtmlPrimitive — pola ping2/snake, §9 AGENTS.md) ──
 // Tema chrome: biru · silver · putih · hitam. Aman: gak pakai blur/mask/
@@ -1438,7 +1442,7 @@ ${gitErrDetail(pullErr).map((l) => row(hesc(l))).join('')}`,
         : { pr: '•', tx: 'package.json gak berubah — dilewati', cls: 'dim' },
     ...rr.logLines,
     needRestart
-      ? { pr: '!', tx: 'core/lib/handlers berubah → restart panel', cls: 'warn' }
+      ? { pr: '!', tx: 'core/lib/handlers/scraper berubah → restart panel', cls: 'warn' }
       : onlyPlugins
         ? { pr: '⚡', tx: 'cuma plugins/ → hot reload otomatis', cls: 'ok' }
         : { pr: '✓', tx: 'update selesai tanpa restart', cls: 'ok' }
@@ -1491,7 +1495,7 @@ ${gitErrDetail(pullErr).map((l) => row(hesc(l))).join('')}`,
     notes: [
       cfgReset ? { t: '⚙️ config.js sempat di-reset ke<br>versi GitHub sebelum pull.' } : null,
       needRestart
-        ? { t: '🔁 Ada file <b>core/lib/handlers</b> berubah —<br><b>RESTART bot di panel</b> biar kebaca.', cls: 'warn' }
+        ? { t: '🔁 Ada file <b>core/lib/handlers/scraper</b><br>berubah — <b>RESTART bot di panel</b><br>biar kebaca.', cls: 'warn' }
         : onlyPlugins
           ? { t: '⚡ Cuma <b>plugins/</b> — ke-hot-reload<br>sendiri, gak perlu restart.' }
           : { t: '✅ Update bersih, gak ada<br>perubahan berisiko.' }
@@ -1520,7 +1524,7 @@ ${gitErrDetail(pullErr).map((l) => row(hesc(l))).join('')}`,
     '',
     installed ? '📦 npm install *sukses*' : installErr ? '⚠️ npm install *gagal* (cek log)' : '📦 npm install *lewati*',
     needRestart
-      ? '🔁 *RESTART* diperlukan (core/lib/handlers)'
+      ? '🔁 *RESTART* diperlukan (core/lib/handlers/scraper)'
       : onlyPlugins
         ? '⚡ Hot reload aktif · gak perlu restart'
         : '✅ Selesai',
