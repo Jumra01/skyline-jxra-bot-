@@ -154,8 +154,8 @@ async function uploadHeader(client, buf) {
   }
 }
 
-/* ── Helper Pengiriman: Gambar + Caption Lengkap (100% Kompatibel Semua WA) ── */
-async function sendCard(ctx, { text, thumbUrl, footer }) {
+/* ── Helper Pengiriman: Buttons Interaktif + Fallback Gambar Biasa ── */
+async function sendCard(ctx, { text, thumbUrl, footer, buttons = [] }) {
   let buf = null
   if (thumbUrl) {
     try {
@@ -163,6 +163,21 @@ async function sendCard(ctx, { text, thumbUrl, footer }) {
     } catch {}
   }
 
+  // 1. Coba kirim via Quick Reply Buttons (nativeFlow)
+  if (buttons.length && typeof ctx.replyButtons === 'function') {
+    try {
+      const headerImage = await uploadHeader(ctx.client, buf)
+      const res = await ctx.replyButtons({
+        text,
+        footer: footer || config.botName,
+        buttons,
+        headerImage
+      })
+      if (res) return res
+    } catch {}
+  }
+
+  // 2. Fallback: kirim gambar biasa + caption
   const fullText = text + (footer ? `\n\n_${footer}_` : '')
   if (buf && ctx.client?.message?.send) {
     try {
@@ -175,6 +190,7 @@ async function sendCard(ctx, { text, thumbUrl, footer }) {
     } catch {}
   }
 
+  // 3. Fallback terakhir: teks biasa
   return ctx.reply(fullText)
 }
 
