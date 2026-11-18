@@ -5,12 +5,16 @@
  *
  * nekopoi.js — Client NekoPoi via API Skyline (https://skyline.web.id/api/nekopoi).
  * Kuota & rate limit tetap terhitung di sisi web Skyline.
- * Format ctx.replyList persis seperti di .setreply (tanpa header media/location bermasalah).
+ * Format Location List Button (1:1 gaya Menu v4 Hoshino) — terbukti render & muncul di semua WA.
  */
 
 import axios from 'axios'
+import http from 'node:http'
+import https from 'node:https'
+import sharp from 'sharp'
 import config from '../../config.js'
 import { skylineCreds } from '../../scraper/SKYLINE.js'
+import { richLocationList, interactiveSendOptions } from '../../lib/richMessage.js'
 import { onRichReply } from '../../handlers/messageHandler.js'
 
 const UA =
@@ -51,8 +55,156 @@ const cut = (s, n) => {
   return t.length > n ? t.slice(0, n - 1).trimEnd() + '…' : t
 }
 
+/* ── DNS over HTTPS untuk bypass DNS Positif lokal saat fetch gambar ── */
+const DNS_CACHE = new Map()
+const DNS_TTL = 10 * 60 * 1000
+
+async function resolveIPs(host) {
+  const hit = DNS_CACHE.get(host)
+  if (hit && Date.now() - hit.ts < DNS_TTL) return hit.ips
+  let ips = []
+  try {
+    const res = await axios.get(
+      `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(host)}&type=A`,
+      { timeout: 8000, headers: { accept: 'application/dns-json' } }
+    )
+    ips = (res.data?.Answer || []).filter((a) => a.type === 1).map((a) => a.data)
+  } catch {}
+  if (!ips.length) {
+    try {
+      const dns = await import('node:dns')
+      ips = await dns.promises.resolve4(host)
+    } catch {}
+  }
+  if (ips.length) DNS_CACHE.set(host, { ips, ts: Date.now() })
+  return ips
+}
+
+function fetchWithSNI(u, ip) {
+  return new Promise((resolve, reject) => {
+    const isHttps = u.protocol === 'https:'
+    const mod = isHttps ? https : http
+    const req = mod.get(
+      {
+        host: ip,
+        port: u.port || (isHttps ? 443 : 80),
+        path: u.pathname + u.search,
+        servername: u.hostname,
+        rejectUnauthorized: false,
+        headers: {
+          Host: u.hostname,
+          'User-Agent': UA,
+          Referer: 'https://nekopoi.care/',
+          Accept: 'image/avif,image/webp,image/*,*/*;q=0.8'
+        }
+      },
+      (res) => {
+        if (res.statusCode !== 200) {
+          res.resume()
+          return reject(new Error('HTTP ' + res.statusCode))
+        }
+        const chunks = []
+        let size = 0
+        res.on('data', (c) => {
+          size += c.length
+          if (size > 3 * 1024 * 1024) {
+            req.destroy()
+            return reject(new Error('kegedean'))
+          }
+          chunks.push(c)
+        })
+        res.on('end', () => resolve(Buffer.concat(chunks)))
+      }
+    )
+    req.on('error', reject)
+    req.setTimeout(10000, () => req.destroy(new Error('timeout')))
+  })
+}
+
+async function fetchThumbBuffer(url) {
+  if (!url) return null
+  try {
+    const u = new URL(url)
+    const ips = await resolveIPs(u.hostname)
+    for (const ip of ips.slice(0, 2)) {
+      try {
+        const buf = await fetchWithSNI(u, ip)
+        if (buf && buf.length > 64) return buf
+      } catch {}
+    }
+  } catch {}
+  return null
+}
+
+/** Resize buffer jadi jpeg Thumbnail 300px untuk location header */
+async function makeJpegThumb(rawBuf) {
+  if (!rawBuf) return null
+  try {
+    return await sharp(rawBuf)
+      .rotate()
+      .resize({ width: 300, height: 300, fit: 'cover' })
+      .jpeg({ quality: 80 })
+      .toBuffer()
+  } catch {
+    return null
+  }
+}
+
 /* ── Sesi Pengguna untuk Navigasi Cepat Nomor ── */
 const USER_SESSIONS = new Map() // sender -> { type, series, episodes, updatedAt }
+
+/* ── Helper Pengiriman: Location List Buttons (Gaya Menu v4) ── */
+async function sendLocationCard(ctx, { text, footer, thumbUrl, sections, headerTitle, headerSubtitle, copyCode }) {
+  const chanUrl = config.cta?.channelUrl || config.reactChannel?.dedicatedChannelUrl || config.cta?.url || 'https://skyline.web.id'
+  const v4Bot = config.botName || 'skyline-JXRA'
+  const botCode = (copyCode || config.ui?.menuCode || 'NEKOPOI').toUpperCase()
+
+  let rawBuf = null
+  if (thumbUrl) {
+    try {
+      rawBuf = await fetchThumbBuffer(thumbUrl)
+    } catch {}
+  }
+  const locationThumb = await makeJpegThumb(rawBuf)
+
+  const payload = richLocationList({
+    text,
+    footer: footer || `© ${v4Bot} • NekoPoi`,
+    headerTitle: headerTitle || v4Bot,
+    headerSubtitle: headerSubtitle || 'skyline.web.id · NekoPoi',
+    locationThumb,
+    sections: sections || [],
+    channelUrl: chanUrl,
+    copyCode: botCode,
+    offerText: v4Bot.toUpperCase(),
+    bottomSheet: {
+      list_title: 'Pilih Seri / Episode',
+      button_title: 'PILIH'
+    }
+  })
+
+  try {
+    const res = await ctx.client.message.send(ctx.chat, payload, interactiveSendOptions(ctx.chat))
+    if (res) return res
+  } catch (err) {
+    console.error('[nekopoi] sendLocationCard gagal, fallback ke image/text:', err?.message || err)
+  }
+
+  // Fallback pengiriman jika send gagal
+  const fullText = text + (footer ? `\n\n_${footer}_` : '')
+  if (rawBuf && ctx.client?.message?.send) {
+    try {
+      return await ctx.client.message.send(ctx.chat, {
+        type: 'image',
+        media: rawBuf,
+        mimetype: 'image/jpeg',
+        caption: fullText
+      })
+    } catch {}
+  }
+
+  return ctx.reply(fullText)
+}
 
 /* ── API Skyline Caller ── */
 async function callApi(action, params = {}) {
@@ -97,12 +249,12 @@ function errorText(e) {
   }
 }
 
-/* ── View Renderers Menggunakan ctx.replyList (Metode setreply) ── */
+/* ── View Renderers ── */
 
 async function showLatest(ctx) {
   const p = ctx.prefix || '.'
   const d = await callApi('latest')
-  const series = (d.series || []).slice(0, 15)
+  const series = (d.series || []).slice(0, 10)
   const eps = (d.episodes || []).slice(0, 5)
 
   USER_SESSIONS.set(ctx.sender, {
@@ -129,7 +281,7 @@ async function showLatest(ctx) {
       .join('\n')
   }
 
-  text += `\n\nPilih seri yang diinginkan dari tombol list di bawah 👇`
+  text += `\n\n👉 *Pilih seri yang diinginkan lewat tombol list di bawah!*`
 
   const rows = series.map((s, i) => {
     const btnId = `nekopoi:${ctx.sender}:pick:${i + 1}`
@@ -138,35 +290,28 @@ async function showLatest(ctx) {
     })
     return {
       title: `${i + 1}. ${cut(s.title, 35)}`,
-      description: 'Buka detail & daftar episode',
+      description: 'Klik untuk melihat detail & daftar episode',
       id: btnId
     }
   })
 
-  // Tambahkan opsi acak
-  const rndId = `nekopoi:${ctx.sender}:random`
-  onRichReply(rndId, async (c2) => {
-    await doRandom(c2)
-  })
-  rows.push({
-    title: '🎲 Random Seri',
-    description: 'Pilih seri anime secara acak',
-    id: rndId
-  })
+  const sections = [{ title: `📚 Seri Terbaru (${series.length})`, rows }]
+  const footer = `Halaman ${d.page || 1}/${d.total_pages || 1} • ${config.botName}`
 
-  return ctx.replyList({
+  await sendLocationCard(ctx, {
     text,
-    title: '📚 Pilih Seri NekoPoi',
-    buttonText: 'Pilih Seri',
-    sections: [{ title: `Daftar Seri (${series.length})`, rows }],
-    footer: `Hal ${d.page || 1}/${d.total_pages || 1} • ${config.botName}`
+    footer,
+    thumbUrl: series[0]?.thumb,
+    sections,
+    headerTitle: 'NEKOPOI',
+    headerSubtitle: 'Rilis Seri Terbaru'
   })
 }
 
 async function showSearch(ctx, query) {
   const p = ctx.prefix || '.'
   const d = await callApi('search', { q: query })
-  const results = (d.results || []).slice(0, 15)
+  const results = (d.results || []).slice(0, 10)
   if (!results.length) {
     await ctx.reply(`🔍 Judul *${cut(query, 40)}* tidak ditemukan di NekoPoi.`)
     return
@@ -188,7 +333,7 @@ async function showSearch(ctx, query) {
     )
     .join('\n')
 
-  text += `\n\nPilih seri yang diinginkan dari tombol list di bawah 👇`
+  text += `\n\n👉 *Pilih seri yang diinginkan lewat tombol list di bawah!*`
 
   const rows = results.map((r, i) => {
     const btnId = `nekopoi:${ctx.sender}:search_pick:${i + 1}`
@@ -197,17 +342,21 @@ async function showSearch(ctx, query) {
     })
     return {
       title: `${i + 1}. ${cut(r.title, 35)}`,
-      description: r.genres ? cut(r.genres, 50) : 'Buka info seri',
+      description: r.genres ? cut(r.genres, 50) : 'Buka detail seri',
       id: btnId
     }
   })
 
-  return ctx.replyList({
+  const sections = [{ title: `🔍 Hasil Pencarian (${results.length})`, rows }]
+  const footer = `${config.botName} • NekoPoi Search`
+
+  await sendLocationCard(ctx, {
     text,
-    title: '🔍 Hasil Pencarian',
-    buttonText: 'Pilih Hasil',
-    sections: [{ title: `Hasil Pencarian (${results.length})`, rows }],
-    footer: `${config.botName} • NekoPoi Search`
+    footer,
+    thumbUrl: results[0]?.thumb,
+    sections,
+    headerTitle: 'PENCARIAN',
+    headerSubtitle: `Hasil: ${cut(query, 25)}`
   })
 }
 
@@ -229,7 +378,7 @@ async function showDetail(ctx, slugOrIndex) {
 
   const d = await callApi('detail', { slug })
   const info = d.detail || {}
-  const eps = (info.episodes || []).slice(0, 20)
+  const eps = (info.episodes || []).slice(0, 15)
 
   if (!info.title) {
     await ctx.reply('🔍 Detail seri tidak ditemukan atau format slug salah.')
@@ -261,7 +410,7 @@ async function showDetail(ctx, slugOrIndex) {
     text += eps
       .map((e, i) => `${i + 1}. *${cut(e.episode || e.title, 40)}* (${cut(e.date, 15)})`)
       .join('\n')
-    text += `\n\nPilih episode yang ingin ditonton di tombol list di bawah 👇`
+    text += `\n\n👉 *Pilih episode yang ingin ditonton di tombol list di bawah!*`
   } else {
     text += `\n⬇️ *Stream & Unduh*: \`${p}nekopoi ep ${slug}\``
   }
@@ -278,23 +427,27 @@ async function showDetail(ctx, slugOrIndex) {
     }
   })
 
-  // Tambahkan tombol Beranda
+  // Tambahkan row beranda
   const homeId = `nekopoi:${ctx.sender}:home`
   onRichReply(homeId, async (c2) => {
     await showLatest(c2)
   })
   rows.push({
     title: '🏠 Beranda NekoPoi',
-    description: 'Kembali ke daftar seri rilis terbaru',
+    description: 'Kembali ke daftar seri terbaru',
     id: homeId
   })
 
-  return ctx.replyList({
+  const sections = [{ title: `🎬 Pilih Episode (${eps.length})`, rows }]
+  const footer = `${config.botName} • NekoPoi Detail`
+
+  await sendLocationCard(ctx, {
     text,
-    title: '🎬 Pilih Episode',
-    buttonText: 'Episode',
-    sections: [{ title: `Daftar Episode (${eps.length})`, rows }],
-    footer: `${config.botName} • NekoPoi Detail`
+    footer,
+    thumbUrl: info.poster,
+    sections,
+    headerTitle: cut(info.title, 20),
+    headerSubtitle: `${info.jenis || 'Hentai'} · ${info.status || 'Active'}`
   })
 }
 
@@ -370,12 +523,16 @@ async function showEpisode(ctx, slugOrIndex) {
     id: homeId
   })
 
-  return ctx.replyList({
+  const sections = [{ title: '🔗 Menu Navigasi', rows }]
+  const footer = d.seriesTitle ? cut(d.seriesTitle, 40) : `${config.botName} • Stream & DL`
+
+  await sendLocationCard(ctx, {
     text,
-    title: '🔗 Navigasi NekoPoi',
-    buttonText: 'Navigasi',
-    sections: [{ title: 'Menu Pilihan', rows }],
-    footer: d.seriesTitle ? cut(d.seriesTitle, 40) : `${config.botName} • Stream & DL`
+    footer,
+    thumbUrl: d.poster,
+    sections,
+    headerTitle: 'STREAM & DOWNLOAD',
+    headerSubtitle: cut(d.title, 25)
   })
 }
 
@@ -388,10 +545,10 @@ async function showGenres(ctx) {
     return
   }
 
-  const top = genres.slice(0, 25)
+  const top = genres.slice(0, 20)
   let text = `🏷️ *ᴅᴀғᴛᴀʀ ɢᴇɴʀᴇ ɴᴇᴋᴏᴘᴏɪ*\n\n`
   text += `Total: *${d.count || genres.length}* genre.\n`
-  text += `Pilih genre yang ingin dijelajahi pada tombol di bawah 👇`
+  text += `Pilih genre langsung dari tombol di bawah:`
 
   const rows = top.map((g) => {
     const btnId = `nekopoi:${ctx.sender}:genre:${g.slug}`
@@ -405,19 +562,22 @@ async function showGenres(ctx) {
     }
   })
 
-  return ctx.replyList({
+  const sections = [{ title: `🏷️ Daftar Genre (${top.length})`, rows }]
+  const footer = `${config.botName} • Genres`
+
+  await sendLocationCard(ctx, {
     text,
-    title: '🏷️ Pilih Genre',
-    buttonText: 'Daftar Genre',
-    sections: [{ title: `Genre NekoPoi (${top.length})`, rows }],
-    footer: `${config.botName} • Genres`
+    footer,
+    sections,
+    headerTitle: 'GENRE',
+    headerSubtitle: 'Katalog Genre NekoPoi'
   })
 }
 
 async function showBrowse(ctx, slug, type = 'genre') {
   const p = ctx.prefix || '.'
   const d = await callApi('browse', { type, slug })
-  const results = (d.results || []).slice(0, 15)
+  const results = (d.results || []).slice(0, 10)
   if (!results.length) {
     await ctx.reply(`📭 Seri untuk ${type} *${cut(slug, 30)}* belum tersedia.`)
     return
@@ -436,7 +596,7 @@ async function showBrowse(ctx, slug, type = 'genre') {
         `${i + 1}. *${cut(r.title, 50)}*${r.genres ? `\n   _${cut(r.genres, 40)}_` : ''}`
     )
     .join('\n')
-  text += `\n\n_Total ${d.total_pages || 1} halaman._\nPilih seri yang diinginkan dari tombol list di bawah 👇`
+  text += `\n\n_Total ${d.total_pages || 1} halaman._\n👉 *Pilih seri lewat tombol di bawah!*`
 
   const rows = results.map((r, i) => {
     const btnId = `nekopoi:${ctx.sender}:browse_pick:${i + 1}`
@@ -450,12 +610,16 @@ async function showBrowse(ctx, slug, type = 'genre') {
     }
   })
 
-  return ctx.replyList({
+  const sections = [{ title: `📚 Katalog (${results.length})`, rows }]
+  const footer = `${config.botName} • Katalog`
+
+  await sendLocationCard(ctx, {
     text,
-    title: '📚 Pilih Seri',
-    buttonText: 'Pilih Seri',
-    sections: [{ title: `Katalog (${results.length})`, rows }],
-    footer: `${config.botName} • Katalog`
+    footer,
+    thumbUrl: results[0]?.thumb,
+    sections,
+    headerTitle: 'KATALOG',
+    headerSubtitle: `Genre: ${cut(slug, 20)}`
   })
 }
 
@@ -478,7 +642,14 @@ async function showSchedule(ctx) {
   text += `\n\n_Total ${d.count || items.length} judul dipantau._\n`
   text += `💡 Ketik \`${p}nekopoi cari <judul>\` untuk mencari seri.`
 
-  return ctx.reply(text)
+  const footer = `${config.botName} • Jadwal Rilis`
+  await sendLocationCard(ctx, {
+    text,
+    footer,
+    thumbUrl: items[0]?.thumb,
+    headerTitle: 'JADWAL RILIS',
+    headerSubtitle: 'Update NekoPoi'
+  })
 }
 
 async function doRandom(ctx) {
@@ -494,7 +665,7 @@ async function showHelp(ctx) {
   const p = ctx.prefix || '.'
   const text =
     `🎴 *ɴᴇᴋᴏᴘᴏɪ (sᴋʏʟɪɴᴇ ᴀᴘɪ)*\n\n` +
-    `• *${p}nekopoi* — rilis terbaru & tombol list pilihan\n` +
+    `• *${p}nekopoi* — rilis terbaru & tombol pilihan\n` +
     `• *${p}nekopoi cari <judul>* — cari seri\n` +
     `• *${p}nekopoi <nomor>* — info seri dari hasil rilis/cari\n` +
     `• *${p}nekopoi ep <nomor>* — stream & unduh episode\n` +
