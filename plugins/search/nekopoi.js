@@ -14,6 +14,7 @@ import sharp from 'sharp'
 import config from '../../config.js'
 import { skylineCreds } from '../../scraper/SKYLINE.js'
 import { onRichReply } from '../../handlers/messageHandler.js'
+import { bypassSafelink, isSafelink } from '../../scraper/SAFELINK.js'
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
@@ -26,6 +27,8 @@ const pluginConfig = {
     'nekoinfo',
     'nekoep',
     'nekoepisode',
+    'nekodl',
+    'nekodownload',
     'nekogenre',
     'nekogenres',
     'nekoschedule',
@@ -33,8 +36,8 @@ const pluginConfig = {
     'nekorandom'
   ],
   category: 'search',
-  description: 'NekoPoi via Skyline API: rilis terbaru, cari, detail, episode, genre, jadwal, random',
-  usage: '.nekopoi [cari <judul> | detail <slug> | episode <slug> | genre | jadwal | random]',
+  description: 'NekoPoi via Skyline API: rilis terbaru, cari, detail, episode, unduh video, genre, jadwal, random',
+  usage: '.nekopoi [cari <judul> | detail <slug> | episode <slug> | download <slug> | genre | jadwal | random]',
   example: '.nekopoi cari so_low',
   isOwner: false,
   isPremium: false,
@@ -438,13 +441,24 @@ async function showEpisode(ctx, slugOrIndex) {
       text += `│\n`
     }
     text += `└────────────────\n\n`
-    text += `⚠️ *Catatan Pengunduhan Langsung:*\n`
-    text += `_Link video NekoPoi diproteksi bypass Cloudflare & ouo shortener, sehingga file belum dapat diunduh otomatis ke WA. Silakan buka link server stream/unduh di atas lewat browser Anda._`
+    text += `💡 *Unduh Direct:* Pilih tombol *Unduh Video* di bawah atau ketik \`${p}nekopoi dl ${num || slug}\` untuk bypass safelink otomatis.`
   } else {
     text += `_Link unduh belum tersedia untuk episode ini._`
   }
 
   const rows = []
+  if (dl.length) {
+    const dlId = `nekopoi:${ctx.sender}:dl:${slug}`
+    onRichReply(dlId, async (c2) => {
+      await showDownload(c2, slug)
+    })
+    rows.push({
+      title: '⬇️ Unduh Video (Auto-Bypass)',
+      description: 'Dapatkan tautan direct filehost tanpa safelink',
+      id: dlId
+    })
+  }
+
   if (d.seriesLink) {
     const backId = `nekopoi:${ctx.sender}:back_detail`
     onRichReply(backId, async (c2) => {
@@ -475,6 +489,89 @@ async function showEpisode(ctx, slugOrIndex) {
     buttonText: 'Menu Navigasi',
     sections: [{ title: 'Pilihan Menu', rows }],
     footer: d.seriesTitle ? cut(d.seriesTitle, 40) : `${config.botName} • Stream & DL`,
+    headerImage
+  })
+}
+
+async function showDownload(ctx, slugOrIndex) {
+  const p = ctx.prefix || '.'
+  let slug = slugOrIndex
+
+  const num = parseInt(slugOrIndex, 10)
+  if (!isNaN(num)) {
+    const sess = USER_SESSIONS.get(ctx.sender)
+    if (sess?.episodes && sess.episodes[num - 1]) {
+      slug = sess.episodes[num - 1].slug
+    }
+  }
+
+  if (!slug) {
+    await ctx.reply(`Contoh: *${p}nekopoi dl 1* atau *${p}nekopoi dl /so_low-episode-4-subtitle-indonesia*`)
+    return
+  }
+
+  const d = await callApi('episode', { slug })
+  const dl = d.downloads || []
+
+  if (!dl.length) {
+    await ctx.reply('📭 Daftar unduhan tidak tersedia untuk episode ini.')
+    return
+  }
+
+  let text = `⬇️ *ɴᴇᴋᴏᴘᴏɪ · ᴜɴᴅᴜʜ ᴠɪᴅᴇᴏ*\n\n`
+  text += `🎬 *${cut(d.title, 80)}*\n\n`
+  text += `┌─── 📦 *LINK UNDUHAN DIRECT*\n`
+
+  for (const q of dl.slice(0, 4)) {
+    const qTag = (q.quality.match(/\[([^\]]+)\]/) || [])[1] || cut(q.quality, 20)
+    text += `│ *Kualitas ${qTag}*\n`
+    for (const l of (q.links || []).slice(0, 5)) {
+      let finalUrl = l.url
+      if (isSafelink(l.url) || /sfl\.gl|linku|safelink|tutwuri|ouo/i.test(l.url)) {
+        try {
+          const res = await bypassSafelink(l.url)
+          if (res?.url) finalUrl = res.url
+          else if (typeof res === 'string') finalUrl = res
+        } catch {}
+      }
+      text += `│ • ${l.label}: ${finalUrl}\n`
+    }
+    text += `│\n`
+  }
+  text += `└────────────────\n\n`
+  text += `💡 _Tautan di atas sudah diproses bypass safelink. Salin tautan untuk mengunduh lewat browser/download manager._`
+
+  const rows = []
+  if (d.seriesLink) {
+    const backId = `nekopoi:${ctx.sender}:back_detail`
+    onRichReply(backId, async (c2) => {
+      await showDetail(c2, d.seriesLink)
+    })
+    rows.push({
+      title: '📺 Seri Lengkap',
+      description: 'Kembali ke detail seri',
+      id: backId
+    })
+  }
+
+  const homeId = `nekopoi:${ctx.sender}:home`
+  onRichReply(homeId, async (c2) => {
+    await showLatest(c2)
+  })
+  rows.push({
+    title: '🏠 Beranda NekoPoi',
+    description: 'Kembali ke rilis terbaru',
+    id: homeId
+  })
+
+  const headerImage = await uploadHeaderThumb(ctx.client, d.poster)
+
+  return ctx.replyList({
+    text,
+    title: '⬇️ Unduh Video',
+    buttonText: 'Pilihan Menu',
+    sections: [{ title: 'Menu Navigasi', rows }],
+    footer: `${config.botName} • Direct Download`,
     headerImage
   })
 }
@@ -606,6 +703,7 @@ async function showHelp(ctx) {
     `│ • *${p}nekopoi cari <judul>* — cari seri anime\n` +
     `│ • *${p}nekopoi <nomor>* — info seri dari hasil list\n` +
     `│ • *${p}nekopoi ep <nomor>* — stream & unduh episode\n` +
+    `│ • *${p}nekopoi dl <nomor>* — unduh direct (auto bypass)\n` +
     `│ • *${p}nekopoi genre* — daftar kategori genre\n` +
     `│ • *${p}nekopoi jadwal* — jadwal rilis baru\n` +
     `│ • *${p}nekopoi random* — judul acak\n` +
@@ -624,6 +722,9 @@ const SUB_ACTION = {
   info: 'detail',
   episode: 'episode',
   ep: 'episode',
+  download: 'download',
+  dl: 'download',
+  unduh: 'download',
   browse: 'browse',
   genre: 'browse',
   genres: 'genres',
@@ -649,6 +750,9 @@ async function handler(ctx) {
     arg = raw
   } else if (cmd === 'nekoep' || cmd === 'nekoepisode') {
     action = 'episode'
+    arg = raw
+  } else if (cmd === 'nekodl' || cmd === 'nekodownload') {
+    action = 'download'
     arg = raw
   } else if (cmd === 'nekogenres') {
     action = 'genres'
@@ -704,6 +808,13 @@ async function handler(ctx) {
           return
         }
         await showEpisode(ctx, arg)
+        break
+      case 'download':
+        if (!arg) {
+          await ctx.reply('Contoh: *.nekopoi dl 1* atau *.nekopoi dl /so_low-episode-4-subtitle-indonesia*')
+          return
+        }
+        await showDownload(ctx, arg)
         break
       case 'genres':
         await showGenres(ctx)
