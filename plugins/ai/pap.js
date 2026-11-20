@@ -21,8 +21,51 @@ import { omniEdit, skylineCreds } from '../../scraper/SKYLINE.js'
 import { logger } from '../../core/logger.js'
 
 const MAX_IMAGE = 10 * 1024 * 1024
+const PAP_MEMORY_FILE = './data/pap-memory.json'
+const PAP_MEMORY_MAX = 5
 
 const IMG_EXT = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.gif': 'image/gif' }
+
+const papMemory = new Map()
+let papMemorySaveTimer = null
+
+function loadPapMemory() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(PAP_MEMORY_FILE, 'utf8'))
+    for (const [key, requests] of Object.entries(raw || {})) {
+      if (!Array.isArray(requests)) continue
+      const clean = requests.map((v) => String(v || '').trim().slice(0, 200)).filter(Boolean).slice(-PAP_MEMORY_MAX)
+      if (clean.length) papMemory.set(key, clean)
+    }
+  } catch { /* belum ada file */ }
+}
+
+function savePapMemory() {
+  if (papMemorySaveTimer) return
+  papMemorySaveTimer = setTimeout(() => {
+    papMemorySaveTimer = null
+    try {
+      fs.mkdirSync(path.dirname(PAP_MEMORY_FILE), { recursive: true })
+      const tmp = `${PAP_MEMORY_FILE}.tmp`
+      fs.writeFileSync(tmp, JSON.stringify(Object.fromEntries(papMemory)))
+      fs.renameSync(tmp, PAP_MEMORY_FILE)
+    } catch (err) {
+      logger.warn({ err: String(err?.message || err).slice(0, 120) }, '[Pap] gagal simpan memori')
+    }
+  }, 1500)
+  papMemorySaveTimer.unref?.()
+}
+
+function rememberPap(sender, request) {
+  const key = String(sender || '').trim()
+  if (!key) return []
+  const list = [...(papMemory.get(key) || []), request].slice(-PAP_MEMORY_MAX)
+  papMemory.set(key, list)
+  savePapMemory()
+  return list.slice(0, -1)
+}
+
+loadPapMemory()
 
 const pluginConfig = {
   name: 'pap',
@@ -52,11 +95,18 @@ const HELP =
   '> `.pap gaya selfie di pantai sore hari`\n\n' +
   '> Isi folder `assets/ella2/` dengan foto-foto base ya.'
 
-/** Instruksi edit ke Omni — biar hasilnya "menyesuaikan permintaan". */
-const editPrompt = (req) =>
-  `Edit this photo to match the request: "${req}". ` +
-  'Keep it looking like a natural, realistic photo with good quality — ' +
-  'only change what the request asks for.'
+/** Gabungkan permintaan baru dengan konteks PAP sebelumnya. */
+const editPrompt = (req, previous = []) => {
+  const current = req.trim()
+  if (!previous.length) return current
+  return [
+    'Edit the image according to the user request below.',
+    'The latest request has priority. Use previous PAP requests only as context when the latest request refers to something earlier.',
+    `Previous PAP requests: ${previous.map((v, i) => `${i + 1}. ${v}`).join(' | ')}`,
+    `Latest request: ${current}`,
+    'Return the edited image, not the unchanged source image.'
+  ].join(' ')
+}
 
 function papDir() {
   return process.env.PAP_DIR
@@ -113,9 +163,10 @@ async function handler(ctx) {
 
   await ctx.react?.('⏳')
 
-  // 2) eksekusi Omni — sesuaikan sama permintaan
+  // 2) eksekusi Omni — pakai permintaan baru + konteks PAP user yang sama
+  const previous = rememberPap(ctx.sender || ctx.chat, query)
   try {
-    const out = await omniEdit({ image: dataUrl, prompt: editPrompt(query) })
+    const out = await omniEdit({ image: dataUrl, prompt: editPrompt(query, previous) })
     await ctx.react?.('🎨')
     logger.info({ query: query.slice(0, 80), kb: Math.round(out.buffer.length / 1024) }, '[Pap] foto jadi')
     return await sendImage(ctx, out.buffer, out.mimetype || 'image/jpeg', '', event)
