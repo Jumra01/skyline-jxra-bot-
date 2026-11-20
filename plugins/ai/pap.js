@@ -40,20 +40,32 @@ function loadPapMemory() {
   } catch { /* belum ada file */ }
 }
 
+function writePapMemory() {
+  try {
+    fs.mkdirSync(path.dirname(PAP_MEMORY_FILE), { recursive: true })
+    const tmp = `${PAP_MEMORY_FILE}.tmp`
+    fs.writeFileSync(tmp, JSON.stringify(Object.fromEntries(papMemory)))
+    fs.renameSync(tmp, PAP_MEMORY_FILE)
+  } catch (err) {
+    logger.warn({ err: String(err?.message || err).slice(0, 120) }, '[Pap] gagal simpan memori')
+  }
+}
+
 function savePapMemory() {
   if (papMemorySaveTimer) return
   papMemorySaveTimer = setTimeout(() => {
     papMemorySaveTimer = null
-    try {
-      fs.mkdirSync(path.dirname(PAP_MEMORY_FILE), { recursive: true })
-      const tmp = `${PAP_MEMORY_FILE}.tmp`
-      fs.writeFileSync(tmp, JSON.stringify(Object.fromEntries(papMemory)))
-      fs.renameSync(tmp, PAP_MEMORY_FILE)
-    } catch (err) {
-      logger.warn({ err: String(err?.message || err).slice(0, 120) }, '[Pap] gagal simpan memori')
-    }
+    writePapMemory()
   }, 1500)
   papMemorySaveTimer.unref?.()
+}
+
+export function clearPapMemory(...keys) {
+  const targets = keys.flat().map((key) => String(key || '').trim()).filter(Boolean)
+  let cleared = false
+  for (const key of targets) cleared = papMemory.delete(key) || cleared
+  if (cleared) writePapMemory()
+  return cleared
 }
 
 function rememberPap(sender, request) {

@@ -58,6 +58,7 @@ import { getSetting, setSetting } from '../../core/groupSettings.js'
 import { getGroupConfig, setGroupConfig, disableGlobalAutoAI } from '../../lib/autoai.js'
 import { kindOf, kindOfJid, parseKind, KIND_LABEL, getGlobalKind, setGlobalKind, kindLabel } from '../../lib/aiScope.js'
 import { extractFacts, remember, factsFor, formatBlock, forget } from '../../lib/aiMemory.js'
+import { clearPapMemory } from './pap.js'
 import { gemmaChat, gemmaLoad, warmGemma, isConfigured as skylineReady, keyTag, keySource, explainSkylineError } from '../../scraper/SKYLINE.js'
 import { isBotMentioned, stripMention, botIdentity, withTimeout, findImgNode } from '../../lib/aiTrigger.js'
 import { downloadMedia } from '../../lib/media.js'
@@ -1255,9 +1256,10 @@ async function handler(ctx) {
     if (ctx.senderLid) store.delete(ctx.senderLid)
     if (ctx.sender) store.delete(ctx.sender)
     if (ctx.chat) store.delete(ctx.chat)
+    clearPapMemory(ctx.sender, ctx.senderLid, ctx.chat)
     saveStore(true)
     return ctx.reply(
-      had ? '🧹 Riwayat obrolan Ella v2 di sini udah dihapus. Mulai dari nol lagi ya.' : '🧹 Memang belum ada riwayat obrolan di sini.'
+      had ? '🧹 Riwayat obrolan + memori PAP Ella v2 di sini udah dihapus. Mulai dari nol lagi ya.' : '🧹 Memang belum ada riwayat obrolan di sini.'
     )
   }
 
