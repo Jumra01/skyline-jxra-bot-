@@ -27,7 +27,6 @@ const PAP_MEMORY_MAX = 5
 const IMG_EXT = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.gif': 'image/gif' }
 
 const papMemory = new Map()
-const papRecentRuns = new Map()
 let papMemorySaveTimer = null
 
 function loadPapMemory() {
@@ -148,15 +147,6 @@ async function handler(ctx) {
   const query = String(ctx.text || '').trim().slice(0, 200)
   if (!query) return ctx.reply(HELP)
 
-  // Marker Ella yang sama bisa terkirim ulang saat retry/dua AI aktif.
-  // Jangan kirim PAP identik lebih dari sekali dalam 2 menit per user/chat.
-  const runKey = `${ctx.sender || ctx.chat || 'unknown'}:${query.toLowerCase()}`
-  const lastRun = papRecentRuns.get(runKey) || 0
-  if (Date.now() - lastRun < 120_000) {
-    logger.info({ query: query.slice(0, 80) }, '[Pap] duplikat diabaikan')
-    return null
-  }
-  papRecentRuns.set(runKey, Date.now())
   if (!skylineCreds().apikey) return ctx.reply('⚠️ API key belum diisi — fitur foto AI lagi mati.')
 
   const event = ctx.message ?? ctx.event ?? ctx.raw ?? ctx.msg ?? null
