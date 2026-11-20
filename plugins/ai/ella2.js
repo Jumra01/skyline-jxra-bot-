@@ -41,6 +41,10 @@
  * mematikan `.ella` (per chat) — biar gak rebutan balas.
  */
 import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import config from '../../config.js'
 import { logger } from '../../core/logger.js'
 import { checkCooldown, checkFlood } from '../../core/cooldown.js'
@@ -682,7 +686,8 @@ const VISION_MAX_DIM = 1024              // sisi terpanjang setelah resize
 const VISION_B64_MAX = 2_190_000         // batas base64 yang diterima server (2,2 jt char)
 
 /** Pesan default kalau user kirim gambar/stiker tanpa caption. */
-const VISION_PROMPT = 'Lihat gambar/stiker yang menyertai pesan ini, lalu jawab singkat sesuai isinya.'
+const VISION_PROMPT = 'Lihat gambar/video yang menyertai pesan ini, lalu jawab singkat sesuai isinya.'
+const execFileAsync = promisify(execFile)
 
 /**
  * Unduh gambar/stiker dari pesan (langsung atau yang di-quote) → siap dikirim
@@ -709,15 +714,34 @@ async function grabVision(ctx) {
     const raw = media?.buffer
     if (!raw?.length) return null
 
-    let jpeg = await sharp(raw, { animated: false })
-      .rotate()
-      .resize(VISION_MAX_DIM, VISION_MAX_DIM, { fit: 'inside', withoutEnlargement: true })
-      .flatten({ background: '#ffffff' })
-      .jpeg({ quality: 82 })
-      .toBuffer()
+    const mime = String(media.mimetype || '').split(';')[0].toLowerCase()
+    const isMotion = hit.field === 'videoMessage' || mime === 'image/gif' || mime === 'video/gif'
+    let jpeg
 
-    // Kebesaran? Kompresi ulang lebih kecil. Kalau masih lewat batas, gambar
-    // tetap dibawa tanpa dataUrl → jalur cadangan (OCR) yang pegang.
+    if (isMotion) {
+      const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ella2-vision-'))
+      const input = path.join(dir, 'input')
+      const output = path.join(dir, 'contact.jpg')
+      try {
+        await fs.promises.writeFile(input, raw)
+        await execFileAsync('ffmpeg', [
+          '-hide_banner', '-loglevel', 'error', '-y', '-i', input,
+          '-vf', 'fps=1/2,scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=white,tile=2x2',
+          '-frames:v', '1', '-q:v', '5', output,
+        ], { timeout: 25_000, maxBuffer: 2 * 1024 * 1024 })
+        jpeg = await fs.promises.readFile(output)
+      } finally {
+        await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {})
+      }
+    } else {
+      jpeg = await sharp(raw, { animated: false })
+        .rotate()
+        .resize(VISION_MAX_DIM, VISION_MAX_DIM, { fit: 'inside', withoutEnlargement: true })
+        .flatten({ background: '#ffffff' })
+        .jpeg({ quality: 82 })
+        .toBuffer()
+    }
+
     if (Math.ceil(jpeg.length / 3) * 4 > VISION_B64_MAX) {
       jpeg = await sharp(jpeg)
         .resize(768, 768, { fit: 'inside', withoutEnlargement: true })
@@ -729,8 +753,8 @@ async function grabVision(ctx) {
       : ''
 
     logger.debug(
-      { jenis: hit.field, asliKB: Math.round(raw.length / 1024), kirimKB: Math.round(jpeg.length / 1024), dataUrl: Boolean(dataUrl) },
-      '[Ella2] gambar siap dikirim ke otak'
+      { jenis: hit.field, motion: isMotion, asliKB: Math.round(raw.length / 1024), kirimKB: Math.round(jpeg.length / 1024), dataUrl: Boolean(dataUrl) },
+      '[Ella2] media siap dikirim ke otak'
     )
     return { dataUrl, buffer: jpeg, field: hit.field }
   } catch (err) {
