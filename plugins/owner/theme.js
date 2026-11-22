@@ -44,18 +44,17 @@ function previewHtml(key) {
     <div><div class="ttl">TEMA RICH HTML</div><div class="sub">Preview langsung · <span data-rtheme>${esc(t.name)}</span></div></div>
     <span class="pill">${esc(key)}</span>
   </div></div>
-  <div class="view on">
+  <div class="scroll"><div class="view on">
     <div class="card acc"><div class="k">Tema aktif</div><div class="big" id="rCmd">.theme ${esc(key)}</div>
-      <div class="line" style="margin-top:6px">Pilihan ini dipakai semua kartu rich HTML. Ganti kapan saja lewat perintah di bawah.</div>
+      <div class="line" style="margin-top:6px">Pilihan ini dipakai semua kartu rich HTML. Tombol 🎨 di bawah buka picker, atau kirim perintah.</div>
     </div>
     <div class="card"><div class="k">Warna</div><div class="swatches">${swatches}</div></div>
     <div class="card"><div class="k">Pilih tema lain</div><div class="sw">${THEME_ORDER.map(k =>
-      `<button class="${k === key ? 'on' : ''}" onclick="st('${k}')">${esc(THEMES[k].name)}</button>`
+      `<button data-tk="${k}" class="${k === key ? 'on' : ''}" onclick="st('${k}')">${esc(THEMES[k].name)}</button>`
     ).join('')}</div>
       <div class="mono">.theme &lt;nama&gt;</div>
     </div>
-  </div>
-  <div class="ft">Klik swatch untuk pratinjau · simpan lewat <b>.theme &lt;nama&gt;</b></div>`
+  </div></div>`
 
   const css = `.swatches{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:7px}
 .sw{display:flex;align-items:center;gap:6px;font-size:9px;color:var(--text-dim)}

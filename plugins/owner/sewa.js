@@ -15,7 +15,7 @@
  * .sewa sync         → tarik ulang cache dari server
  */
 import { getSewaState, sewaAction } from '../../lib/sewaClient.js'
-import { richDoc, esc, payloadBytes, getThemeKey, THEMES, THEME_ORDER } from '../../lib/richTheme.js'
+import { richDoc, esc, payloadBytes, getThemeKey, THEMES } from '../../lib/richTheme.js'
 import { sendNativeHtml } from '../../lib/emeraldCard.js'
 
 const pluginConfig = {
@@ -172,26 +172,26 @@ function buildSewaHtml(state, tab = 'guide') {
       <div class="mono">.sewa sync</div>
     </div>`
 
-  const listRows = (state.groups || []).map(g =>
+  /* Batasi baris: payload base64 WA ~26KB. Sisanya masih ketemu di teks. */
+  const allGroups = state.groups || []
+  const listRows = allGroups.slice(0, 8).map(g =>
     `<div class="row"><div class="n">${esc(g.groupName || g.groupJid)}</div>
       <div class="m">${esc(g.groupJid)}</div>
       <div class="s">${badgeStatus(g)} · ${esc(g.tenantName || '-')} · s/d ${esc(g.isLifetime ? 'selamanya' : tanggal(g.expiresAt))}</div>
     </div>`
   ).join('')
-  const list = `<div class="card"><div class="k">Grup terdaftar · ${state.groups?.length || 0}</div>
+  const sisa = allGroups.length > 8
+    ? `<div class="line" style="padding-top:8px;color:var(--text-muted)">+${allGroups.length - 8} grup lain — kirim <b>.sewa list</b> untuk versi teks lengkap.</div>`
+    : ''
+  const list = `<div class="card"><div class="k">Grup terdaftar · ${allGroups.length}</div>
     ${listRows || '<div class="line" style="padding:10px 0">Belum ada grup disewa. Mulai dengan <b>.sewa add &lt;link gc&gt; 1m</b>.</div>'}
-    </div>`
+    ${sisa}</div>`
 
   const themeKey = getThemeKey()
   const theme = `<div class="card acc"><div class="k">Tema aktif</div>
-      <div class="big" id="rCmd">.theme ${esc(themeKey)}</div>
-      <div class="line" style="margin-top:5px">Tema dipakai semua kartu rich HTML. Klik untuk pratinjau, simpan lewat perintah.</div>
-    </div>
-    <div class="card"><div class="k">Pilih tema · <span data-rtheme>${esc(THEMES[themeKey].name)}</span></div>
-      <div class="sw">${THEME_ORDER.map(k =>
-        `<button class="${k === themeKey ? 'on' : ''}" onclick="st('${k}')">${esc(THEMES[k].name)}</button>`
-      ).join('')}</div>
-      <div class="mono">.theme &lt;nama&gt;</div>
+      <div class="big" data-rtheme>${esc(THEMES[themeKey].name)}</div>
+      <div class="line" style="margin-top:5px">Tombol 🎨 di bawah buka 9 tema. Pilih untuk pratinjau instan; simpan permanen lewat:</div>
+      <div class="mono" id="rCmd">.theme ${esc(themeKey)}</div>
     </div>`
 
   const views = [
@@ -203,14 +203,13 @@ function buildSewaHtml(state, tab = 'guide') {
       <div><div class="ttl">SEWA GRUP BOT</div><div class="sub">Kelola · <span data-rtheme>${esc(THEMES[themeKey].name)}</span></div></div>
       <span class="pill${state.enabled ? '' : ' off'}">${mode}</span>
     </div><div class="tabs">${tabs}</div></div>
-    <div class="scroll">${views}</div>
-    <div class="ft">Owner only · <b>.sewa help</b> untuk buka kartu ini lagi</div>`
+    <div class="scroll">${views}</div>`
 
   const script = `function sv(v){['guide','status','list','theme'].forEach(function(x){
     var e=document.getElementById('v_'+x);if(e)e.className='view'+(x===v?' on':'');
   });document.querySelectorAll('.tab').forEach(function(b){
     b.className='tab'+(b.getAttribute('data-v')===v?' on':'');
-  });}`
+  });var c=document.querySelector('.scroll');if(c)c.scrollTop=0;}`
 
   return richDoc({ title: 'Sewa Grup Bot', body, extraScript: script })
 }
