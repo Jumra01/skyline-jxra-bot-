@@ -19,8 +19,16 @@ import { getGlobal } from '../core/groupSettings.js'
 import { getMentionHandler } from '../core/mentionTrigger.js'
 import { runMessageHooks } from '../core/liveHooks.js'
 import { reactTo } from '../core/react.js'
+import { isGroupAllowed, notifyLocked } from '../lib/sewaClient.js'
 
 const richHandlers = new Map()
+
+/* Command yang tetap jalan di grup belum sewa — dipakai owner buat kelola
+ * dan user buat nanya status. Gate ada di bawah, sebelum cooldown/energi. */
+const SEWA_COMMANDS = new Set([
+  'sewa', 'sewabot', 'addsewa', 'delsewa', 'renewsewa', 'perpanjangsewa',
+  'listsewa', 'sewalist', 'ceksewa', 'sisasewa', 'statussewa'
+])
 
 export function onRichReply(id, handler) {
   richHandlers.set(id, handler)
@@ -219,6 +227,14 @@ export async function route(client, event) {
   // Dijalankan SEBELUM cek `ctx.body` kosong: biar tag tanpa teks / bales
   // gambar-stiker tanpa caption tetap ditangani (handler yang kasih sapaan).
   if (!matchedPrefix) {
+    // [SEWA] Fitur tanpa prefix (tag AI, dll) ikut dikunci di grup belum sewa.
+    if (ctx.isGroup && !ctx.isOwner && !ctx.isStaff) {
+      const gate = await isGroupAllowed(ctx.chat)
+      if (!gate.allowed) {
+        await notifyLocked(ctx)
+        return
+      }
+    }
     const onMention = getMentionHandler()
     if (onMention) {
       if (ctx.body && config.typingPresence) void sendTyping(client, ctx.chat)
@@ -239,6 +255,16 @@ export async function route(client, event) {
 
   const feature = getFeature(commandName)
   if (!feature) return // Command gak ada → diem, no react
+
+  // [SEWA] Gate grup: command diblokir kalau grup belum disewa / sudah expired.
+  // Owner & staff selalu lolos biar bisa kelola dari grup mana pun.
+  if (ctx.isGroup && !ctx.isOwner && !ctx.isStaff && !SEWA_COMMANDS.has(commandName.toLowerCase())) {
+    const gate = await isGroupAllowed(ctx.chat)
+    if (!gate.allowed) {
+      await notifyLocked(ctx)
+      return
+    }
+  }
 
   // [UPDATE⭐] REACT: muncul di sini karena command valid
   void reactTo(client, event, '⏱️')
