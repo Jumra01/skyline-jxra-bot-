@@ -96,7 +96,8 @@ async function resolveTarget(ctx, arg) {
       if (!info?.jid) return { error: 'Link undangan tidak mengembalikan JID grup.' }
       return { jid: info.jid, name: String(info.subject || '') }
     } catch (err) {
-      return { error: 'Link undangan tidak bisa dibaca (mungkin kedaluwarsa).' }
+      console.error('[sewa] resolve invite gagal:', err?.message || String(err))
+      return { error: 'Link undangan tidak bisa dibaca. Pakai JID grup (120363xxx@g.us) atau buka .sewa add di dalam grup itu.' }
     }
   }
 
@@ -104,6 +105,12 @@ async function resolveTarget(ctx, arg) {
   const digits = raw.replace(/\D/g, '')
   if (digits.length >= 8) return { jid: `${digits}@g.us`, name: '' }
   return { error: 'Target tidak dikenal. Pakai JID grup, link chat.whatsapp.com, atau nomor grup.' }
+}
+
+/** `.sewa <link> 30d` diterima juga — owner sering lupa ketik `add`. */
+function looksLikeTarget(s) {
+  const v = String(s ?? '')
+  return /chat\.whatsapp\.com\//i.test(v) || v.includes('@g.us') || /^\d{8,}$/.test(v.replace(/\D/g, ''))
 }
 
 function parseArgs(args, canDefaultGroup) {
@@ -124,7 +131,13 @@ async function handler(ctx) {
     perpanjangsewa: 'renew', listsewa: 'list', sewalist: 'list', sewabot: 'status'
   }[cmd]
   const args = aliasSub ? [aliasSub, ...rawArgs] : rawArgs.slice()
-  const sub = String(args[0] || 'status').toLowerCase()
+  let sub = String(args[0] || 'status').toLowerCase()
+
+  const keywords = new Set(['sync', 'on', 'off', 'add', 'renew', 'del', 'delete', 'hapus', 'list', 'status'])
+  if (!keywords.has(sub) && looksLikeTarget(args[0])) {
+    args.unshift('add')
+    sub = 'add'
+  }
 
   try {
     if (sub === 'sync') {
