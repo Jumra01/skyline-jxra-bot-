@@ -602,9 +602,9 @@ export async function adultBrowse(site, {
   const target = String(url || '').trim().slice(0, 500);
   const cat = String(category || '').trim().slice(0, 120);
 
-  if (act === 'search' && query.length < 2) throw new SkylineApiError('Kata kunci minimal 2 karakter', 400);
-  if (act === 'detail' && !target) throw new SkylineApiError('URL wajib untuk detail', 400);
-  if (act === 'category' && !cat) throw new SkylineApiError('Slug kategori wajib', 400);
+  if (act === 'search' && query.length < 2) throw new SkylineApiError('Kata kunci minimal 2 karakter', 400, '', 'invalid_query');
+  if (act === 'detail' && !target) throw new SkylineApiError('URL wajib untuk detail', 400, '', 'invalid_url');
+  if (act === 'category' && !cat) throw new SkylineApiError('Slug kategori wajib', 400, '', 'invalid_category');
 
   const params = { action: act, page: String(adultPage(page)) };
   if (query) params.q = query;
