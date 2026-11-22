@@ -4,7 +4,9 @@
  * Hargai sebagaimana u mau dihargai.
  * sewa.js — Kelola sewa grup (sumber data: D1 skyline.web.id, bukan file lokal).
  *
- * .sewa              → status ringkas
+ * .sewa              → kartu panduan rich HTML (tema bareng)
+ * .sewa help         → kartu panduan: cara add/renew/del + format durasi
+ * .sewa status|list  → kartu statistik / daftar grup
  * .sewa on|off       → nyalakan/matikan mode sewa
  * .sewa add [target] [durasi]   → daftarkan/perpanjang grup
  * .sewa del [target]            → hapus sewa
@@ -13,14 +15,16 @@
  * .sewa sync         → tarik ulang cache dari server
  */
 import { getSewaState, sewaAction } from '../../lib/sewaClient.js'
+import { richDoc, esc, payloadBytes, getThemeKey, THEMES, THEME_ORDER } from '../../lib/richTheme.js'
+import { sendNativeHtml } from '../../lib/emeraldCard.js'
 
 const pluginConfig = {
   name: 'sewa',
   alias: ['sewabot', 'addsewa', 'delsewa', 'renewsewa', 'listsewa', 'sewalist', 'perpanjangsewa'],
   category: 'owner',
   description: 'Kelola sewa grup bot (mode, daftar, tambah, perpanjang, hapus)',
-  usage: '.sewa [on|off|add|del|renew|list|sync]\n.sewa add [target] <durasi> [nama penyewa]',
-  example: '.sewa add 30d Budi · .sewa list · .sewa off',
+  usage: '.sewa [help|status|list|on|off|add|del|renew|sync]\n.sewa add [target] <durasi> [nama penyewa]',
+  example: '.sewa help · .sewa add <link gc> 1m Budi · .sewa list',
   isOwner: true,
   isPremium: false,
   isGroup: false,
@@ -75,6 +79,140 @@ function daftar(state) {
     `${i + 1}. ${g.groupName || g.groupJid}\n   ${g.groupJid}\n   ${statusText(g)} · ${g.tenantName || '-'} · s/d ${g.isLifetime ? 'selamanya' : tanggal(g.expiresAt)}`
   ).join('\n\n')
   return `💼 *DAFTAR SEWA GRUP* (${state.groups.length})\n\n${rows}\n\n*.sewa add <target> <durasi>* · *.sewa del <target>*`
+}
+
+/* ────────────────── Kartu rich HTML (tema bareng) ────────────────── */
+
+async function sendCard(ctx, html, fallbackText) {
+  try {
+    if (payloadBytes(html) > 24000) throw new Error('HTML terlalu besar')
+    await sendNativeHtml(ctx.client, ctx.chat, html)
+    return true
+  } catch (err) {
+    console.error('[sewa] kartu gagal, fallback teks:', err?.message || String(err))
+    await ctx.reply(fallbackText)
+    return false
+  }
+}
+
+function badgeStatus(g) {
+  if (g.status === 'lifetime') return '<span class="life">♾ Permanent</span>'
+  if (g.status === 'active') return `<span class="ok">✅ Aktif · ${g.daysLeft} hari</span>`
+  return '<span class="bad">⛔ Expired</span>'
+}
+
+function buildSewaHtml(state, tab = 'guide') {
+  const s = state.stats || { total: 0, active: 0, expired: 0, lifetime: 0 }
+  const mode = state.enabled ? 'AKTIF' : 'MATI'
+  const modeNote = state.enabled
+    ? 'Grup belum terdaftar / expired tidak bisa pakai command. Bot tetap tinggal di grup.'
+    : 'Semua grup boleh memakai bot. Daftarkan grup dulu sebelum mode dinyalakan.'
+
+  const steps = [
+    {
+      t: '1 · Nyalakan mode sewa',
+      d: 'Gerbakan mulai berfungsi. Sebelum ini, semua grup tetap bebas.',
+      c: '.sewa on'
+    },
+    {
+      t: '2 · Daftarkan grup',
+      d: 'Tempel link undangan grup. Kalau kirim dari dalam grup itu, link boleh kosong.',
+      c: '.sewa add <link gc> 1m Budi'
+    },
+    {
+      t: '3 · Tambah masa sewa',
+      d: 'Akumulatif kalau sewa masih aktif. `.sewa add ...` juga bisa dipakai.',
+      c: '.sewa renew <link gc> 1m'
+    },
+    {
+      t: '4 · Hapus sewa',
+      d: 'Grup langsung kena gate saat mode sewa aktif. Bot tidak keluar grup.',
+      c: '.sewa del <link gc>'
+    },
+    {
+      t: '5 · Cek & kelola',
+      d: 'Lihat daftar, paksa refresh cache, atau matikan mode sewa.',
+      c: '.sewa list · .sewa sync · .ceksewa · .sewa off'
+    }
+  ]
+
+  const tabs = [
+    ['guide', '📖 PANDUAN'],
+    ['status', '📊 STATUS'],
+    ['list', '📋 DAFTAR'],
+    ['theme', '🎨 TEMA']
+  ].map(([k, label]) =>
+    `<button class="tab${k === tab ? ' on' : ''}" data-v="${k}" onclick="sv('${k}')">${label}</button>`
+  ).join('')
+
+  const guide = `
+    <div class="card acc"><div class="k">Mode sewa saat ini</div><div class="big">${mode}</div>
+      <div class="line" style="margin-top:5px">${esc(modeNote)}</div></div>
+    <div class="card"><div class="k">Cara sewa · owner only</div>
+      ${steps.map(x => `<div class="step"><div class="no">${x.t[0]}</div><div><div class="t">${esc(x.t.slice(2))}</div>
+        <div class="d">${esc(x.d)}</div><div class="mono">${esc(x.c)}</div></div></div>`).join('')}
+    </div>
+    <div class="card"><div class="k">Format durasi</div>
+      <span class="tag a">1m = 30 hari</span><span class="tag">7d</span><span class="tag">12h</span>
+      <span class="tag">1w</span><span class="tag">1y</span><span class="tag">lifetime</span>
+      <div class="line" style="margin-top:7px">Angka polos = hari. Menit pakai <b>mnt</b> (contoh 30mnt). Perpanjangan dihitung dari sisa waktu, bukan dari sekarang.</div>
+    </div>`
+
+  const status = `
+    <div class="grid4">
+      <div class="stat"><div class="n">${s.total}</div><div class="l">TOTAL</div></div>
+      <div class="stat"><div class="n">${s.active}</div><div class="l">AKTIF</div></div>
+      <div class="stat"><div class="n">${s.expired}</div><div class="l">EXPIRED</div></div>
+      <div class="stat"><div class="n">${s.lifetime}</div><div class="l">PERMANENT</div></div>
+    </div>
+    <div class="card acc" style="margin-top:8px"><div class="k">Mode sewa</div><div class="big">${mode}</div>
+      <div class="line" style="margin-top:5px">${esc(modeNote)}</div></div>
+    <div class="card"><div class="k">Sinkronisasi</div>
+      <div class="line">Bot menyimpan salinan di cache 2 menit. Perubahan dari WA / server langsung dibaca ulang setelah aksi, atau paksa dengan:</div>
+      <div class="mono">.sewa sync</div>
+    </div>`
+
+  const listRows = (state.groups || []).map(g =>
+    `<div class="row"><div class="n">${esc(g.groupName || g.groupJid)}</div>
+      <div class="m">${esc(g.groupJid)}</div>
+      <div class="s">${badgeStatus(g)} · ${esc(g.tenantName || '-')} · s/d ${esc(g.isLifetime ? 'selamanya' : tanggal(g.expiresAt))}</div>
+    </div>`
+  ).join('')
+  const list = `<div class="card"><div class="k">Grup terdaftar · ${state.groups?.length || 0}</div>
+    ${listRows || '<div class="line" style="padding:10px 0">Belum ada grup disewa. Mulai dengan <b>.sewa add &lt;link gc&gt; 1m</b>.</div>'}
+    </div>`
+
+  const themeKey = getThemeKey()
+  const theme = `<div class="card acc"><div class="k">Tema aktif</div>
+      <div class="big" id="rCmd">.theme ${esc(themeKey)}</div>
+      <div class="line" style="margin-top:5px">Tema dipakai semua kartu rich HTML. Klik untuk pratinjau, simpan lewat perintah.</div>
+    </div>
+    <div class="card"><div class="k">Pilih tema · <span data-rtheme>${esc(THEMES[themeKey].name)}</span></div>
+      <div class="sw">${THEME_ORDER.map(k =>
+        `<button class="${k === themeKey ? 'on' : ''}" onclick="st('${k}')">${esc(THEMES[k].name)}</button>`
+      ).join('')}</div>
+      <div class="mono">.theme &lt;nama&gt;</div>
+    </div>`
+
+  const views = [
+    ['guide', guide], ['status', status], ['list', list], ['theme', theme]
+  ].map(([k, html]) => `<div class="view${k === tab ? ' on' : ''}" id="v_${k}">${html}</div>`).join('')
+
+  const body = `<div class="hd"><div class="top">
+      <div class="logo">💼</div>
+      <div><div class="ttl">SEWA GRUP BOT</div><div class="sub">Kelola · <span data-rtheme>${esc(THEMES[themeKey].name)}</span></div></div>
+      <span class="pill${state.enabled ? '' : ' off'}">${mode}</span>
+    </div><div class="tabs">${tabs}</div></div>
+    <div class="scroll">${views}</div>
+    <div class="ft">Owner only · <b>.sewa help</b> untuk buka kartu ini lagi</div>`
+
+  const script = `function sv(v){['guide','status','list','theme'].forEach(function(x){
+    var e=document.getElementById('v_'+x);if(e)e.className='view'+(x===v?' on':'');
+  });document.querySelectorAll('.tab').forEach(function(b){
+    b.className='tab'+(b.getAttribute('data-v')===v?' on':'');
+  });}`
+
+  return richDoc({ title: 'Sewa Grup Bot', body, extraScript: script })
 }
 
 async function resolveTarget(ctx, arg) {
@@ -133,16 +271,23 @@ async function handler(ctx) {
   const args = aliasSub ? [aliasSub, ...rawArgs] : rawArgs.slice()
   let sub = String(args[0] || 'status').toLowerCase()
 
-  const keywords = new Set(['sync', 'on', 'off', 'add', 'renew', 'del', 'delete', 'hapus', 'list', 'status'])
+  const keywords = new Set(['sync', 'on', 'off', 'add', 'renew', 'del', 'delete', 'hapus', 'list', 'status', 'help', '?', 'panduan'])
   if (!keywords.has(sub) && looksLikeTarget(args[0])) {
     args.unshift('add')
     sub = 'add'
   }
 
   try {
+    if (sub === 'help' || sub === '?' || sub === 'panduan') {
+      const state = await getSewaState()
+      await sendCard(ctx, buildSewaHtml(state, 'guide'), ringkas(state))
+      return
+    }
+
     if (sub === 'sync') {
       const state = await getSewaState({ force: true })
-      return ctx.reply(`🔄 Cache sewa disegarkan.\n\n${ringkas(state)}`)
+      await sendCard(ctx, buildSewaHtml(state, 'status'), `🔄 Cache sewa disegarkan.\n\n${ringkas(state)}`)
+      return
     }
 
     if (sub === 'on' || sub === 'off') {
@@ -181,15 +326,23 @@ async function handler(ctx) {
 
     if (sub === 'list') {
       const state = await getSewaState({ force: true })
-      return ctx.reply(daftar(state))
+      await sendCard(ctx, buildSewaHtml(state, 'list'), daftar(state))
+      return
     }
 
+    if (sub === 'status') {
+      const state = await getSewaState()
+      await sendCard(ctx, buildSewaHtml(state, 'status'), ringkas(state))
+      return
+    }
+
+    /* `.sewa` polos = kartu panduan (paling informatif untuk owner). */
     const state = await getSewaState()
-    return ctx.reply(ringkas(state))
+    await sendCard(ctx, buildSewaHtml(state, 'guide'), ringkas(state))
   } catch (err) {
     console.error('[sewa plugin]', err?.message || String(err))
     return ctx.reply(`⚠️ ${err?.message || 'Gagal memproses sewa.'}`)
   }
 }
 
-export { pluginConfig as config, handler }
+export { pluginConfig as config, handler, buildSewaHtml }
