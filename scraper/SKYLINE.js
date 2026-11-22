@@ -529,6 +529,116 @@ export async function presetFinder(url, { timeout = 75000, retries = 1 } = {}) {
   };
 }
 
+/* ══════════════ Katalog video dewasa (XVideos / XNXX) ══════════════
+ *
+ * Endpoint docs skyline.web.id (satu pintu, lewat `request()`):
+ *   GET /api/tools/xvideos?action=search|best|fresh|verified|dashboard|category|detail
+ *   GET /api/tools/xnxx?action=search|detail
+ *
+ * Bot TIDAK fetch situs sumber langsung. Semua lewat API key + kuota Skyline,
+ * dengan breaker/retry/dedupe yang sama seperti fitur lain.
+ */
+export const ADULT_SITES = Object.freeze({ xvideos: 'xvideos', xnxx: 'xnxx' });
+
+const ADULT_ACTIONS = Object.freeze({
+  xvideos: new Set(['search', 'best', 'fresh', 'verified', 'dashboard', 'category', 'detail']),
+  xnxx: new Set(['search', 'detail'])
+});
+const ADULT_FILTER_KEYS = new Set(['sort', 'durf', 'datef', 'quality', 'year', 'month']);
+
+function adultPage(value) {
+  const n = Number.parseInt(value, 10);
+  if (!Number.isFinite(n) || n < 1) return 1;
+  return Math.min(n, 50);
+}
+
+function adultAttachCode(err) {
+  if (!err?.body) return err;
+  try {
+    const obj = JSON.parse(err.body);
+    if (obj?.code && !err.code) err.code = String(obj.code);
+  } catch {
+    // body bukan JSON — biarkan pesan aslinya yang dipakai
+  }
+  return err;
+}
+
+function adultVideo(site, row) {
+  const url = String(row?.url || '').trim();
+  if (!url) return null;
+  const videoId = String(row?.videoId || '').trim() || (url.match(/\/video(\d+)/)?.[1] || '');
+  return {
+    site,
+    url,
+    videoId,
+    title: String(row?.title || 'Tanpa judul').trim(),
+    duration: String(row?.duration || '').trim(),
+    thumbnail: String(row?.thumbnailUrl || row?.thumbnail || row?.thumb || '').trim(),
+    views: Number(row?.watchCount ?? row?.views ?? 0) || 0,
+    profile: String(row?.profile || '').trim(),
+    raw: row
+  };
+}
+
+/**
+ * Jelajahi katalog XVideos/XNXX.
+ * @returns {Promise<{site:string,action:string,videos:Array,pagination:object,detail:object|null,raw:object}>}
+ */
+export async function adultBrowse(site, {
+  action = 'search',
+  q = '',
+  page = 1,
+  category = '',
+  url = '',
+  filters = {}
+} = {}) {
+  const s = String(site || '').toLowerCase().trim();
+  if (!Object.hasOwn(ADULT_ACTIONS, s)) throw new SkylineApiError('Situs tidak dikenal', 400);
+
+  const act = String(action || 'search').toLowerCase().trim();
+  if (!ADULT_ACTIONS[s].has(act)) throw new SkylineApiError('Aksi tidak tersedia di situs ini', 400);
+
+  const query = String(q || '').trim().slice(0, 120);
+  const target = String(url || '').trim().slice(0, 500);
+  const cat = String(category || '').trim().slice(0, 120);
+
+  if (act === 'search' && query.length < 2) throw new SkylineApiError('Kata kunci minimal 2 karakter', 400);
+  if (act === 'detail' && !target) throw new SkylineApiError('URL wajib untuk detail', 400);
+  if (act === 'category' && !cat) throw new SkylineApiError('Slug kategori wajib', 400);
+
+  const params = { action: act, page: String(adultPage(page)) };
+  if (query) params.q = query;
+  if (target) params.url = target;
+  if (cat) params.category = cat;
+
+  for (const key of ADULT_FILTER_KEYS) {
+    const value = String(filters?.[key] ?? '').trim();
+    if (value) params[key] = value.slice(0, 40);
+  }
+
+  let json;
+  try {
+    ({ json } = await request(`adult-${s}`, `/api/tools/${s}`, params, { timeout: 60000, retries: 1 }));
+  } catch (err) {
+    throw adultAttachCode(err);
+  }
+  const result = json?.result || {};
+
+  return {
+    site: s,
+    action: act,
+    videos: (Array.isArray(result.videos) ? result.videos : [])
+      .map((row) => adultVideo(s, row))
+      .filter(Boolean),
+    pagination: {
+      page: Number(result?.pagination?.page) || adultPage(page),
+      pages: Array.isArray(result?.pagination?.pages) ? result.pagination.pages : []
+    },
+    detail: act === 'detail' ? result : null,
+    raw: result
+  };
+}
+
 /* ══════════════ ambil file ══════════════ */
 /** Unduh audio (MP3) — info boleh dipakai ulang biar gak request 2×. */
 export async function downloadAudio(url, { info, timeout = 180000, maxBytes = MAX_AUDIO_BYTES } = {}) {
@@ -1149,6 +1259,8 @@ export default {
   ytSearch,
   ytInfo,
   presetFinder,
+  adultBrowse,
+  ADULT_SITES,
   downloadAudio,
   downloadVideo,
   aiChatSkyline,
