@@ -53,7 +53,7 @@ _Mode sewa aktif._`
 
     if (g.status === 'lifetime') {
       return ctx.reply(
-`✅ *SEWA PERMANENT*
+`✅ *SEWA PERMANEN*
 
 • Grup : ${g.groupName || g.groupJid}
 • Status: ♾ Selamanya

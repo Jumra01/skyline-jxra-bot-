@@ -37,7 +37,7 @@ const pluginConfig = {
   energi: 0,
 }
 
-const DURATION_RE = /^(\d+(?:\.\d+)?)\s*(ms|mnt|menit|m|h|jam|d|hari|w|minggu|mo|bulan|y|tahun|lifetime|permanent|forever|selamanya|0)?$/i
+const DURATION_RE = /^(\d+(?:\.\d+)?)\s*(ms|mnt|menit|m|h|jam|d|hari|w|minggu|mo|bulan|y|tahun|permanen)?$/i
 
 function isDuration(s) {
   return DURATION_RE.test(String(s ?? '').trim())
@@ -51,7 +51,7 @@ function tanggal(iso) {
 }
 
 function statusText(g) {
-  if (g.status === 'lifetime') return '♾ Permanent'
+  if (g.status === 'lifetime') return '♾ Permanen'
   if (g.status === 'active') return `✅ Aktif · ${g.daysLeft} hari`
   return '⛔ Expired'
 }
@@ -66,7 +66,7 @@ function ringkas(state) {
 │ Total grup : *${s.total}*
 │ Aktif      : *${s.active}*
 │ Expired    : *${s.expired}*
-│ Permanent  : *${s.lifetime}*
+│ Permanen  : *${s.lifetime}*
 │
 │ *.sewa list* — lihat daftar
 │ *.sewa on|off* — ubah mode
@@ -96,7 +96,7 @@ async function sendCard(ctx, html, fallbackText) {
 }
 
 function badgeStatus(g) {
-  if (g.status === 'lifetime') return '<span class="life">♾ Permanent</span>'
+  if (g.status === 'lifetime') return '<span class="life">♾ Permanen</span>'
   if (g.status === 'active') return `<span class="ok">✅ Aktif · ${g.daysLeft} hari</span>`
   return '<span class="bad">⛔ Expired</span>'
 }
@@ -154,7 +154,7 @@ function buildSewaHtml(state, tab = 'guide') {
     </div>
     <div class="card"><div class="k">Format durasi</div>
       <span class="tag a">1m = 30 hari</span><span class="tag">7d</span><span class="tag">12h</span>
-      <span class="tag">1w</span><span class="tag">1y</span><span class="tag">lifetime</span>
+      <span class="tag">1w</span><span class="tag">1y</span><span class="tag a">permanen</span>
       <div class="line" style="margin-top:7px">Angka polos = hari. Menit pakai <b>mnt</b> (contoh 30mnt). Perpanjangan dihitung dari sisa waktu, bukan dari sekarang.</div>
     </div>`
 
@@ -163,7 +163,7 @@ function buildSewaHtml(state, tab = 'guide') {
       <div class="stat"><div class="n">${s.total}</div><div class="l">TOTAL</div></div>
       <div class="stat"><div class="n">${s.active}</div><div class="l">AKTIF</div></div>
       <div class="stat"><div class="n">${s.expired}</div><div class="l">EXPIRED</div></div>
-      <div class="stat"><div class="n">${s.lifetime}</div><div class="l">PERMANENT</div></div>
+      <div class="stat"><div class="n">${s.lifetime}</div><div class="l">PERMANEN</div></div>
     </div>
     <div class="card acc" style="margin-top:8px"><div class="k">Mode sewa</div><div class="big">${mode}</div>
       <div class="line" style="margin-top:5px">${esc(modeNote)}</div></div>
