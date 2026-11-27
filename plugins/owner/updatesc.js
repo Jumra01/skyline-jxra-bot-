@@ -1289,6 +1289,8 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
   // Jadi: backup → balikin ke versi HEAD → pull → **auto-restore** setting
   // user (config + thumbnail) di atas kode terbaru. `.restore` cuma perlu
   // kalau auto-restore gagal.
+  // Manifest juga ikut dibalikin: `npm install --omit=dev` di panel sering
+  // nulis ulang package-lock.json → ff-only nolak di update berikutnya.
   let keepState = { keeps: [], assets: [], pending: { config: false, assets: 0 } }
   let cfgReset = false
   try {
@@ -1298,6 +1300,13 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
       const head = await git(['show', 'HEAD:config.js'])    // versi commit lokal
       await fs.writeFile('config.js', head.out + '\n', 'utf8')
       cfgReset = true
+    }
+    // Manifest hasil npm install panel juga KE-TRACK. Reset ke HEAD supaya
+    // `pull --ff-only` gak nolak gara-gara package-lock.json berubah lokal.
+    for (const rel of ['package.json', 'package-lock.json']) {
+      const dirty = (await git(['status', '--porcelain', '--', rel])).out
+      if (!dirty) continue
+      try { await git(['checkout', 'HEAD', '--', rel], 30_000) } catch {}
     }
     // Thumbnail punya user juga KE-TRACK — kalau beda dari HEAD,
     // `pull --ff-only` bakal NOLAK ("would be overwritten by merge").
