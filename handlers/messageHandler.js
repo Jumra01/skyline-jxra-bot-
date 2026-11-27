@@ -6,7 +6,7 @@
  */
 import config from '../config.js'
 import { logger } from '../core/logger.js'
-import { buildContext } from '../core/context.js'
+import { buildContext, normalizeSoundSticker } from '../core/context.js'
 import { readRichReply } from '../lib/richMessage.js'
 import { getFeature } from '../plugins/loader.js'
 import { checkCooldown, checkFlood } from '../core/cooldown.js'
@@ -140,6 +140,12 @@ async function describeMessage(client, chat, message) {
     return `video 🎥${beautified ? ` • "${beautified}"` : ''}`
   }
 
+  const soundSticker =
+    message.soundSticker ||
+    message.stickerMessage?.audioMessage ||
+    message.audioStickerMessage?.message?.stickerMessage ||
+    message.audioStickerMessage?.stickerMessage
+  if (soundSticker) return 'stiker bersuara 🟡🎵'
   if (message.stickerMessage) return 'stiker 🟡'
   if (message.audioMessage) return 'audio 🎵'
   if (message.documentMessage) return `dokumen 📄 ${message.documentMessage.fileName ?? ''}`
@@ -151,6 +157,10 @@ async function describeMessage(client, chat, message) {
 
 export async function route(client, event) {
   if (event.key.fromMe) return
+
+  // Sound sticker (field 134) zapo 1.12+ dibaca sebagai `audioStickerMessage`.
+  // Ratakan ke `stickerMessage` sebelum context/hook/plugin jalan.
+  normalizeSoundSticker(event)
 
   // WhatsApp Channel (@newsletter) & status/broadcast: WhatsApp NOLAK semua
   // kiriman ke sana (`401 negative publish ack`, `newsletter sends do not

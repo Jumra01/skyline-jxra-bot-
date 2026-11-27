@@ -18,6 +18,8 @@ const WRAPPER_KEYS = [
   'viewOnceMessageV2Extension',
   'documentWithCaptionMessage',
   'deviceSentMessage',
+  // Sound sticker: top-level field 134 (`audioStickerMessage`) dari zapo 1.12+.
+  'audioStickerMessage',
 ]
 
 /** Lepas bungkus pesan (`ephemeralMessage`/`viewOnceMessage`/…) → isi sebenarnya. */
@@ -32,6 +34,32 @@ export function unwrapMessage(message) {
     msg = inner
   }
   return msg
+}
+
+/**
+ * Sound sticker WhatsApp (field 134) datang sebagai `audioStickerMessage`
+ * berisi `FutureProofMessage.message.stickerMessage` + `audioMessage`.
+ * Ratakan ke `stickerMessage` biar hook/plugin lama tetap lihat stiker biasa,
+ * dengan metadata internal buat penanda & pemakaian berikutnya.
+ */
+export function normalizeSoundSticker(event) {
+  const message = event?.message
+  const wrapper = message?.audioStickerMessage
+  if (!wrapper || typeof wrapper !== 'object') return false
+
+  const inner = wrapper.message ?? wrapper
+  const sticker = inner?.stickerMessage ?? inner
+  if (!sticker || typeof sticker !== 'object') return false
+
+  const normalized = { ...message }
+  delete normalized.audioStickerMessage
+  event.message = {
+    ...normalized,
+    stickerMessage: sticker,
+    soundSticker: true,
+    soundStickerAudio: sticker.audioMessage ?? inner.audioMessage ?? null,
+  }
+  return true
 }
 
 function extractText(message) {
