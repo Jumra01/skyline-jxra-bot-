@@ -93,15 +93,51 @@ function readVersionedFile(rel) {
 }
 
 async function senderAvatar(ctx) {
-  const jids = [...new Set([ctx.sender, ctx.senderLid].filter(Boolean))]
-  for (const jid of jids) {
+  const client = ctx.client
+  const bareJid = (jid) => {
+    if (typeof jid !== 'string' || !/@/.test(jid)) return null
+    const [user, server] = jid.split('@')
+    return user && server ? `${user.split(':')[0]}@${server}` : null
+  }
+  const direct = [
+    ctx.sender,
+    ctx.senderLid,
+    ctx.event?.key?.participant,
+    ctx.event?.key?.participantAlt
+  ].map(bareJid).filter(Boolean)
+  const jids = [...new Set(direct)]
+
+  const read = async (jid) => {
     try {
       const result = await Promise.race([
-        Promise.resolve(ctx.client?.profile?.getProfilePicture?.(jid, 'image')),
+        Promise.resolve(client?.profile?.getProfilePicture?.(jid, 'image')),
         new Promise((resolve) => setTimeout(() => resolve(null), 4000))
       ])
       const url = typeof result === 'string' ? result : result?.url
-      if (url && /^https?:\/\//i.test(url)) return url
+      return url && /^https?:\/\//i.test(url) ? url : null
+    } catch {
+      return null
+    }
+  }
+
+  for (const jid of jids) {
+    const url = await read(jid)
+    if (url) return url
+  }
+
+  // WA recent messages often expose only PN while profile queries require LID.
+  const number = String(ctx.senderNumber || '').replace(/\D/g, '')
+  if (number && client?.profile?.getLidsByPhoneNumbers) {
+    try {
+      const rows = await Promise.race([
+        Promise.resolve(client.profile.getLidsByPhoneNumbers(['+' + number])),
+        new Promise((resolve) => setTimeout(() => resolve([]), 4000))
+      ])
+      for (const row of Array.isArray(rows) ? rows : []) {
+        const lid = row?.lidJid || row?.lid
+        const url = lid ? await read(lid) : null
+        if (url) return url
+      }
     } catch {}
   }
   return null
