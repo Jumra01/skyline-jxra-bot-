@@ -1357,6 +1357,24 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
       if (!dirty) continue
       try { await git(['checkout', 'HEAD', '--', rel], 30_000) } catch (err) { logWarn('reset manifest gagal', err, { file: rel }) }
     }
+    // Editan lokal di `plugins/` JANGAN ngeblok update: folder ini memang
+    // hot-reload dan kebijakannya edit di lokal → push. Semua file tracked
+    // di `plugins/` yang beda dari HEAD dibalikin ke HEAD dulu (isinya
+    // tetap ke-print di terminal kalau ternyata gagal di-reset).
+    const pluginChanges = (await git(['status', '--porcelain', '--', 'plugins'])).out.split('\n').filter(Boolean)
+    for (const line of pluginChanges) {
+      // `git()` sudah trim, jadi baris bisa `M plugins/x` (tanpa spasi depan).
+      const m = line.match(/^([A-Z!?]{1,2})\s+(.*)$/)
+      if (!m) continue
+      const status = m[1]
+      const raw = m[2].trim()
+      if (!raw || status.includes('?')) {
+        if (raw) logDebug('file plugins untracked (dilewati)', null, { file: raw })
+        continue
+      }
+      const rel = (raw.includes(' -> ') ? raw.split(' -> ').pop() : raw).replace(/^"|"$/g, '')
+      try { await git(['checkout', 'HEAD', '--', rel], 30_000) } catch (err) { logWarn('reset file plugins gagal', err, { file: rel }) }
+    }
     // Thumbnail punya user juga KE-TRACK — kalau beda dari HEAD,
     // `pull --ff-only` bakal NOLAK ("would be overwritten by merge").
     // Balikin dulu ke versi HEAD biar pull lancar; nilainya udah
