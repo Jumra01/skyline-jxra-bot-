@@ -99,7 +99,9 @@ async function senderAvatar(ctx) {
     const [user, server] = jid.split('@')
     return user && server ? `${user.split(':')[0]}@${server}` : null
   }
+  const number = String(ctx.senderNumber || '').replace(/\D/g, '')
   const direct = [
+    number ? `${number}@s.whatsapp.net` : null,
     ctx.sender,
     ctx.senderLid,
     ctx.event?.key?.participant,
@@ -126,7 +128,6 @@ async function senderAvatar(ctx) {
   }
 
   // WA recent messages often expose only PN while profile queries require LID.
-  const number = String(ctx.senderNumber || '').replace(/\D/g, '')
   if (number && client?.profile?.getLidsByPhoneNumbers) {
     try {
       const rows = await Promise.race([
@@ -549,7 +550,7 @@ async function runReplyVariant(ctx, text, style) {
         if (fallbackImage && client.message?.upload) {
           try {
             const uploaded = await client.message.upload(fallbackImage, { type: 'image', mimetype: 'image/jpeg' })
-            imageUrl = uploaded?.url || uploaded?.directPath || ''
+            imageUrl = /^https?:\/\//i.test(String(uploaded?.url || '')) ? uploaded.url : ''
           } catch {}
         }
       }
