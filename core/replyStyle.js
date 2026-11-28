@@ -97,7 +97,7 @@ async function senderAvatar(ctx) {
   for (const jid of jids) {
     try {
       const result = await Promise.race([
-        Promise.resolve(ctx.client?.profile?.getProfilePicture?.(jid)),
+        Promise.resolve(ctx.client?.profile?.getProfilePicture?.(jid, 'image')),
         new Promise((resolve) => setTimeout(() => resolve(null), 4000))
       ])
       const url = typeof result === 'string' ? result : result?.url
