@@ -35,11 +35,11 @@ export default {
   /* ── OWNER & STAFF ── */
   owner: {
     name: 'skyline-JXRA Developer',
-    numbers: ['6283121590572'],
+    numbers: ['62895365630746'],
   },
 
   staff: [
-    { number: '6283121590572', role: 'owner', label: 'skyline-JXRA • Developer' },
+    { number: '62895365630746', role: 'owner', label: 'skyline-JXRA • Developer' },
     // { number: '6281234567890', role: 'admin', label: 'Nama • Admin' },
   ],
 
