@@ -51,9 +51,38 @@ import {
 } from '../../lib/keepSettings.js'
 import { normalizeBackup } from '../../lib/keepMigrate.js'
 import { getBotNumber } from '../../core/staff.js'
+import { logger } from '../../core/logger.js'
 
 const pexec = promisify(execFile)
 const pgunzip = promisify(gunzip)
+
+const scLog = logger.child({ mod: 'updatesc' })
+
+// Error git/npm bisa bawa URL remote plus token. Bersihin dulu sebelum print.
+function safeLogText(value) {
+  return String(value ?? '')
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)([^/@\s]+):([^/@\s]+)@/gi, '$1***@')
+    .replace(/(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|x-access-token:[^\s@]+)/gi, '***')
+}
+
+function errorDetail(err) {
+  if (!err) return ''
+  const msg = safeLogText(err?.message || err)
+  const extras = []
+  for (const key of ['stderr', 'stdout']) {
+    const value = safeLogText(err?.[key]).trim()
+    if (value && !msg.includes(value)) extras.push(`${key}=${value}`)
+  }
+  return [err?.code ? `code=${err.code}` : '', msg, ...extras]
+    .filter(Boolean).join(' | ').replace(/\s+/g, ' ').slice(0, 1600)
+}
+
+function logIssue(level, label, err, extra = {}) {
+  scLog[level]({ ...extra, detail: errorDetail(err) }, `[updatesc] ${label}`)
+}
+const logError = (label, err, extra) => logIssue('error', label, err, extra)
+const logWarn = (label, err, extra) => logIssue('warn', label, err, extra)
+const logDebug = (label, err, extra) => logIssue('debug', label, err, extra)
 
 const REPO_URL = (process.env.UPDATE_SC_URL || 'https://github.com/Jumra01/skyline-jxra-bot-.git').trim()
 const BRANCH = 'main'
@@ -123,6 +152,7 @@ async function autoRestore() {
       error: null
     }
   } catch (err) {
+    logError('restoreFromBackup gagal', err)
     return { kept: 0, lost: 0, keptKeys: [], lostKeys: [], assetsKept: [], assetsLost: [], error: String(err?.message || err) }
   }
 }
@@ -137,7 +167,8 @@ async function pendingNow() {
       assets: st.assets.length,
       assetList: st.assets.map((a) => a.rel)
     }
-  } catch {
+  } catch (err) {
+    logWarn('backupStatus gagal', err)
     return { config: false, configKeys: [], assets: 0, assetList: [] }
   }
 }
@@ -374,7 +405,8 @@ function nowWIB() {
       hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
     })
     return `${s} WIB`
-  } catch {
+  } catch (err) {
+    logDebug('format WIB gagal, pakai ISO', err)
     return new Date().toISOString()
   }
 }
@@ -642,11 +674,13 @@ async function replyRich(ctx, htmlData, fallbackLines) {
   try {
     await sendNativeHtml(ctx.client, ctx.chat, buildResultHtml(htmlData))
     return true
-  } catch {
+  } catch (err) {
+    logWarn('kirim kartu HTML gagal, fallback teks', err)
     try {
       await ctx.reply(card(htmlData.icon, htmlData.title, fallbackLines))
       return true
-    } catch {
+    } catch (err) {
+      logError('fallback kartu teks juga gagal', err)
       return false
     }
   }
@@ -657,6 +691,7 @@ async function gitAvailable() {
     await git(['--version'], 10_000)
     return true
   } catch (err) {
+    logWarn('cek git --version gagal', err)
     if (err?.code === 'ENOENT') return false
     return true
   }
@@ -666,7 +701,8 @@ async function isGitRepo() {
   try {
     await git(['rev-parse', '--is-inside-work-tree'])
     return true
-  } catch {
+  } catch (err) {
+    logDebug('cek git repo gagal (anggap belum repo)', err)
     return false
   }
 }
@@ -676,7 +712,9 @@ async function ensureOriginUrl() {
   try {
     const cur = (await git(['remote', 'get-url', 'origin'])).out
     if (cur) return
-  } catch {}
+  } catch (err) {
+    logDebug('remote origin belum ada', err)
+  }
   await git(['remote', 'add', 'origin', REPO_URL])
 }
 
@@ -685,7 +723,7 @@ async function ensureOriginUrl() {
 // dibackup dulu (checkout nimpa file yang ada di tree).
 async function bootstrapRepo() {
   let pkgBefore = null
-  try { pkgBefore = await fs.readFile('package.json') } catch {}
+  try { pkgBefore = await fs.readFile('package.json') } catch (err) { logDebug('baca package.json sebelum bootstrap gagal', err) }
 
   await git(['init'])
   await ensureOriginUrl()
@@ -699,16 +737,16 @@ async function bootstrapRepo() {
   })
   // checkout -f bakal nimpa config.js versi lokal (apikey klien) → simpen
   // dulu nilainya. (`config.js.pre-git.bak` tetap dibuat — salinan utuh.)
-  try { await fs.copyFile('config.js', 'config.js.pre-git.bak') } catch {}
+  try { await fs.copyFile('config.js', 'config.js.pre-git.bak') } catch (err) { logWarn('backup config.js.pre-git.bak gagal', err) }
 
   await git(['checkout', '-f', '-B', BRANCH, 'FETCH_HEAD'])
-  try { await git(['branch', '--set-upstream-to', `origin/${BRANCH}`, BRANCH]) } catch {}
+  try { await git(['branch', '--set-upstream-to', `origin/${BRANCH}`, BRANCH]) } catch (err) { logWarn('set upstream gagal', err) }
 
   let pkgChanged = false
   try {
     const pkgAfter = await fs.readFile('package.json')
     pkgChanged = !!pkgBefore && !pkgBefore.equals(pkgAfter)
-  } catch {}
+  } catch (err) { logDebug('baca package.json sesudah bootstrap gagal', err) }
 
   const head = (await git(['log', '-1', '--oneline'])).out
   return { head, pkgChanged }
@@ -791,7 +829,8 @@ async function readManifest(file) {
   try {
     const raw = JSON.parse(await fs.readFile(file, 'utf8'))
     return { files: Array.isArray(raw.files) ? raw.files : [], removed: Array.isArray(raw.removed) ? raw.removed : [] }
-  } catch {
+  } catch (err) {
+    logWarn('baca manifest gagal', err, { file: path.basename(file) })
     return null
   }
 }
@@ -811,7 +850,9 @@ async function pruneStale(oldManifest, newManifest, newFiles) {
     try {
       await fs.rm(rel, { force: true })
       removed.push(rel)
-    } catch {}
+    } catch (err) {
+      logWarn('hapus file usang gagal', err, { file: rel })
+    }
   }
   return removed
 }
@@ -831,7 +872,7 @@ async function apiSync() {
   const msg = String(meta.commit?.message || '').split('\n')[0]
 
   let pkgBefore = null
-  try { pkgBefore = await fs.readFile('package.json') } catch {}
+  try { pkgBefore = await fs.readFile('package.json') } catch (err) { logDebug('baca package.json sebelum sync API gagal', err) }
 
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'updatesc-'))
   try {
@@ -863,7 +904,8 @@ async function apiSync() {
             fs.readFile(rel)
           ])
           return upstream.equals(lokal)
-        } catch {
+        } catch (err) {
+          logDebug('bandingkan file upstream gagal', err, { file: rel })
           return false
         }
       }
@@ -880,11 +922,11 @@ async function apiSync() {
     try {
       const pkgAfter = await fs.readFile('package.json')
       pkgChanged = !!pkgBefore && !pkgBefore.equals(pkgAfter)
-    } catch {}
+    } catch (err) { logWarn('baca package.json sesudah sync API gagal', err) }
 
     return { short, msg, pkgChanged, removed }
   } finally {
-    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch((err) => logDebug('hapus tmp API gagal', err, { dir: path.basename(tmpDir) }))
   }
 }
 
@@ -903,6 +945,7 @@ async function npmInstallMaybe(ctx, changed) {
     })
     return { installed: true, installErr: null }
   } catch (err) {
+    logError('npm install --omit=dev gagal', err)
     return { installed: false, installErr: String(err?.message || err).split('\n').slice(0, 4) }
   }
 }
@@ -1026,6 +1069,7 @@ async function handler(ctx) {
         `🕒 ${nowWIB()}`
       ].filter(Boolean))
     } catch (err) {
+      logError('update via GitHub API gagal', err)
       const restored = await autoRestore()
       const pending = await pendingNow()
       const rr = restoreReport(restored, pending)
@@ -1074,6 +1118,7 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
     try {
       bootstrapped = await bootstrapRepo()
     } catch (err) {
+      logError('setup repo gagal (git init/fetch)', err)
       await ctx.react('⚠️')
       await replyRich(ctx, {
         icon: '⚠️',
@@ -1172,6 +1217,7 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
   try {
     oldHead = (await git(['rev-parse', 'HEAD'])).out
   } catch (err) {
+    logError('baca HEAD repo gagal', err)
     await ctx.react('⚠️')
     await replyRich(ctx, {
       icon: '⚠️',
@@ -1196,6 +1242,7 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
   try {
     await git(['fetch', 'origin', '--quiet'], 120_000)
   } catch (err) {
+    logError('fetch origin gagal', err)
     await ctx.react('⚠️')
     await replyRich(ctx, {
       icon: '⚠️',
@@ -1222,10 +1269,12 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
   let behind
   try {
     behind = (await git(['rev-list', '--count', 'HEAD..@{u}'])).out
-  } catch {
+  } catch (err) {
+    logDebug('hitung commit via upstream gagal, coba origin', err)
     try {
       behind = (await git(['rev-list', '--count', `HEAD..origin/${BRANCH}`])).out
-    } catch {
+    } catch (err) {
+      logError('hitung commit di belakang origin gagal', err)
       behind = null
     }
   }
@@ -1306,7 +1355,7 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
     for (const rel of ['package.json', 'package-lock.json']) {
       const dirty = (await git(['status', '--porcelain', '--', rel])).out
       if (!dirty) continue
-      try { await git(['checkout', 'HEAD', '--', rel], 30_000) } catch {}
+      try { await git(['checkout', 'HEAD', '--', rel], 30_000) } catch (err) { logWarn('reset manifest gagal', err, { file: rel }) }
     }
     // Thumbnail punya user juga KE-TRACK — kalau beda dari HEAD,
     // `pull --ff-only` bakal NOLAK ("would be overwritten by merge").
@@ -1314,9 +1363,11 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
     // ke-backup di saveKeep() dan bisa dipulihin lewat `.restore`.
     // (assets cuma berisi file yang beneran pernah diubah user)
     for (const { rel } of keepState.assets) {
-      try { await git(['checkout', 'HEAD', '--', rel], 30_000) } catch {}
+      try { await git(['checkout', 'HEAD', '--', rel], 30_000) } catch (err) { logWarn('reset asset KEEP gagal', err, { file: rel }) }
     }
-  } catch {}
+  } catch (err) {
+    logError('backup/reset sebelum pull gagal', err)
+  }
 
   // Pull (--ff-only: tolak kalau ada editan lokal di panel — jangan edit
   // file langsung di server, editnya di lokal lalu push)
@@ -1325,6 +1376,7 @@ ${gitErrDetail(err).map((l) => row(hesc(l))).join('')}`,
     await git(['pull', '--ff-only', 'origin', BRANCH], 120_000)
   } catch (err) {
     pullErr = err
+    logError('git pull --ff-only ditolak', err, { cmd: `git pull --ff-only origin ${BRANCH}` })
   }
 
   // Pull gagal → file lokal udah dibalikin ke versi HEAD, jadi setting user
@@ -1405,7 +1457,9 @@ ${gitErrDetail(pullErr).map((l) => row(hesc(l))).join('')}`,
         return { hash: hash.trim(), subject: subject.trim(), body: body.trim() }
       })
     files = (await git(['diff', '--name-only', `${oldHead}..${newHead}`])).out.split('\n').filter(Boolean)
-  } catch {}
+  } catch (err) {
+    logWarn('baca rekap commit gagal', err)
+  }
 
   // Auto npm install KUMULUAN kalau package manifest ikut berubah
   const { installed, installErr } = await npmInstallMaybe(
