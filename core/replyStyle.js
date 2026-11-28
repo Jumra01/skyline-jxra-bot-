@@ -97,7 +97,7 @@ async function senderAvatar(ctx) {
   for (const jid of jids) {
     try {
       const result = await Promise.race([
-        Promise.resolve(ctx.client?.profile?.getProfilePicture?.(jid)),
+        Promise.resolve(ctx.client?.profile?.getProfilePicture?.(jid, 'image')),
         new Promise((resolve) => setTimeout(() => resolve(null), 4000))
       ])
       const url = typeof result === 'string' ? result : result?.url
@@ -107,7 +107,7 @@ async function senderAvatar(ctx) {
   return null
 }
 
-async function senderAvatarBytes(ctx) {
+async function uploadedSenderAvatar(ctx) {
   const url = await senderAvatar(ctx)
   if (!url) return null
   try {
@@ -116,29 +116,16 @@ async function senderAvatarBytes(ctx) {
       redirect: 'follow',
       headers: { 'user-agent': 'WhatsApp/2.24.0' }
     })
-    if (!response.ok) return null
+    if (!response.ok) return url
     const bytes = Buffer.from(await response.arrayBuffer())
-    if (!bytes.length || bytes.length > 2 * 1024 * 1024) return null
-    return {
-      bytes,
-      mimetype: response.headers.get('content-type')?.split(';')[0] || 'image/jpeg'
-    }
-  } catch {
-    return null
-  }
-}
-
-async function uploadedSenderAvatar(ctx) {
-  const avatar = await senderAvatarBytes(ctx)
-  if (!avatar) return null
-  try {
-    const uploaded = await ctx.client?.message?.upload?.(avatar.bytes, {
+    if (!bytes.length || bytes.length > 2 * 1024 * 1024) return url
+    const uploaded = await ctx.client?.message?.upload?.(bytes, {
       type: 'image',
-      mimetype: avatar.mimetype
+      mimetype: response.headers.get('content-type')?.split(';')[0] || 'image/jpeg'
     })
-    return uploaded?.url || null
+    return uploaded?.url || url
   } catch {
-    return null
+    return url
   }
 }
 
@@ -518,31 +505,7 @@ async function runReplyVariant(ctx, text, style) {
       const firstLine = lines.findIndex((line) => line.trim())
       if (firstLine >= 0) lines[firstLine] = toBoldSans(lines[firstLine])
       const richBody = lines.join('\n')
-      if (Number(style) === 8) {
-        const avatar = await senderAvatarBytes(ctx)
-        if (avatar) {
-          const profileCaption = [
-            `👤 ${ctx.pushName || 'Pengguna'}`,
-            `📱 ${number}`,
-            `🏷️ ${role} • ${tier}`,
-            `💬 ${ctx.isGroup ? senderLabel : 'Chat pribadi'}`,
-            `🕒 ${when}`,
-            '',
-            String(text ?? '')
-          ].join('\n')
-          try {
-            return await client.message.send(chat, {
-              type: 'image',
-              media: avatar.bytes,
-              mimetype: avatar.mimetype,
-              caption: profileCaption
-            }, { quote: event, noStyle: true })
-          } catch (err) {
-            logger.warn({ err: String(err?.message ?? err) }, 'reply v8 avatar image gagal — lanjut entity')
-          }
-        }
-      }
-      let imageUrl = Number(style) === 9 ? await uploadedSenderAvatar(ctx) : null
+      let imageUrl = await uploadedSenderAvatar(ctx)
       if (Number(style) !== 9 && !imageUrl) {
         const fallbackImage = await thumb300()
         if (fallbackImage && client.message?.upload) {
