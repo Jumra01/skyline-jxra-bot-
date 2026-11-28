@@ -93,15 +93,39 @@ function readVersionedFile(rel) {
 }
 
 async function senderAvatar(ctx) {
+  const jids = [...new Set([ctx.sender, ctx.senderLid].filter(Boolean))]
+  for (const jid of jids) {
+    try {
+      const result = await Promise.race([
+        Promise.resolve(ctx.client?.profile?.getProfilePicture?.(jid, 'image')),
+        new Promise((resolve) => setTimeout(() => resolve(null), 4000))
+      ])
+      const url = typeof result === 'string' ? result : result?.url
+      if (url && /^https?:\/\//i.test(url)) return url
+    } catch {}
+  }
+  return null
+}
+
+async function uploadedSenderAvatar(ctx) {
+  const url = await senderAvatar(ctx)
+  if (!url) return null
   try {
-    const result = await Promise.race([
-      Promise.resolve(ctx.client?.profile?.getProfilePicture?.(ctx.sender, 'image')),
-      new Promise((resolve) => setTimeout(() => resolve(null), 4000))
-    ])
-    const url = typeof result === 'string' ? result : result?.url
-    return url && /^https?:\/\//i.test(url) ? url : null
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(5000),
+      redirect: 'follow',
+      headers: { 'user-agent': 'WhatsApp/2.24.0' }
+    })
+    if (!response.ok) return url
+    const bytes = Buffer.from(await response.arrayBuffer())
+    if (!bytes.length || bytes.length > 2 * 1024 * 1024) return url
+    const uploaded = await ctx.client?.message?.upload?.(bytes, {
+      type: 'image',
+      mimetype: response.headers.get('content-type')?.split(';')[0] || 'image/jpeg'
+    })
+    return uploaded?.url || url
   } catch {
-    return null
+    return url
   }
 }
 
@@ -481,7 +505,7 @@ async function runReplyVariant(ctx, text, style) {
       const firstLine = lines.findIndex((line) => line.trim())
       if (firstLine >= 0) lines[firstLine] = toBoldSans(lines[firstLine])
       const richBody = lines.join('\n')
-      let imageUrl = await senderAvatar(ctx)
+      let imageUrl = await uploadedSenderAvatar(ctx)
       if (Number(style) !== 9 && !imageUrl) {
         const fallbackImage = await thumb300()
         if (fallbackImage && client.message?.upload) {
