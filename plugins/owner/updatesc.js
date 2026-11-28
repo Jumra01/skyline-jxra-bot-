@@ -941,7 +941,12 @@ async function npmInstallMaybe(ctx, changed) {
     await pexec('npm', ['install', '--omit=dev'], {
       cwd: process.cwd(),
       timeout: 10 * 60 * 1000,
-      maxBuffer: 16 * 1024 * 1024
+      maxBuffer: 16 * 1024 * 1024,
+      // postinstall `scripts/panelBoot.cjs` mau spawn `node sky.js` → kena
+      // guard "Instance lain masih jalan" (bot update masih hidup) → npm exit 1.
+      // Update jalan dari bot yang SUDAH jalan, jadi boot dilewatin; boot normal
+      // di startup panel tetap jalan (env di sana gak punya flag ini).
+      env: { ...process.env, SKYLINE_SKIP_PANEL_BOOT: '1' }
     })
     return { installed: true, installErr: null }
   } catch (err) {
