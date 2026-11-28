@@ -97,7 +97,7 @@ async function senderAvatar(ctx) {
   for (const jid of jids) {
     try {
       const result = await Promise.race([
-        Promise.resolve(ctx.client?.profile?.getProfilePicture?.(jid, 'image')),
+        Promise.resolve(ctx.client?.profile?.getProfilePicture?.(jid)),
         new Promise((resolve) => setTimeout(() => resolve(null), 4000))
       ])
       const url = typeof result === 'string' ? result : result?.url
@@ -505,7 +505,9 @@ async function runReplyVariant(ctx, text, style) {
       const firstLine = lines.findIndex((line) => line.trim())
       if (firstLine >= 0) lines[firstLine] = toBoldSans(lines[firstLine])
       const richBody = lines.join('\n')
-      let imageUrl = await uploadedSenderAvatar(ctx)
+      let imageUrl = Number(style) === 9
+        ? await uploadedSenderAvatar(ctx)
+        : await senderAvatar(ctx)
       if (Number(style) !== 9 && !imageUrl) {
         const fallbackImage = await thumb300()
         if (fallbackImage && client.message?.upload) {
